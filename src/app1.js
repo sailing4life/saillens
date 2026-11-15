@@ -48,10 +48,11 @@ async function loadFile(file, kind) {
     if (kind === 'season') { seasonImport(text, file.name); show('season'); return; }
     if (kind === 'chart') { A.chart = SL.parseSailChart(text, file.name.replace(/\.\w+$/, '')); A.files.chart = file.name; chartChanged(); show('sails'); banner(`${file.name}: sail chart loaded, ${A.chart.shapes.length} sail areas` + (Object.keys(A.chart.cells).length ? ` and ${Object.keys(A.chart.cells).length} painted cells.` : '.')); return; }
     if (kind === 'calib') { if (!json || json.type !== 'calibration') throw new Error('not a SailLens calibration file.'); A.calib = { ...SL.CAL0, ...json }; A.files.calib = file.name; recompute(); show('cal'); banner(`${file.name}: calibration ${SL.calibActive(A.calib) ? 'applied to the log' : 'loaded (all corrections are zero)'}.`); return; }
+    const parsed = kind === 'log' ? SL.parseLog(text) : kind === 'ev' ? SL.parseEvents(text) : SL.makePolar(SL.parsePolar(text), 'file');
     leaveDemo();
-    if (kind === 'log') { A.raw = SL.parseLog(text); A.files.log = file.name; A.cfg.tStart = A.cfg.tEnd = null; A.cur = 0; }
-    else if (kind === 'ev') { A.events = SL.parseEvents(text); A.events.xml = text; A.events.sails = SL.parseSailList(text); A.files.ev = file.name; A.evDirty = false; A.cfg.evOff = A.events.evOff; A.cfg.logOff = A.events.logOff; A.cfg.dispOff = A.events.evOff - A.events.logOff; A.cfg.tStart = A.cfg.tEnd = null; if (!A.events.events.length) banner('No events found in ' + file.name, true); }
-    else { A.polar = SL.makePolar(SL.parsePolar(text), 'file'); A.files.polar = file.name; }
+    if (kind === 'log') { A.raw = parsed; A.cfg.logOff = SL.logOffset(A.raw, A.cfg); A.cfg.dispOff = (A.cfg.evOff || 0) - A.cfg.logOff; A.files.log = file.name; A.cfg.tStart = A.cfg.tEnd = null; A.cur = 0; }
+    else if (kind === 'ev') { A.events = parsed; A.events.xml = text; A.events.sails = SL.parseSailList(text); A.files.ev = file.name; A.evDirty = false; A.cfg.evOff = A.events.evOff; A.cfg.logOff = SL.logOffset(A.raw, A.events); A.cfg.dispOff = A.events.evOff - A.cfg.logOff; A.cfg.tStart = A.cfg.tEnd = null; if (!A.events.events.length) banner('No events found in ' + file.name, true); }
+    else { A.polar = parsed; A.files.polar = file.name; }
     recompute();
   } catch (e) { banner(file.name + ': ' + e.message, true); console.error(e); }
   show(A.tab);
@@ -80,17 +81,27 @@ R.setup = () => {
         field('Boat name', h('input', { type: 'text', id: 'cfg-boat', value: cf.boat || (A.events && A.events.meta.boat) || '', onchange: e => { cf.boat = e.target.value; } })),
         num('magVar', 'Mag variation (° E)', 0.1, '0'), num('evOff', 'Event file UTC offset (h)', 0.5), num('logOff', 'Log file UTC offset (h)', 0.5), num('dispOff', 'Show times at UTC + (h)', 0.5),
         dt('tStart', 'Only process from', D ? D.sum.t0 : null), dt('tEnd', 'until', D ? D.sum.t1 : null),
-        num('phaseLen', 'Phase length (s)'), num('phaseGap', 'Gap between phases (s)'), num('sdTwa', 'Max TWA std dev in phase (°)', 0.5), num('sdBsp', 'Max BSP std dev (kn)', 0.1), num('polMin', 'Phase BSPpol% min'), num('polMax', 'Phase BSPpol% max'), num('minBsp', 'Min BSP (kn)', 0.5),
+        num('phaseLen', 'Phase length (s)'), num('phaseGap', 'Gap between phases (s)'), num('maxHold', 'Max held sample age (s)', 1), num('sdTwa', 'Max TWA std dev in phase (°)', 0.5), num('sdBsp', 'Max BSP std dev (kn)', 0.1), num('polMin', 'Phase BSPpol% min'), num('polMax', 'Phase BSPpol% max'), num('minBsp', 'Min BSP (kn)', 0.5),
         field('Racing only (start to finish)', h('input', { type: 'checkbox', id: 'cfg-racing', checked: cf.racingOnly ? '' : null, onchange: e => { cf.racingOnly = e.target.checked; } }))),
       D && D.logMagVar != null ? h('p', { class: 'muted' }, `Expedition logged a magnetic variation of ${f1(D.logMagVar)}°. Leave Mag variation at 0 if your HDG is already true; the Calibration tab checks heading against GPS either way.`) : null,
       bar(h('button', { class: 'primary', onclick: () => { recompute(); show('setup'); } }, 'Process'), h('button', { onclick: () => { cf.tStart = cf.tEnd = null; recompute(); show('setup'); } }, 'Window from event file')))));
+  if (A.raw && A.raw.diagnostics) {
+    const raw = A.raw, q = raw.diagnostics;
+    c.append(card('Import quality',
+      h('p', { class: 'muted' }, `${q.rows.toLocaleString()} source rows; ${q.invalidTimes} invalid timestamps; ${q.outOfOrder} out-of-order rows; ${q.invalidValues} non-numeric values. ${raw.timeBasis === 'utc' ? 'UTC timestamps: explicit offsets have been applied.' : 'Timezone-free timestamps: use the log UTC offset setting.'}`),
+      h('p', { class: 'muted' }, 'Analysis uses one-second bins. Multiple measurements in a bin are averaged; directions use circular averages. Values held from an earlier second are estimates. The original subsecond data is not retained: keep your source log.'),
+      table(['Channel', 'Measured seconds', 'Held seconds used', 'Missing / too old'], Object.entries(q.channels).map(([key, value]) => {
+        let held = 0; for (const age of raw.age[key]) if (age > 0 && age <= cf.maxHold) held++;
+        return [key, value.observed, held, raw.n - value.observed - held];
+      }), 'num')));
+  }
 };
 
 /* ---------------- Events ---------------- */
 const SAILTYPES = ['Mainsail', 'Jib', 'Staysail', 'Masthead Gennaker', 'Fractional Gennaker', 'Spinnaker', 'Code 0'];
 const EVTYPES = ['SailsUp', 'RaceStartGun', 'RaceMark', 'RaceFinish', 'DayStart', 'DayStop', 'ManualEntry', 'StartTesting', 'StopTesting', 'MiscEvent'];
 function evEnsure() { if (!A.events) A.events = { meta: { boat: A.cfg.boat || '' }, evOff: A.cfg.evOff || 0, logOff: A.cfg.logOff || 0, events: [], sails: [] }; if (!A.events.sails) A.events.sails = []; A.events.evOff = A.cfg.evOff || 0; A.events.logOff = A.cfg.logOff || 0; return A.events; }
-const idxTl = i => iT(i) - (A.cfg.logOff || 0) * 36e5 + (A.cfg.evOff || 0) * 36e5;
+const idxTl = i => iT(i) - SL.logOffset(A.raw, A.cfg) * 36e5 + (A.cfg.evOff || 0) * 36e5;
 const tlClock = tl => new Date(tl).toISOString().slice(11, 19);
 function evChanged() { A.events.events.sort((a, b) => a.tl - b.tl); A.evDirty = true; if (A.demo) A.demo = false; recompute(); }
 function addEvent(type, attr, comments, tl) {
@@ -113,7 +124,7 @@ R.events = () => {
   const parseClock = (s, ref) => { const mm = s.trim().match(/^(\d\d?):(\d\d)(?::(\d\d))?$/); if (!mm) return null; const d = new Date(ref); d.setUTCHours(+mm[1], +mm[2], +(mm[3] || 0), 0); return d.getTime(); };
   const add = () => { const tl = parseClock(tIn.value, idxTl(A.cur)); if (tl == null) { banner('Time must look like 13:45:00.', true); return; } const attr = st.type === 'SailsUp' ? st.sails.join(';') : ($('#ev-attr') ? $('#ev-attr').value : ''); addEvent(st.type, attr, cmt.value, tl); show('events'); };
   drawAttr();
-  const rows = ev.events.map((e, k) => { const i = D ? Math.round((e.tl - (A.cfg.evOff || 0) * 36e5 + (A.cfg.logOff || 0) * 36e5 - A.raw.t0) / 1000) : -1, inLog = D && i >= D.i0 && i < D.i1;
+  const rows = ev.events.map((e, k) => { const i = D ? Math.round((e.tl - (A.cfg.evOff || 0) * 36e5 + SL.logOffset(A.raw, A.cfg) * 36e5 - A.raw.t0) / 1000) : -1, inLog = D && i >= D.i0 && i < D.i1;
     return [h('input', { type: 'text', value: tlClock(e.tl), style: 'width:84px', 'aria-label': 'Time', onchange: x => { const t = parseClock(x.target.value, e.tl); if (t != null) { e.tl = t; evChanged(); show('events'); } } }),
       sel('ev-type-' + k, EVTYPES.includes(e.type) ? EVTYPES : EVTYPES.concat([e.type]), e.type, v => { e.type = v; evChanged(); show('events'); }),
       h('input', { type: 'text', value: e.attr, style: 'width:210px', 'aria-label': 'Attribute', onchange: x => { e.attr = x.target.value; evChanged(); show('events'); } }),

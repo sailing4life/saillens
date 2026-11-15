@@ -176,62 +176,89 @@ const ALIAS = { BSP: ['bsp', 'boatspeed', 'boat speed', 'stw'], AWA: ['awa'], AW
   Heel: ['heel', 'roll'], Rudder: ['rudder', 'rud'], Forestay: ['forestay'], Trim: ['trim', 'pitch'], Leeway: ['leeway'] };
 function canon(name) { const l = name.trim().toLowerCase(); for (const k in ALIAS) if (ALIAS[k].includes(l)) return k; return name.trim(); }
 function parseTime(s) {
-  s = s.trim();
+  s = String(s ?? '').trim();
   if (/^-?\d+(\.\d+)?$/.test(s)) { const v = +s; if (v > 1e16) return v / 1e4 - 11644473600000; if (v > 1e11) return v; if (v > 1e9) return v * 1000; if (v > 20000 && v < 80000) return Math.round((v - 25569) * 864e5); return NaN; }
-  let m = s.match(/^(\d{4})[-\/.](\d\d?)[-\/.](\d\d?)[T ](\d\d?):(\d\d):(\d\d(?:\.\d+)?)/);
-  if (m) return Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], 0) + m[6] * 1000;
-  m = s.match(/^(\d\d?)[-\/.](\d\d?)[-\/.](\d{4})[T ](\d\d?):(\d\d):(\d\d(?:\.\d+)?)/);
-  if (m) return Date.UTC(+m[3], m[2] - 1, +m[1], +m[4], +m[5], 0) + m[6] * 1000;
-  return Date.parse(s);
+  const m = s.match(/^(\d{4}|\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4}|\d{1,2})[T ](\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(Z|[+-]\d{2}:?\d{2})?$/i);
+  if (!m) return NaN;
+  const y = +(m[1].length === 4 ? m[1] : m[3]), mo = +m[2], d = +(m[1].length === 4 ? m[3] : m[1]), h = +m[4], mi = +m[5], sec = +(m[6] || 0);
+  const t = Date.UTC(y, mo - 1, d, h, mi, 0), check = new Date(t);
+  if (mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || sec >= 60 || check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) return NaN;
+  let offset = 0;
+  if (m[7] && m[7].toUpperCase() !== 'Z') { const z = m[7].replace(':', ''), zh = +z.slice(1, 3), zm = +z.slice(3); if (zh > 23 || zm > 59) return NaN; offset = (zh * 60 + zm) * (z[0] === '-' ? -1 : 1); }
+  return t + Math.round(sec * 1000) - offset * 60000;
 }
+// Floating clocks retain the file's wall time; explicitly zoned/epoch times are UTC.
+const utcTime = s => /(?:Z|[+-]\d{2}:?\d{2})$/i.test(String(s).trim()) || (/^\d+(?:\.\d+)?$/.test(String(s).trim()) && +s > 1e9);
+const logOffset = (raw, cfg) => raw && raw.timeBasis === 'utc' ? 0 : (cfg.logOff || 0);
+function csvDelimiter(text) {
+  const counts = { ',': 0, ';': 0, '\t': 0 }; let quoted = false;
+  for (let i = 0; i < text.length; i++) { const c = text[i]; if (c === '"') { if (quoted && text[i + 1] === '"') i++; else quoted = !quoted; } else if (!quoted) { if (c === '\n' || c === '\r') break; if (c in counts) counts[c]++; } }
+  return Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+}
+function* csvRows(text, delimiter = csvDelimiter(text)) {
+  let row = [], value = '', quoted = false;
+  for (let i = text.charCodeAt(0) === 0xFEFF ? 1 : 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) { if (c === '"') { if (text[i + 1] === '"') { value += '"'; i++; } else quoted = false; } else value += c; }
+    else if (c === '"' && !value.trim()) quoted = true;
+    else if (c === delimiter) { row.push(value); value = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(value); if (row.some(v => v.trim())) yield row; row = []; value = ''; }
+    else value += c;
+  }
+  if (quoted) throw new Error('CSV contains an unclosed quoted field.');
+  if (value || row.length) { row.push(value); yield row; }
+}
+const csvNumber = s => { const v = String(s ?? '').trim(); return v ? Number(v.replace(',', '.')) : NaN; };
 function parseLog(text) {
-  const cols = new Map(); let t0 = NaN, maxI = -1, cap = 1 << 15;
-  const put = (i, k, v) => {
-    let c = cols.get(k); if (!c) { c = new Float64Array(cap).fill(NaN); cols.set(k, c); }
-    if (i >= c.length) { let nc = c.length; while (nc <= i) nc *= 2; const b = new Float64Array(nc).fill(NaN); b.set(c); c = b; cols.set(k, c); }
-    c[i] = v;
-  };
-  const idx = t => { if (!fin(t)) return -1; if (!fin(t0)) t0 = Math.floor(t / 1000) * 1000; const i = Math.floor((t - t0) / 1000); if (i < 0 || i > 4e6) return -1; if (i > maxI) maxI = i; return i; };
-  let pos = 0, lineNo = 0; const nextLine = () => { if (pos >= text.length) return null; let e = text.indexOf('\n', pos); if (e < 0) e = text.length; let l = text.slice(pos, e); pos = e + 1; if (l.endsWith('\r')) l = l.slice(0, -1); return l; };
-  let first = nextLine(); if (first && first.charCodeAt(0) === 0xFEFF) first = first.slice(1);
-  let format;
-  if (/^!boat/i.test(first)) {
-    format = 'Expedition log';
-    const names = first.split(','); let ids = null, l;
-    const idName = {};
-    while ((l = nextLine()) !== null) {
-      if (!l) continue;
-      if (l[0] === '!') { if (/^!boat,/i.test(l) && !ids) { ids = l.split(','); for (let i = 1; i < ids.length; i++) idName[ids[i]] = canon(names[i] || ('ch' + ids[i])); } continue; }
-      const p = l.split(','); let k = 1, t;
-      if (p.length % 2 === 0) { t = parseTime(p[1]); k = 2; } else { for (let j = 1; j < p.length - 1; j += 2) if (p[j] === '0') { t = parseTime(p[j + 1]); break; } }
-      const i = idx(t); if (i < 0) continue;
-      for (; k < p.length - 1; k += 2) { if (p[k] === '0') continue; const nm = ids ? idName[p[k]] : canon(names[+p[k] + 1] || ('ch' + p[k])); if (nm) put(i, nm, +p[k + 1]); }
-    }
-  } else {
-    format = 'CSV table';
-    const dl = [',', ';', '\t'].sort((a, b) => first.split(b).length - first.split(a).length)[0];
-    const hdr = first.split(dl).map(s => s.replace(/^"|"$/g, '').trim());
-    const low = hdr.map(h => h.toLowerCase());
-    let ti = low.findIndex(h => ['utc', 'time', 'timestamp', 'datetime', 'date_time', 'date time', 'isodatetime'].includes(h));
+  text = String(text).replace(/^\uFEFF/, '');
+  const expedition = /^!boat/i.test(text), delimiter = expedition ? ',' : csvDelimiter(text), format = expedition ? 'Expedition log' : 'CSV table';
+  function* records() {
+    const rows = csvRows(text, delimiter), first = rows.next().value;
+    if (!first) throw new Error('The log file is empty.');
+    const keys = first.map(canon), low = first.map(s => s.trim().toLowerCase()), ids = Object.create(null);
+    let hasIds = false, ti = low.findIndex(h => ['utc', 'time', 'utc time', 'timestamp', 'datetime', 'date_time', 'date time', 'isodatetime'].includes(h));
     const di = low.indexOf('date'), tmi = low.findIndex(h => h === 'time' || h === 'utc time');
-    if (ti < 0 && di < 0) ti = 0;
-    const keys = hdr.map(canon); let l;
-    while ((l = nextLine()) !== null) {
-      if (!l) continue; const p = l.split(dl);
-      const t = (di >= 0 && tmi >= 0 && di !== tmi) ? parseTime(p[di].replace(/"/g, '') + ' ' + p[tmi].replace(/"/g, '')) : parseTime((p[ti] || '').replace(/"/g, ''));
-      const i = idx(t); if (i < 0) continue;
-      for (let k = 0; k < p.length; k++) { if (k === ti || k === di || k === tmi) continue; const s = p[k]; if (s === '' || s === undefined) continue; const v = +s; if (fin(v)) put(i, keys[k], v); }
+    if (!expedition && ti < 0 && di < 0) throw new Error('No recognised time column in the CSV header.');
+    for (const p of rows) {
+      if (expedition && p[0][0] === '!') { if (/^!boat$/i.test(p[0]) && !hasIds) { p.forEach((id, i) => { if (i) ids[id] = keys[i] || 'ch' + id; }); hasIds = true; } continue; }
+      let stamp, start = 1;
+      if (expedition) { if (p.length % 2 === 0) { stamp = p[1]; start = 2; } else for (let j = 1; j < p.length - 1; j += 2) if (p[j] === '0') stamp = p[j + 1]; }
+      else stamp = di >= 0 && tmi >= 0 && di !== tmi ? p[di] + ' ' + p[tmi] : p[ti >= 0 ? ti : di];
+      yield { p, stamp, t: parseTime(stamp), start, keys, ids, hasIds, ti, di, tmi };
     }
   }
-  const n = maxI + 1; if (n < 10) throw new Error('No timestamped rows found in the log file.');
-  const ch = {};
-  for (const [k, c0] of cols) {
-    const c = c0.slice(0, n); let cnt = 0, last = NaN, age = 99;
-    for (let i = 0; i < n; i++) { if (fin(c[i])) { cnt++; last = c[i]; age = 0; } else if (++age <= 10) c[i] = last; }
-    if (cnt >= Math.max(5, n * 0.01)) ch[k] = c;
+  let lo = Infinity, hi = -Infinity, previous = -Infinity;
+  const bases = new Set(), diagnostics = { rows: 0, invalidTimes: 0, outOfOrder: 0, aggregatedSamples: 0, invalidValues: 0, channels: {} };
+  for (const r of records()) { diagnostics.rows++; if (!fin(r.t)) { diagnostics.invalidTimes++; continue; } bases.add(utcTime(r.stamp) ? 'utc' : 'floating'); if (r.t < previous) diagnostics.outOfOrder++; previous = r.t; lo = Math.min(lo, r.t); hi = Math.max(hi, r.t); }
+  if (!fin(lo)) throw new Error('No timestamped rows found in the log file.');
+  if (bases.size > 1) throw new Error('Mixed UTC and timezone-free timestamps. Use one time convention per log.');
+  const t0 = Math.floor(lo / 1000) * 1000, n = Math.floor((hi - t0) / 1000) + 1;
+  if (n > 7 * 86400) throw new Error('Log spans more than seven days. Check timestamps or split it into sessions.');
+  const cols = new Map();
+  const put = (i, k, value) => {
+    if (!k || !String(value ?? '').trim()) return;
+    const v = csvNumber(value); if (!fin(v)) { diagnostics.invalidValues++; return; }
+    let c = cols.get(k); if (!c) { c = { sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    if (c.count[i]++) diagnostics.aggregatedSamples++;
+    if (c.cos) { c.sum[i] += Math.sin(v * D2R); c.cos[i] += Math.cos(v * D2R); } else c.sum[i] += v;
+  };
+  for (const r of records()) {
+    if (!fin(r.t)) continue; const i = Math.floor((r.t - t0) / 1000);
+    if (expedition) { for (let k = r.start; k < r.p.length - 1; k += 2) if (r.p[k] !== '0') put(i, r.hasIds ? r.ids[r.p[k]] : r.keys[+r.p[k] + 1] || 'ch' + r.p[k], r.p[k + 1]); }
+    else r.keys.forEach((k, j) => { if (j !== r.ti && j !== r.di && j !== r.tmi) put(i, k, r.p[j]); });
+  }
+  const ch = Object.create(null), age = Object.create(null), counts = Object.create(null);
+  for (const [k, c] of cols) {
+    const a = c.sum, ages = new Uint8Array(n).fill(255); let last = NaN, elapsed = 255, observed = 0, held = 0;
+    for (let i = 0; i < n; i++) {
+      if (c.count[i]) { a[i] = c.cos ? (Math.hypot(a[i], c.cos[i]) < 1e-10 ? NaN : (ANG.test(k) ? w360 : w180)(Math.atan2(a[i], c.cos[i]) * R2D)) : a[i] / c.count[i]; last = a[i]; elapsed = fin(last) ? 0 : 255; observed++; }
+      else { elapsed = Math.min(255, elapsed + 1); a[i] = elapsed <= 10 ? last : NaN; if (fin(a[i])) held++; }
+      ages[i] = elapsed;
+    }
+    ch[k] = a; age[k] = ages; counts[k] = c.count; diagnostics.channels[k] = { observed, held, missing: n - observed - held };
   }
   if (ch.Lat && ch.Lon) for (let i = 0; i < n; i++) if (ch.Lat[i] === 0 && ch.Lon[i] === 0) { ch.Lat[i] = NaN; ch.Lon[i] = NaN; }
-  return { t0, n, ch, format };
+  return { t0, n, ch, age, counts, diagnostics, timeBasis: [...bases][0], format };
 }
 
 /* ---------- event file ---------- */
@@ -245,9 +272,9 @@ function parseEvents(text) {
     let m = text.match(/<event_file\s+hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; else { m = text.match(/<events\s+utc_offset_hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; }
     m = text.match(/<log_file\s+hours="(-?[\d.]+)"/); if (m) out.logOff = +m[1];
     const blk = (text.match(/<events[\s\S]*?<\/events>/) || [text])[0];
-    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t, type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '' }); });
+    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t + (utcTime(ts) ? out.evOff * 36e5 : 0), type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '' }); });
   } else {
-    for (const l of text.split(/\r?\n/)) { const p = l.split(/[,;\t]/); if (p.length < 2) continue; const t = parseTime(p[0]); if (fin(t)) out.events.push({ tl: t, type: p[1].trim(), attr: (p[2] || '').trim(), comments: (p[3] || '').trim() }); }
+    for (const p of csvRows(text)) { if (p.length < 2) continue; const t = parseTime(p[0]); if (fin(t)) out.events.push({ tl: t, type: p[1].trim(), attr: (p[2] || '').trim(), comments: (p[3] || '').trim() }); }
   }
   out.events.sort((a, b) => a.tl - b.tl);
   return out;
@@ -293,13 +320,22 @@ function makePolar(rows, src) {
 function polarText(rows) { return rows.map(r => [r.tws, ...r.pts.map(p => p[0].toFixed(1) + '\t' + p[1].toFixed(2))].join('\t')).join('\r\n') + '\r\n'; }
 
 /* ---------- processing ---------- */
-const DEF = { phaseLen: 30, phaseGap: 10, minBsp: 2, sdTwa: 6, sdBsp: 0.6, sdTws: 2, manBefore: 15, manAfter: 45, upMargin: 10, dnMargin: 12, polMin: 70, polMax: 125, magVar: null, evOff: 0, logOff: 0, tStart: null, tEnd: null, useEvents: true, racingOnly: false };
+const DEF = { phaseLen: 30, phaseGap: 10, maxHold: 2, minBsp: 2, sdTwa: 6, sdBsp: 0.6, sdTws: 2, manBefore: 15, manAfter: 45, upMargin: 10, dnMargin: 12, polMin: 70, polMax: 125, magVar: null, evOff: 0, logOff: 0, tStart: null, tEnd: null, useEvents: true, racingOnly: false };
 const MODES = ['Upwind', 'Reaching', 'BroadReaching', 'Downwind'];
+function validateConfig(cfg) {
+  for (const k of ['phaseLen', 'phaseGap', 'manBefore', 'manAfter', 'maxHold']) if (!Number.isInteger(cfg[k]) || cfg[k] < (k === 'phaseLen' ? 2 : 0)) throw new Error(k + ' must be a whole number ' + (k === 'phaseLen' ? 'of at least 2.' : 'of at least 0.'));
+  if (cfg.maxHold > 10) throw new Error('Max held sample age cannot exceed 10 seconds.');
+  for (const k of ['minBsp', 'sdTwa', 'sdBsp', 'sdTws', 'upMargin', 'dnMargin', 'polMin', 'polMax']) if (!fin(cfg[k]) || cfg[k] < 0) throw new Error(k + ' must be a non-negative number.');
+  if (cfg.polMin >= cfg.polMax) throw new Error('Minimum polar percentage must be below maximum.');
+  for (const k of ['evOff', 'logOff', 'dispOff']) if (cfg[k] != null && (!fin(cfg[k]) || Math.abs(cfg[k]) > 24)) throw new Error(k + ' must be a UTC offset between -24 and 24 hours.');
+  for (const k of ['tStart', 'tEnd', 'magVar']) if (cfg[k] != null && !fin(cfg[k])) throw new Error(k + ' is invalid.');
+  if (cfg.tStart != null && cfg.tEnd != null && cfg.tStart >= cfg.tEnd) throw new Error('The end of the time window must be after its start.');
+}
 
 function applyEvents(raw, ev, cfg) {
   const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), sailNames: [], list: [], manual: {}, dayStart: null, dayStop: null };
   if (!ev || !cfg.useEvents) return L;
-  const toI = tl => Math.round((tl - cfg.evOff * 36e5 + cfg.logOff * 36e5 - raw.t0) / 1000);
+  const toI = tl => Math.round((tl - cfg.evOff * 36e5 + logOffset(raw, cfg) * 36e5 - raw.t0) / 1000);
   const E = ev.events.map(e => ({ ...e, i: toI(e.tl) }));
   L.list = E;
   const fill = (arr, a, b, v) => { a = Math.max(0, a); b = Math.min(n, b); for (let i = a; i < b; i++) arr[i] = v; };
@@ -314,6 +350,7 @@ function applyEvents(raw, ev, cfg) {
   }
   if (rs >= 0) { fill(L.race, rs, n, race); fill(L.leg, rs, n, leg); }
   let ts = -1; for (const e of E) { if (e.type === 'StartTesting') ts = e.i; else if (e.type === 'StopTesting' && ts >= 0) { fill(L.testing, ts, e.i, 1); ts = -1; } }
+  if (ts >= 0) fill(L.testing, ts, n, 1);
   const man = E.filter(e => e.type === 'ManualEntry');
   man.forEach(e => e.attr.split(';').forEach(kv => { const [k, v] = kv.split('='); if (!k || !fin(+v)) return; const key = k.trim(); if (!L.manual[key]) L.manual[key] = new Float64Array(n).fill(NaN); fill(L.manual[key], e.i, n, +v); }));
   return L;
@@ -348,20 +385,33 @@ function applyCalib(ch, n, c) {
 }
 function process(raw, opt) {
   const cfg = { ...DEF, ...opt.cfg }, n = raw.n, ch = { ...raw.ch };
-  const need = k => { if (!ch[k]) ch[k] = new Float64Array(n).fill(NaN); return ch[k]; };
+  validateConfig(cfg);
+  // Derived channels always get their own arrays, including names also present in the source.
+  const need = k => (ch[k] = new Float64Array(n).fill(NaN));
   const warn = [];
+  for (const k of Object.keys(ch)) if (raw.age && raw.age[k]) { ch[k] = Float64Array.from(ch[k]); for (let i = 0; i < n; i++) if (raw.age[k][i] > cfg.maxHold) ch[k][i] = NaN; }
+  if (raw.diagnostics) {
+    const q = raw.diagnostics;
+    if (q.invalidTimes) warn.push(q.invalidTimes + ' rows skipped because their timestamps were invalid.');
+    if (q.outOfOrder) warn.push(q.outOfOrder + ' out-of-order timestamps were placed in chronological order.');
+    if (q.invalidValues) warn.push(q.invalidValues + ' non-numeric channel values were ignored.');
+    if (q.aggregatedSamples) warn.push('Subsecond samples averaged into 1-second bins; original rates are not retained.');
+    if (['BSP', 'TWA', 'TWS', 'AWA', 'AWS'].some(k => q.channels[k] && q.channels[k].observed < n)) warn.push('Gaps present: values are held for at most ' + cfg.maxHold + ' seconds; longer gaps are excluded from phases. See import quality in Setup.');
+  }
+  if (raw.timeBasis === 'utc' && cfg.logOff) warn.push('The log contains UTC timestamps; the log UTC offset setting is ignored.');
   const L = applyEvents(raw, opt.events, cfg);
   for (const k in L.manual) ch[k] = L.manual[k];
   const calibrated = applyCalib(ch, n, opt.calib);
   // true wind if missing
-  if (!ch.TWA && ch.AWA && ch.AWS && ch.BSP) { const twa = need('TWA'), tws = need('TWS'); for (let i = 0; i < n; i++) { const a = ch.AWA[i] * D2R, x = ch.AWS[i] * Math.cos(a) - ch.BSP[i], y = ch.AWS[i] * Math.sin(a); twa[i] = Math.atan2(y, x) * R2D; tws[i] = Math.hypot(x, y); } warn.push('TWA/TWS were not in the log; computed from AWA, AWS and BSP.'); }
+  if ((!ch.TWA || !ch.TWS) && ch.AWA && ch.AWS && ch.BSP) { const missing = ['TWA', 'TWS'].filter(k => !ch[k]), twa = !ch.TWA ? need('TWA') : null, tws = !ch.TWS ? need('TWS') : null; for (let i = 0; i < n; i++) { const a = ch.AWA[i] * D2R, x = ch.AWS[i] * Math.cos(a) - ch.BSP[i], y = ch.AWS[i] * Math.sin(a); if (twa) twa[i] = Math.atan2(y, x) * R2D; if (tws) tws[i] = Math.hypot(x, y); } warn.push(missing.join('/') + ' missing; computed from AWA, AWS and BSP.'); }
   for (const k of ['BSP', 'TWA', 'TWS']) if (!ch[k]) throw new Error('The log needs at least BSP, TWA and TWS (or AWA and AWS). Missing: ' + k);
   if (!ch.TWD && ch.HDG) { const d = need('TWD'); for (let i = 0; i < n; i++) d[i] = w360(ch.HDG[i] + ch.TWA[i]); }
   const BSP = ch.BSP, TWA = ch.TWA, TWS = ch.TWS;
   let i0 = 0, i1 = n;
   if (cfg.tStart != null) i0 = Math.max(0, Math.round((cfg.tStart - raw.t0) / 1000)); else if (L.dayStart != null) i0 = Math.max(0, L.dayStart);
-  if (cfg.tEnd != null) i1 = Math.min(n, Math.round((cfg.tEnd - raw.t0) / 1000)); else if (L.dayStop != null && L.dayStop > i0) i1 = Math.min(n, L.dayStop);
-  if (i1 - i0 < 60) { warn.push('The time window / event file does not overlap the log; using the whole log.'); i0 = 0; i1 = n; }
+  if (cfg.tEnd != null) i1 = Math.min(n, Math.round((cfg.tEnd - raw.t0) / 1000)); else if (L.dayStop != null) i1 = Math.min(n, L.dayStop);
+  if (i1 <= i0) throw new Error('The selected time window / event file does not overlap the log. Check times and UTC offsets.');
+  if (i1 - i0 < cfg.phaseLen) warn.push('Selected window is shorter than one phase.');
   const magVar = cfg.magVar != null ? cfg.magVar : 0, logMagVar = ch.MagVar ? (median(ch.MagVar.subarray(i0, i1)) || 0) : null;
 
   // polar source
@@ -401,6 +451,8 @@ function process(raw, opt) {
   for (let i = i0 + 1; i < i1 - 10; i++) {
     if (sgn[i] === cur) continue; let ok = true; for (let k = 1; k < 8; k++) if (sgn[i + k] !== sgn[i]) { ok = false; break; }
     if (!ok) continue; cur = sgn[i];
+    for (let k = Math.max(i0, i - 30); k < Math.min(i1, i + 60); k++) if (!fin(BSP[k]) || !fin(TWA[k]) || !fin(TWS[k])) { ok = false; break; }
+    if (!ok) continue;
     const bIn = win(BSP, i - 25, i - 5, mean); if (!(bIn > cfg.minBsp)) continue;
     const a0 = win(aT, i - 25, i - 8, mean), a1 = win(aT, i + 12, i + 30, mean);
     const type = a0 < 90 && a1 < 90 ? 'Tack' : a0 > 90 && a1 > 90 ? 'Gybe' : null; if (!type) continue;
@@ -419,6 +471,7 @@ function process(raw, opt) {
   for (let i = i0; i < i1; i++) if (!(BSP[i] >= cfg.minBsp) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i] < 0 || (cfg.racingOnly && !L.race[i])) bad[i] = 1;
   for (const m of mans) for (let k = Math.max(i0, m.i - cfg.manBefore); k < Math.min(i1, m.i + cfg.manAfter); k++) bad[k] = 1;
   for (let i = i0 + 1; i < i1; i++) if (L.sail[i] !== L.sail[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
+  for (let i = i0 + 1; i < i1; i++) if (L.race[i] !== L.race[i - 1] || L.leg[i] !== L.leg[i - 1] || L.testing[i] !== L.testing[i - 1] || mode[i] !== mode[i - 1] || tack[i] !== tack[i - 1]) bad[i] = 1;
   const cs = new Int32Array(n + 1); for (let i = 0; i < n; i++) cs[i + 1] = cs[i] + bad[i];
   const names = Object.keys(ch), phases = [], PL = cfg.phaseLen;
   for (let i = i0; i + PL <= i1;) {
@@ -615,7 +668,7 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;
 
@@ -623,6 +676,8 @@ if (typeof module !== 'undefined') module.exports = SL;
 /* SailLens core, part 2: calibration models, event writing, season database. No DOM access. */
 (() => {
 const { D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, MODES } = SL;
+const mixedBoats = ps => new Set(ps.map(p => p.boat || 'Boat')).size > 1;
+const boatError = () => ({ err: 'Select sessions from one boat before deriving calibration.' });
 
 /* dense linear solve (Gaussian elimination, partial pivoting); returns null if singular */
 function solve(A, b) {
@@ -636,10 +691,11 @@ function rng(seed) { let s = seed; return () => (s = (s * 16807) % 2147483647) /
    Model per phase: SOG vector = k * R(delta) * (BSP along water heading) + current(window).
    Current is free per 15-minute window, so only changes in the boat's own vector identify k and delta. */
 function calBsp(D, phases) {
+  if (mixedBoats(phases || D.phases)) return boatError();
   const ps = (phases || D.phases).filter(p => fin(p.v.SOG) && fin(p.v.COG) && fin(p.v.HDG) && p.v.BSP > 2);
   if (ps.length < 12) return { err: 'Needs at least 12 phases with BSP, HDG, SOG and COG.' };
   const useCse = ps.every(p => fin(p.v.Course)), mv = D.magVar || 0;
-  const rows = ps.map(p => { const th = ((useCse ? p.v.Course : p.v.HDG) + mv) * D2R, cg = p.v.COG * D2R, b = p.v.BSP; return { p, w: Math.floor(p.t / 9e5) + (p.day ? '|' + p.day : ''), W: [b * Math.sin(th), b * Math.cos(th)], Wp: [b * Math.cos(th), -b * Math.sin(th)], S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], th }; });
+  const rows = ps.map(p => { const th = ((useCse ? p.v.Course : p.v.HDG) + (p.magVar ?? mv)) * D2R, cg = p.v.COG * D2R, b = p.v.BSP; return { p, w: Math.floor(p.t / 9e5) + (p.sessionId || p.day ? '|' + (p.sessionId || p.day) : ''), W: [b * Math.sin(th), b * Math.cos(th)], Wp: [b * Math.cos(th), -b * Math.sin(th)], S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], th }; });
   const wins = new Map(); for (const r of rows) { if (!wins.has(r.w)) wins.set(r.w, []); wins.get(r.w).push(r); }
   const good = [...wins.values()].filter(g => { if (g.length < 4) return false; let sx = 0, sy = 0; for (const r of g) { sx += Math.sin(r.th); sy += Math.cos(r.th); } return Math.hypot(sx, sy) / g.length < 0.92; }); // needs a spread of headings
   if (good.length < 2) return { err: 'Needs at least two 15-minute windows that contain both tacks (or a clear change of heading).' };
@@ -663,11 +719,12 @@ function calBsp(D, phases) {
    a BSP factor (changes the length of the boat's vector), a heading offset (turns it the same way on both tacks) and a leeway
    gain (turns it opposite ways). Least squares over all pairs, bootstrap over pairs for the ranges. */
 function calCurrent(phases, mv) {
-  const ps = phases.filter(p => fin(p.v.SOG) && fin(p.v.COG) && fin(p.v.HDG) && p.v.BSP > 2).slice().sort((a, b) => (a.day || '') < (b.day || '') ? -1 : (a.day || '') > (b.day || '') ? 1 : a.t - b.t);
+  if (mixedBoats(phases)) return boatError();
+  const ps = phases.filter(p => fin(p.v.SOG) && fin(p.v.COG) && fin(p.v.HDG) && p.v.BSP > 2).slice().sort((a, b) => (a.sessionId || a.day || '') < (b.sessionId || b.day || '') ? -1 : (a.sessionId || a.day || '') > (b.sessionId || b.day || '') ? 1 : a.t - b.t);
   const hasLee = ps.length > 0 && ps.every(p => fin(p.v.Leeway)), fam = p => p.mode === 'Upwind' ? 0 : p.mode === 'Downwind' ? 2 : 1, pairs = [];
-  const vec = p => { const th = (p.v.HDG + (mv || 0)) * D2R, cg = p.v.COG * D2R, b = p.v.BSP, le = hasLee ? p.v.Leeway * D2R : 0; return { S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], W: [b * Math.sin(th), b * Math.cos(th)], Q: [b * Math.cos(th), -b * Math.sin(th)], le }; };
-  for (let i = 0; i + 1 < ps.length; i++) { const a = ps[i], b = ps[i + 1]; if (a.tack === b.tack || fam(a) !== fam(b) || fam(a) === 1 || (a.day || '') !== (b.day || '') || b.t - a.t > 300000) continue;
-    const bef = [], aft = []; for (let j = i; j >= 0 && bef.length < 3 && ps[j].tack === a.tack && fam(ps[j]) === fam(a) && a.t - ps[j].t < 200000 && (ps[j].day || '') === (a.day || ''); j--) bef.push(ps[j]); for (let j = i + 1; j < ps.length && aft.length < 3 && ps[j].tack === b.tack && fam(ps[j]) === fam(b) && ps[j].t - b.t < 200000 && (ps[j].day || '') === (b.day || ''); j++) aft.push(ps[j]);
+  const vec = p => { const th = (p.v.HDG + (p.magVar ?? mv ?? 0)) * D2R, cg = p.v.COG * D2R, b = p.v.BSP, le = hasLee ? p.v.Leeway * D2R : 0; return { S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], W: [b * Math.sin(th), b * Math.cos(th)], Q: [b * Math.cos(th), -b * Math.sin(th)], le }; };
+  for (let i = 0; i + 1 < ps.length; i++) { const a = ps[i], b = ps[i + 1]; if (a.tack === b.tack || fam(a) !== fam(b) || fam(a) === 1 || (a.sessionId || a.day || '') !== (b.sessionId || b.day || '') || b.t - a.t > 300000) continue;
+    const bef = [], aft = []; for (let j = i; j >= 0 && bef.length < 3 && ps[j].tack === a.tack && fam(ps[j]) === fam(a) && a.t - ps[j].t < 200000 && (ps[j].sessionId || ps[j].day || '') === (a.sessionId || a.day || ''); j--) bef.push(ps[j]); for (let j = i + 1; j < ps.length && aft.length < 3 && ps[j].tack === b.tack && fam(ps[j]) === fam(b) && ps[j].t - b.t < 200000 && (ps[j].sessionId || ps[j].day || '') === (b.sessionId || b.day || ''); j++) aft.push(ps[j]);
     const avg = g => { const v = g.map(vec), m = k => [mean(v.map(x => x[k][0])), mean(v.map(x => x[k][1]))]; return { S: m('S'), W: m('W'), Q: m('Q'), L: [mean(v.map(x => x.le * x.Q[0])), mean(v.map(x => x.le * x.Q[1]))] }; };
     pairs.push({ p: a, q: b, type: fam(a) === 0 ? 'Tack' : 'Gybe', tws: mean(bef.concat(aft).map(x => x.v.TWS)), A: avg(bef), B: avg(aft), n: bef.length + aft.length }); }
   if (pairs.length < 3) return { err: 'Needs at least 3 tacks or gybes with steady phases on both sides, and BSP, HDG, SOG and COG.' };
@@ -719,7 +776,8 @@ function calWindDay(ps) {
 }
 /* phases may span several days: fit each day on its own wind history, then pool the per-band results by inverse variance */
 function calWind(phases) {
-  const days = new Map(); for (const p of phases) { const k = p.day || 'day'; if (!days.has(k)) days.set(k, []); days.get(k).push(p); }
+  if (mixedBoats(phases)) return boatError();
+  const days = new Map(); for (const p of phases) { const k = p.sessionId || p.day || 'day'; if (!days.has(k)) days.set(k, []); days.get(k).push(p); }
   const fits = [...days.values()].map(calWindDay).filter(Boolean); if (!fits.length) return { err: 'Needs upwind or downwind phases on both tacks (at least 3 per tack in a wind band).' };
   const pool = xs => { xs = xs.filter(x => x && fin(x.v) && x.se > 0); if (!xs.length) return null; const w = xs.map(x => 1 / (x.se * x.se + 0.04)), sw = w.reduce((a, b) => a + b, 0); return { v: xs.reduce((s, x, i) => s + w[i] * x.v, 0) / sw, se: Math.sqrt(1 / sw), k: xs.length }; };
   const bins = []; for (const m of ['Upwind', 'Downwind']) BANDS.forEach((b, bi) => { const xs = fits.map(f => f.bins.find(q => q.mode === m && q.bi === bi)).filter(Boolean); if (!xs.length) return; const pv = pool(xs.map(x => ({ v: x.e, se: x.se }))); if (pv) bins.push({ mode: m, band: b[2], n: xs.reduce((s, x) => s + x.n, 0), days: xs.length, e: pv.v, se: pv.se, tws: mean(xs.map(x => x.tws)) }); });
@@ -728,6 +786,7 @@ function calWind(phases) {
 }
 /* masthead unit offset from the port/starboard asymmetry of |AWA| upwind, controlling for wind and how hard the boat is being sailed */
 function calAwa(phases) {
+  if (mixedBoats(phases)) return boatError();
   const ps = phases.filter(p => p.mode === 'Upwind' && fin(p.v.AWA) && fin(p.v.AWS) && fin(p.v.BSP)); const nP = ps.filter(p => p.tack === 'Port').length, nS = ps.length - nP;
   if (nP < 5 || nS < 5) return { err: 'Needs at least 5 upwind phases on each tack with AWA and AWS.' };
   const f = [p => 1, p => p.tack === 'Stbd' ? 1 : -1, p => p.v.AWS - 14, p => p.v.BSP - 7, p => (p.v['Heel_norm'] != null && fin(p.v['Heel_norm']) ? Math.abs(p.v['Heel_norm']) : 15) - 15], k = f.length;
@@ -742,6 +801,7 @@ function calAwa(phases) {
   return { read: be[1], se: inv ? Math.sqrt(Math.max(0, s2 * inv[1])) : NaN, raw, nP, nS, twsAsym, sens, fromTws: Math.abs(sens) > 0.02 ? twsAsym / sens : NaN };
 }
 function calScore(bsp, wind, awa) { // 0..100, a rough single number to trend over a season
+  if (!bsp || bsp.err || !fin(bsp.k) || !fin(bsp.delta) || !wind || wind.err || !wind.bins || !wind.bins.length || wind.bins.some(b => !fin(b.e)) || !wind.twsDn || !fin(wind.twsDn.pct) || !awa || awa.err || !fin(awa.read)) return null;
   let s = 100; const pen = (v, tol, w) => { if (fin(v)) s -= Math.min(w, Math.max(0, Math.abs(v) - tol) / tol * w / 2); };
   if (bsp && !bsp.err) { pen((bsp.k - 1) * 100, 1, 25); pen(bsp.delta, 1.5, 20); }
   if (wind && !wind.err) { for (const b of wind.bins) pen(b.e, 1.5, 30 / wind.bins.length); if (wind.twsDn) pen(wind.twsDn.pct, 3, 10); }
@@ -778,30 +838,32 @@ function suggestMarks(D) {
 const SVARS = ['TWS', 'TWA', 'absTWA', 'TWD', 'BSP', 'SOG', 'COG', 'HDG', 'Course', 'AWA', 'absAWA', 'AWS', 'Heel', 'Heel_norm', 'abs_heel', 'Rudder', 'Rudder_norm', 'abs_rudder', 'Leeway', 'Trim', 'Forestay', 'Polar_BSP', 'Target_TWA', 'Target_BSP', 'BSPpol%', 'BSP_trg%', 'VMG', 'VMG%', 'ΔBSP', 'ΔTWA', 'ΔVMG', 'ΔVMG%', 'BSP-SOG', 'HDG-COG', 'Cur_E', 'Cur_N', 'CUR_RATE', 'CUR_DIR', 'Vang', 'Trav', 'Main', 'BackStay', 'Cunningham', 'Outhaul', 'Rake', 'MastButt', 'Downhaul', 'Boom', 'Twist', 'Heave', 'WvSigHt', 'Load S', 'Load P', 'RunnerS', 'RunnerP', 'JibH', 'MainH', 'Depth', 'SeaTemp'];
 const r3 = v => fin(v) ? Math.round(v * 1000) / 1000 : null;
 function dayRecord(D, meta, extra) {
-  const keys = SVARS.concat(Object.keys(D.L.manual)).filter(k => D.ch[k]), off = D.cfg.dispOff || 0, d = new Date(D.sum.t0 + off * 36e5), date = d.toISOString().slice(0, 10);
-  return { id: (meta.boat || 'Boat') + '|' + date, boat: meta.boat || 'Boat', date, desc: meta.desc || '', location: meta.location || '', dayType: meta.daytype || '', polar: extra.polar || '', off, added: Date.now(), magVar: D.magVar,
+  const keys = [...new Set(SVARS.concat(Object.keys(D.L.manual)))].filter(k => D.ch[k]), clockOffset = SL.logOffset(D.raw, D.cfg), shift = clockOffset * 36e5, off = (D.cfg.dispOff || 0) + clockOffset, start = D.sum.t0 - shift, end = D.sum.t1 - shift, date = new Date(start + off * 36e5).toISOString().slice(0, 10);
+  return { id: (meta.boat || 'Boat') + '|' + date + '|' + start + '|' + end, boat: meta.boat || 'Boat', date, start, end, timeBasis: 'utc', desc: meta.desc || '', location: meta.location || '', dayType: meta.daytype || '', polar: extra.polar || '', off, added: Date.now(), magVar: D.magVar,
+    recipe: JSON.parse(JSON.stringify({ version: 2, cfg: D.cfg, calibration: extra.calibration || null, polarRows: D.P ? D.P.rows : null, files: extra.files || {}, events: extra.events || null, importQuality: D.raw.diagnostics || null, timeBasis: D.raw.timeBasis || 'floating' })),
     sum: { tws: r3(D.sum.TWS.avg), twsMin: r3(D.sum.TWS.min), twsMax: r3(D.sum.TWS.max), twd: D.sum.TWD ? r3(D.sum.TWD.avg) : null, tacks: D.sum.tacks, gybes: D.sum.gybes, sailing: D.sum.sailing, racing: D.sum.racing, dist: r3(D.sum.dist), sails: D.sum.sails }, cal: extra.cal || null,
-    keys, phases: D.phases.map(p => ({ t: p.t, d: p.i1 - p.i, m: MODES.indexOf(p.mode), k: p.tack === 'Stbd' ? 1 : 0, s: p.sails, r: p.race, l: p.leg, x: p.testing ? 1 : 0, v: keys.map(k => r3(p.v[k])) })),
-    mans: D.mans.map(m => ({ t: D.raw.t0 + m.i * 1000, type: m.type, to: m.to, tws: r3(m.tws), loss: r3(m.loss), rate: r3(m.rate), angle: r3(m.angle), bspIn: r3(m.bspIn), bspMin: r3(m.bspMin), sail: m.sail >= 0 ? D.L.sailNames[m.sail] : '-' })) };
+    keys, phases: D.phases.map(p => ({ t: p.t - shift, d: p.i1 - p.i, m: MODES.indexOf(p.mode), k: p.tack === 'Stbd' ? 1 : 0, s: p.sails, r: p.race, l: p.leg, x: p.testing ? 1 : 0, v: keys.map(k => r3(p.v[k])) })),
+    mans: D.mans.map(m => ({ t: D.raw.t0 + m.i * 1000 - shift, type: m.type, to: m.to, tws: r3(m.tws), loss: r3(m.loss), rate: r3(m.rate), angle: r3(m.angle), bspIn: r3(m.bspIn), bspMin: r3(m.bspMin), sail: m.sail >= 0 ? D.L.sailNames[m.sail] : '-' })) };
 }
 function seasonPool(S) { // expand to the same phase objects the day analysis uses
-  const out = []; for (const d of S.days) { const lab = d.date + (d.desc ? ' ' + d.desc : ''); for (const q of d.phases) { const v = {}; d.keys.forEach((k, i) => { v[k] = q.v[i] == null ? NaN : q.v[i]; }); if (fin(v.AWA) && !fin(v.absAWA)) v.absAWA = Math.abs(v.AWA); out.push({ t: q.t, i: null, i1: null, dur: q.d, tack: q.k ? 'Stbd' : 'Port', mode: MODES[q.m], sails: q.s, race: q.r, leg: q.l, raceLeg: q.r ? 'R' + q.r + 'L' + q.l : '-', testing: q.x, v, day: d.date, dayLabel: lab, off: d.off, magVar: d.magVar }); } }
+  const out = []; for (const d of S.days) { const lab = d.date + ' ' + (d.boat || 'Boat') + (d.desc ? ' ' + d.desc : ''); for (const q of d.phases) { const v = {}; d.keys.forEach((k, i) => { v[k] = q.v[i] == null ? NaN : q.v[i]; }); if (fin(v.AWA) && !fin(v.absAWA)) v.absAWA = Math.abs(v.AWA); out.push({ t: q.t, i: null, i1: null, dur: q.d, tack: q.k ? 'Stbd' : 'Port', mode: MODES[q.m] || 'Unknown', sails: q.s, race: q.r, leg: q.l, raceLeg: q.r ? 'R' + q.r + 'L' + q.l : '-', testing: q.x, v, day: d.date, sessionId: d.id, boat: d.boat, dayLabel: lab, off: d.off, magVar: d.magVar }); } }
   return out;
 }
 /* import a CSV export of RaceReplay's T_Phase table (Access: External Data > Export > Text file) */
-function csvParse(text) { const rows = []; let row = [], cur = '', q = false; for (let i = 0; i < text.length; i++) { const c = text[i]; if (q) { if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; } else if (c === '"') q = true; else if (c === ',' || c === ';' || c === '\t') { row.push(cur); cur = ''; } else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; } else if (c !== '\r') cur += c; } if (cur || row.length) { row.push(cur); rows.push(row); } return rows; }
+function csvParse(text) { return [...SL.csvRows(text)]; }
 const RRMAP = { HEEL: 'Heel_norm', RUDDER: 'Rudder_norm', BSPpol: 'Polar_BSP', BSP_trg: 'Target_BSP', TWA_trg: 'Target_TWA', FORESTAY: 'Forestay', TRIM: 'Trim', CSE: 'Course' };
 const RRSKIP = /^(id|ConfigNum|StartDateTime|StopDateTime|Duration|SailingMode$|PhaseType$|DataFrequency|RaceLegNum|RaceNum|PhaseTack$|BalanceType|MadeOnboard|TestRating|NumPoints|PointDensity|GPS_|MainsailReef|.*_Bin$|Burn|DayNight|DistToLn|Name$|BoatName|.*Str$|TestSubject|Mainsail|Headsail|Staysail|Spinnaker|Comments|COG_mag|CSE_mag|HDG_mag|TWD_mag|MagVar|VMG_trg|DistanceNM|geo)/;
 function seasonFromPhaseCsv(text, dayInfo) {
-  const rows = csvParse(text), hd = rows[0].map(s => s.trim()), ix = n => hd.indexOf(n); if (ix('StartDateTime') < 0 || ix('TWS') < 0) throw new Error('This CSV does not look like a T_Phase export (needs StartDateTime and TWS columns).');
+  const rows = csvParse(text), hd = (rows[0] || []).map(s => s.trim()), ix = n => hd.indexOf(n); if (ix('StartDateTime') < 0 || ix('TWS') < 0) throw new Error('This CSV does not look like a T_Phase export (needs StartDateTime and TWS columns).');
   const num = hd.map((n, i) => RRSKIP.test(n) ? null : n), days = new Map();
   for (const r of rows.slice(1)) {
-    if (r.length < hd.length - 2) continue; const g = n => ix(n) >= 0 ? r[ix(n)] : '', dur = +g('Duration'); if (!(dur > 0 && dur <= 180) || /CompleteRaceLeg|PortStbd/.test(g('PhaseTypeStr'))) continue;
-    const tl = SL.parseTime(g('StartDateTime')); if (!fin(tl)) continue; const date = g('StartDateTime').slice(0, 10), boat = g('BoatName') || 'Boat', id = boat + '|' + date, off = 0;
-    const v = {}; num.forEach((n, i) => { if (n && r[i] !== '' && fin(+r[i])) v[RRMAP[n] || n] = +r[i]; });
-    const port = /port/i.test(g('PhaseTackStr')) || v.TWA < 0, sg = port ? -1 : 1, md = Math.max(0, MODES.indexOf(g('SailingModeStr')));
+    if (r.length < hd.length - 2) continue; const g = n => ix(n) >= 0 ? r[ix(n)] : '', dur = SL.csvNumber(g('Duration')); if (!(dur > 0 && dur <= 180) || /CompleteRaceLeg|PortStbd/.test(g('PhaseTypeStr'))) continue;
+    const tl = SL.parseTime(g('StartDateTime')); if (!fin(tl)) continue; const date = new Date(tl).toISOString().slice(0, 10), boat = g('BoatName') || 'Boat', id = boat + '|' + date, off = 0;
+    const v = {}; num.forEach((n, i) => { const value = SL.csvNumber(r[i]); if (n && fin(value)) v[RRMAP[n] || n] = value; });
+    const port = /port/i.test(g('PhaseTackStr')) || v.TWA < 0, sg = port ? -1 : 1, md = MODES.indexOf(g('SailingModeStr'));
+    if (fin(v.TWA)) v.TWA = sg * Math.abs(v.TWA);
     if (fin(v.Heel_norm)) { v.Heel = sg * v.Heel_norm; v.abs_heel = Math.abs(v.Heel_norm); } if (fin(v.Rudder_norm)) { v.Rudder = sg * v.Rudder_norm; v.abs_rudder = Math.abs(v.Rudder_norm); } if (fin(v.AWA)) v.AWA = sg * Math.abs(v.AWA);
-    v.absTWA = Math.abs(v.TWA); const vt = +g('VMG_trg'); v.VMG = Math.abs(v.VMG); v['ΔBSP'] = v.BSP - v.Target_BSP; v['ΔTWA'] = v.absTWA - v.Target_TWA; if (fin(vt)) v['ΔVMG'] = v.VMG - Math.abs(vt); v['ΔVMG%'] = v['VMG%'] - 100; if (md === 1 || md === 2) v['VMG%'] = v['BSPpol%'];
+    v.absTWA = Math.abs(v.TWA); const vt = SL.csvNumber(g('VMG_trg')); v.VMG = Math.abs(v.VMG); v['ΔBSP'] = v.BSP - v.Target_BSP; v['ΔTWA'] = v.absTWA - v.Target_TWA; if (fin(vt)) v['ΔVMG'] = v.VMG - Math.abs(vt); v['ΔVMG%'] = v['VMG%'] - 100; if (md === 1 || md === 2) v['VMG%'] = v['BSPpol%'];
     if (fin(v.SOG)) v['BSP-SOG'] = v.BSP - v.SOG; if (fin(v.HDG) && fin(v.COG)) v['HDG-COG'] = w180(v.HDG - v.COG);
     const sails = [g('Spinnaker'), g('Headsail'), g('Staysail')].filter(Boolean).join('/') || (g('Mainsail') ? g('Mainsail') + ' only' : '-');
     if (!days.has(id)) { const inf = (dayInfo && dayInfo[date]) || {}; days.set(id, { id, boat, date, desc: inf.desc || '', location: inf.location || '', dayType: inf.dayType || '', polar: inf.polar || '', off: 0, local: true, added: Date.now(), magVar: 0, sum: null, cal: null, keys: [], phases: [], mans: [], src: 'RaceReplay database' }); }
@@ -809,10 +871,31 @@ function seasonFromPhaseCsv(text, dayInfo) {
   }
   const out = [...days.values()];
   for (const d of out) { const ks = new Set(); d.phases.forEach(p => Object.keys(p._v).forEach(k => ks.add(k))); d.keys = [...ks]; d.phases.forEach(p => { p.v = d.keys.map(k => r3(p._v[k])); delete p._v; }); d.phases.sort((a, b) => a.t - b.t); const tw = d.phases.map(p => p.v[d.keys.indexOf('TWS')]); d.sum = { tws: r3(mean(tw)), twsMin: r3(Math.min(...tw)), twsMax: r3(Math.max(...tw)), sails: [...new Set(d.phases.flatMap(p => p.s.replace(/ only$/, '').split('/')))].sort() }; }
+  if (!out.length) throw new Error('No valid phases found in the CSV.');
+  for (const d of out) { d.start = d.phases[0].t; d.end = Math.max(...d.phases.map(p => p.t + p.d * 1000)); d.id += '|' + d.start + '|' + d.end; d.unknownModes = d.phases.filter(p => p.m < 0).length; }
   return out.sort((a, b) => a.date < b.date ? -1 : 1);
 }
-function seasonMerge(S, days) { let add = 0, rep = 0; for (const d of days) { const i = S.days.findIndex(x => x.id === d.id); if (i >= 0) { S.days[i] = d; rep++; } else { S.days.push(d); add++; } } S.days.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0); return { add, rep }; }
-const newSeason = () => ({ app: 'SailLens', version: 1, name: 'Season', days: [] });
+function validateDay(d) {
+  if (!d || typeof d.id !== 'string' || !d.id || typeof d.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d.date) || !Array.isArray(d.keys) || d.keys.some(k => typeof k !== 'string') || new Set(d.keys).size !== d.keys.length || !Array.isArray(d.phases)) throw new Error('Invalid session in season file.');
+  for (const p of d.phases) if (!p || !fin(p.t) || !fin(p.d) || p.d <= 0 || !Number.isInteger(p.m) || p.m < -1 || p.m > 3 || !Array.isArray(p.v) || p.v.length !== d.keys.length || p.v.some(v => v != null && !fin(v))) throw new Error('Invalid phase in session ' + d.id + '.');
+}
+function seasonMerge(S, days) {
+  // Validate and resolve the entire import before changing the existing season.
+  const next = S.days.slice(); let add = 0, same = 0;
+  const content = d => JSON.stringify(d, (k, v) => k === 'added' ? undefined : v);
+  const span = d => [fin(d.start) ? d.start : Math.min(...d.phases.map(p => p.t)), fin(d.end) ? d.end : Math.max(...d.phases.map(p => p.t + p.d * 1000))];
+  for (const d of days) { validateDay(d); const old = next.find(x => x.id === d.id);
+    if (old) { if (content(old) !== content(d)) throw new Error('Session ' + d.id + ' already exists with different data. Export a backup, then remove that session explicitly before replacing it. Nothing was imported.'); same++; }
+    else {
+      const [start, end] = span(d), overlap = next.find(x => { const [a, b] = span(x); return (x.boat || 'Boat') === (d.boat || 'Boat') && start < b && end > a; });
+      if (overlap) throw new Error('Session ' + d.id + ' overlaps existing data for this boat. Nothing was imported; resolve the overlap before adding it.');
+      next.push(d); add++;
+    }
+  }
+  next.sort((a, b) => a.date.localeCompare(b.date) || ((a.start || a.phases[0]?.t || 0) - (b.start || b.phases[0]?.t || 0)));
+  S.days = next; S.version = 2; return { add, same, rep: 0 };
+}
+const newSeason = () => ({ app: 'SailLens', version: 2, name: 'Season', days: [] });
 /* sail crossover: per mode, where one sail's trend of VMG% against TWS overtakes another's */
 function crossover(phases, mode, yKey) {
   const ps = phases.filter(p => (p.mode === mode || (mode === 'Reaching' && p.mode === 'BroadReaching')) && fin(p.v[yKey]) && p.sails && p.sails !== '-' && !/ only$/.test(p.sails)), by = {};
@@ -941,6 +1024,38 @@ function windStats(D) {
   return { t, d, s, mean: m0, slope, period: per, acPeak: best, amp: sd(det) * 1.4, lo: quant(d, 0.05), hi: quant(d, 0.95), twsMed: median(tws), gust: quant(tws, 0.95) / (median(tws) || 1), lull: quant(tws, 0.05) / (median(tws) || 1), twsSd: sd(tws), first: w360(m0 + mean(d.slice(0, Math.ceil(d.length / 6)))), last: w360(m0 + mean(d.slice(-Math.ceil(d.length / 6)))) };
 }
 Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
+})();
+
+'use strict';
+/* Persistence adapters. Completion means a committed transaction, not just a successful put request. */
+(() => {
+  function createStore(factory) {
+    let opening;
+    const open = () => opening || (opening = new Promise((resolve, reject) => {
+      const request = factory.open('saillens', 1);
+      request.onupgradeneeded = () => request.result.createObjectStore('kv');
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('Browser storage unavailable.'));
+    }).catch(error => { opening = null; throw error; }));
+    return {
+      async get(key) { const db = await open(); return new Promise((resolve, reject) => {
+        const tx = db.transaction('kv'), request = tx.objectStore('kv').get(key);
+        tx.oncomplete = () => resolve(request.result);
+        tx.onabort = tx.onerror = () => reject(tx.error || request.error || new Error('Browser storage read failed.'));
+      }); },
+      async set(key, value) { const db = await open(); return new Promise((resolve, reject) => {
+        const tx = db.transaction('kv', 'readwrite');
+        tx.oncomplete = () => resolve(true);
+        tx.onabort = tx.onerror = () => reject(tx.error || new Error('Browser storage write failed.'));
+        tx.objectStore('kv').put(value, key);
+      }); }
+    };
+  }
+  function serialWriter(write) {
+    let tail = Promise.resolve();
+    return value => { const result = tail.then(() => write(value)); tail = result.catch(() => {}); return result; };
+  }
+  Object.assign(SL, { createStore, serialWriter });
 })();
 
 'use strict';
@@ -1211,10 +1326,11 @@ async function loadFile(file, kind) {
     if (kind === 'season') { seasonImport(text, file.name); show('season'); return; }
     if (kind === 'chart') { A.chart = SL.parseSailChart(text, file.name.replace(/\.\w+$/, '')); A.files.chart = file.name; chartChanged(); show('sails'); banner(`${file.name}: sail chart loaded, ${A.chart.shapes.length} sail areas` + (Object.keys(A.chart.cells).length ? ` and ${Object.keys(A.chart.cells).length} painted cells.` : '.')); return; }
     if (kind === 'calib') { if (!json || json.type !== 'calibration') throw new Error('not a SailLens calibration file.'); A.calib = { ...SL.CAL0, ...json }; A.files.calib = file.name; recompute(); show('cal'); banner(`${file.name}: calibration ${SL.calibActive(A.calib) ? 'applied to the log' : 'loaded (all corrections are zero)'}.`); return; }
+    const parsed = kind === 'log' ? SL.parseLog(text) : kind === 'ev' ? SL.parseEvents(text) : SL.makePolar(SL.parsePolar(text), 'file');
     leaveDemo();
-    if (kind === 'log') { A.raw = SL.parseLog(text); A.files.log = file.name; A.cfg.tStart = A.cfg.tEnd = null; A.cur = 0; }
-    else if (kind === 'ev') { A.events = SL.parseEvents(text); A.events.xml = text; A.events.sails = SL.parseSailList(text); A.files.ev = file.name; A.evDirty = false; A.cfg.evOff = A.events.evOff; A.cfg.logOff = A.events.logOff; A.cfg.dispOff = A.events.evOff - A.events.logOff; A.cfg.tStart = A.cfg.tEnd = null; if (!A.events.events.length) banner('No events found in ' + file.name, true); }
-    else { A.polar = SL.makePolar(SL.parsePolar(text), 'file'); A.files.polar = file.name; }
+    if (kind === 'log') { A.raw = parsed; A.cfg.logOff = SL.logOffset(A.raw, A.cfg); A.cfg.dispOff = (A.cfg.evOff || 0) - A.cfg.logOff; A.files.log = file.name; A.cfg.tStart = A.cfg.tEnd = null; A.cur = 0; }
+    else if (kind === 'ev') { A.events = parsed; A.events.xml = text; A.events.sails = SL.parseSailList(text); A.files.ev = file.name; A.evDirty = false; A.cfg.evOff = A.events.evOff; A.cfg.logOff = SL.logOffset(A.raw, A.events); A.cfg.dispOff = A.events.evOff - A.cfg.logOff; A.cfg.tStart = A.cfg.tEnd = null; if (!A.events.events.length) banner('No events found in ' + file.name, true); }
+    else { A.polar = parsed; A.files.polar = file.name; }
     recompute();
   } catch (e) { banner(file.name + ': ' + e.message, true); console.error(e); }
   show(A.tab);
@@ -1243,17 +1359,27 @@ R.setup = () => {
         field('Boat name', h('input', { type: 'text', id: 'cfg-boat', value: cf.boat || (A.events && A.events.meta.boat) || '', onchange: e => { cf.boat = e.target.value; } })),
         num('magVar', 'Mag variation (° E)', 0.1, '0'), num('evOff', 'Event file UTC offset (h)', 0.5), num('logOff', 'Log file UTC offset (h)', 0.5), num('dispOff', 'Show times at UTC + (h)', 0.5),
         dt('tStart', 'Only process from', D ? D.sum.t0 : null), dt('tEnd', 'until', D ? D.sum.t1 : null),
-        num('phaseLen', 'Phase length (s)'), num('phaseGap', 'Gap between phases (s)'), num('sdTwa', 'Max TWA std dev in phase (°)', 0.5), num('sdBsp', 'Max BSP std dev (kn)', 0.1), num('polMin', 'Phase BSPpol% min'), num('polMax', 'Phase BSPpol% max'), num('minBsp', 'Min BSP (kn)', 0.5),
+        num('phaseLen', 'Phase length (s)'), num('phaseGap', 'Gap between phases (s)'), num('maxHold', 'Max held sample age (s)', 1), num('sdTwa', 'Max TWA std dev in phase (°)', 0.5), num('sdBsp', 'Max BSP std dev (kn)', 0.1), num('polMin', 'Phase BSPpol% min'), num('polMax', 'Phase BSPpol% max'), num('minBsp', 'Min BSP (kn)', 0.5),
         field('Racing only (start to finish)', h('input', { type: 'checkbox', id: 'cfg-racing', checked: cf.racingOnly ? '' : null, onchange: e => { cf.racingOnly = e.target.checked; } }))),
       D && D.logMagVar != null ? h('p', { class: 'muted' }, `Expedition logged a magnetic variation of ${f1(D.logMagVar)}°. Leave Mag variation at 0 if your HDG is already true; the Calibration tab checks heading against GPS either way.`) : null,
       bar(h('button', { class: 'primary', onclick: () => { recompute(); show('setup'); } }, 'Process'), h('button', { onclick: () => { cf.tStart = cf.tEnd = null; recompute(); show('setup'); } }, 'Window from event file')))));
+  if (A.raw && A.raw.diagnostics) {
+    const raw = A.raw, q = raw.diagnostics;
+    c.append(card('Import quality',
+      h('p', { class: 'muted' }, `${q.rows.toLocaleString()} source rows; ${q.invalidTimes} invalid timestamps; ${q.outOfOrder} out-of-order rows; ${q.invalidValues} non-numeric values. ${raw.timeBasis === 'utc' ? 'UTC timestamps: explicit offsets have been applied.' : 'Timezone-free timestamps: use the log UTC offset setting.'}`),
+      h('p', { class: 'muted' }, 'Analysis uses one-second bins. Multiple measurements in a bin are averaged; directions use circular averages. Values held from an earlier second are estimates. The original subsecond data is not retained: keep your source log.'),
+      table(['Channel', 'Measured seconds', 'Held seconds used', 'Missing / too old'], Object.entries(q.channels).map(([key, value]) => {
+        let held = 0; for (const age of raw.age[key]) if (age > 0 && age <= cf.maxHold) held++;
+        return [key, value.observed, held, raw.n - value.observed - held];
+      }), 'num')));
+  }
 };
 
 /* ---------------- Events ---------------- */
 const SAILTYPES = ['Mainsail', 'Jib', 'Staysail', 'Masthead Gennaker', 'Fractional Gennaker', 'Spinnaker', 'Code 0'];
 const EVTYPES = ['SailsUp', 'RaceStartGun', 'RaceMark', 'RaceFinish', 'DayStart', 'DayStop', 'ManualEntry', 'StartTesting', 'StopTesting', 'MiscEvent'];
 function evEnsure() { if (!A.events) A.events = { meta: { boat: A.cfg.boat || '' }, evOff: A.cfg.evOff || 0, logOff: A.cfg.logOff || 0, events: [], sails: [] }; if (!A.events.sails) A.events.sails = []; A.events.evOff = A.cfg.evOff || 0; A.events.logOff = A.cfg.logOff || 0; return A.events; }
-const idxTl = i => iT(i) - (A.cfg.logOff || 0) * 36e5 + (A.cfg.evOff || 0) * 36e5;
+const idxTl = i => iT(i) - SL.logOffset(A.raw, A.cfg) * 36e5 + (A.cfg.evOff || 0) * 36e5;
 const tlClock = tl => new Date(tl).toISOString().slice(11, 19);
 function evChanged() { A.events.events.sort((a, b) => a.tl - b.tl); A.evDirty = true; if (A.demo) A.demo = false; recompute(); }
 function addEvent(type, attr, comments, tl) {
@@ -1276,7 +1402,7 @@ R.events = () => {
   const parseClock = (s, ref) => { const mm = s.trim().match(/^(\d\d?):(\d\d)(?::(\d\d))?$/); if (!mm) return null; const d = new Date(ref); d.setUTCHours(+mm[1], +mm[2], +(mm[3] || 0), 0); return d.getTime(); };
   const add = () => { const tl = parseClock(tIn.value, idxTl(A.cur)); if (tl == null) { banner('Time must look like 13:45:00.', true); return; } const attr = st.type === 'SailsUp' ? st.sails.join(';') : ($('#ev-attr') ? $('#ev-attr').value : ''); addEvent(st.type, attr, cmt.value, tl); show('events'); };
   drawAttr();
-  const rows = ev.events.map((e, k) => { const i = D ? Math.round((e.tl - (A.cfg.evOff || 0) * 36e5 + (A.cfg.logOff || 0) * 36e5 - A.raw.t0) / 1000) : -1, inLog = D && i >= D.i0 && i < D.i1;
+  const rows = ev.events.map((e, k) => { const i = D ? Math.round((e.tl - (A.cfg.evOff || 0) * 36e5 + SL.logOffset(A.raw, A.cfg) * 36e5 - A.raw.t0) / 1000) : -1, inLog = D && i >= D.i0 && i < D.i1;
     return [h('input', { type: 'text', value: tlClock(e.tl), style: 'width:84px', 'aria-label': 'Time', onchange: x => { const t = parseClock(x.target.value, e.tl); if (t != null) { e.tl = t; evChanged(); show('events'); } } }),
       sel('ev-type-' + k, EVTYPES.includes(e.type) ? EVTYPES : EVTYPES.concat([e.type]), e.type, v => { e.type = v; evChanged(); show('events'); }),
       h('input', { type: 'text', value: e.attr, style: 'width:210px', 'aria-label': 'Attribute', onchange: x => { e.attr = x.target.value; evChanged(); show('events'); } }),
@@ -1447,7 +1573,7 @@ function calFindings(r, logMagVar, mv) {
 function blkCalModel(c, r, o) {
   o = o || {}; const { bsp, wind, awa } = r, cl = (v, a, b) => !fin(v) ? '' : Math.abs(v) <= a ? 'good' : Math.abs(v) <= b ? 'warn' : 'bad';
   const up = wind.err ? [] : wind.bins.filter(b => b.mode === 'Upwind'), wmax = wind.err || !wind.bins.length ? NaN : wind.bins.reduce((a, b) => Math.abs(b.e) > Math.abs(a.e) ? b : a).e;
-  c.append(h('div', { class: 'kpis' }, kpi('Calibration score', r.score, '/100', 'rough overall figure', r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad'),
+  c.append(h('div', { class: 'kpis' }, kpi('Calibration score', f1(r.score, 0), fin(r.score) ? '/100' : '', fin(r.score) ? 'rough overall figure' : 'insufficient data for a complete score', !fin(r.score) ? '' : r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad'),
     kpi('BSP factor', bsp.err ? '–' : bsp.k.toFixed(3), '', bsp.err ? 'not enough data' : `range ${bsp.kLo.toFixed(3)}–${bsp.kHi.toFixed(3)}`, bsp.err ? '' : cl((bsp.k - 1) * 100, 1, 2.5)),
     kpi('Heading vs GPS', bsp.err ? '–' : f1(bsp.delta), '°', bsp.err ? '' : `range ${f1(bsp.dLo)} to ${f1(bsp.dHi)}`, bsp.err ? '' : cl(bsp.delta, 1.5, 3)),
     kpi('Masthead offset', awa.err ? '–' : f1(awa.read), '°', awa.err ? 'not enough data' : '± ' + f1(awa.se) + ' · + is to starboard', awa.err ? '' : cl(awa.read, 0.7, 1.5)),
@@ -1560,48 +1686,66 @@ R.ml = () => {
 };
 
 /* ---------------- Season database ---------------- */
-const idb = { db: null, open() { return this.db || (this.db = new Promise((res, rej) => { const r = indexedDB.open('saillens', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); },
-  async get(k) { try { const d = await this.open(); return await new Promise(res => { const r = d.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }); } catch (e) { return null; } },
-  async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); return true; } catch (e) { return false; } } };
-async function writeLinked() { if (!A.fh) return false; try { const w = await A.fh.createWritable(); await w.write(JSON.stringify(A.S)); await w.close(); A.sSaved = 'Saved to ' + A.fh.name + ' at ' + new Date().toTimeString().slice(0, 8); return true; } catch (e) { A.sSaved = 'Could not write to ' + A.fh.name + ': ' + e.message; return false; } }
+const idb = SL.createStore(indexedDB);
+async function writeLinked(handle, text) {
+  if (!handle) return false;
+  const writer = await handle.createWritable();
+  try { await writer.write(text); await writer.close(); return true; }
+  catch (error) { try { await writer.abort(); } catch (_) {} throw error; }
+}
+const persistSeason = SL.serialWriter(async job => {
+  let browserOK = false, fileOK = false, failure = '';
+  try { browserOK = await idb.set('season', job.snapshot); } catch (error) { failure = 'Browser save failed: ' + error.message; }
+  if (job.handle) { try { fileOK = await writeLinked(job.handle, job.text); } catch (error) { failure += (failure ? ' ' : '') + 'File save failed: ' + error.message; } }
+  if (job.rev !== A.sRev) return;
+  A.sDirty = job.handle ? !fileOK : !browserOK;
+  A.sSaved = [browserOK ? 'Saved in this browser.' : '', fileOK ? 'Saved to ' + job.handle.name + '.' : '', failure, !job.handle && browserOK ? 'Export a season file for a separate backup.' : ''].filter(Boolean).join(' ');
+  const element = $('#s-saved'); if (element) element.textContent = A.sSaved;
+  if (failure) banner(A.sSaved, true);
+});
+function saveSeasonSnapshot() {
+  const text = JSON.stringify(A.S), rev = A.sRev = (A.sRev || 0) + 1;
+  A.sDirty = true; A.sSaved = 'Saving...';
+  return persistSeason({ rev, text, snapshot: JSON.parse(text), handle: A.fh });
+}
 function seasonChanged(save) {
   A.sOff = A.sOff || new Set(); A.SP = SL.seasonPool({ days: A.S.days.filter(d => !A.sOff.has(d.id)) }); A.SK = new Set(); A.S.days.forEach(d => { if (!A.sOff.has(d.id)) d.keys.forEach(k => A.SK.add(k)); }); if (A.SK.has('AWA')) A.SK.add('absAWA'); A.ml = {}; A.dayCal = new Map();
-  if (save !== false) { idb.set('season', A.S); if (A.fh) writeLinked().then(() => { const e = $('#s-saved'); if (e) e.textContent = A.sSaved; }); else A.sSaved = 'Kept in this browser. Save a season file to keep it on OneDrive and share it.'; }
+  if (save !== false) saveSeasonSnapshot();
 }
 function seasonImport(text, name) {
-  let days; if (/^﻿?\s*\{/.test(text.slice(0, 50))) { const o = JSON.parse(text); if (o.app !== 'SailLens' || !Array.isArray(o.days)) throw new Error('This JSON file is not a SailLens season file.'); days = o.days; if (o.name && (!A.S.days.length || A.S.name === 'Season')) A.S.name = o.name; } else days = SL.seasonFromPhaseCsv(text);
-  const r = SL.seasonMerge(A.S, days); seasonChanged(); banner(`${name}: ${r.add} day(s) added, ${r.rep} replaced. The season now has ${A.S.days.length} days and ${A.S.days.reduce((s, d) => s + d.phases.length, 0)} phases.`);
+  let days, importedName; if (/^\s*\{/.test(text.replace(/^\uFEFF/, ''))) { const o = JSON.parse(text.replace(/^\uFEFF/, '')); if (o.app !== 'SailLens' || !Array.isArray(o.days) || (o.version != null && ![1, 2].includes(o.version))) throw new Error('Unsupported SailLens season file.'); days = o.days; importedName = o.name; } else days = SL.seasonFromPhaseCsv(text);
+  const r = SL.seasonMerge(A.S, days); if (importedName && (!A.S.days.length || A.S.name === 'Season')) A.S.name = importedName; seasonChanged(); banner(`${name}: ${r.add} session(s) added, ${r.same} identical session(s) skipped. The season now has ${A.S.days.length} sessions and ${A.S.days.reduce((s, d) => s + d.phases.length, 0)} phases.${days.some(d => d.unknownModes) ? " Missing sailing modes are labelled Unknown and excluded from upwind/downwind models." : ""}`);
 }
 function addDay() {
   if (!A.D) return; if (A.demo) { banner('This is the example data. Load your own log first.', true); return; }
   const r = withScope('day', () => calAll(A.D.phases, A.D.magVar)), w = r.wind.err ? [] : r.wind.bins;
-  const rec = SL.dayRecord(A.D, meta(), { polar: A.files.polar || (A.D.polarSrc === 'log' ? 'Expedition targets' : A.D.polarSrc), cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
-  const res = SL.seasonMerge(A.S, [rec]); seasonChanged(); banner(`${rec.date} ${res.rep ? 'replaced in' : 'added to'} the season: ${rec.phases.length} phases, ${rec.mans.length} manoeuvres.`);
+  const rec = SL.dayRecord(A.D, meta(), { polar: A.files.polar || (A.D.polarSrc === 'log' ? 'Expedition targets' : A.D.polarSrc), files: A.files, calibration: A.calib, events: A.events, cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
+  try { const res = SL.seasonMerge(A.S, [rec]); seasonChanged(); banner(`${rec.date}: ${res.same ? 'identical session already saved' : 'session added'} (${rec.phases.length} phases, ${rec.mans.length} manoeuvres).`); } catch (error) { banner(error.message, true); }
 }
-async function openSeasonFile() { if (window.showOpenFilePicker) { try { const [fh] = await window.showOpenFilePicker({ types: [{ description: 'SailLens season or RaceReplay phase export', accept: { 'application/json': ['.json'], 'text/csv': ['.csv'] } }] }); const f = await fh.getFile(), t = await f.text(); if (/\.json$/i.test(f.name)) A.fh = fh; seasonImport(t, f.name); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else $('#s-file').click(); }
-async function saveSeasonFile() { const name = (A.S.name || 'season').replace(/[^\w-]+/g, '_') + '.saillens.json'; if (window.showSaveFilePicker) { try { A.fh = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'SailLens season', accept: { 'application/json': ['.json'] } }] }); await writeLinked(); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else dl(name, JSON.stringify(A.S)); }
-function dayCal(d) { A.dayCal = A.dayCal || new Map(); if (!A.dayCal.has(d.id)) A.dayCal.set(d.id, calAll(SL.seasonPool({ days: [d] }), 0)); return A.dayCal.get(d.id); }
+async function openSeasonFile() { if (window.showOpenFilePicker) { try { const [fh] = await window.showOpenFilePicker({ types: [{ description: 'SailLens season or RaceReplay phase export', accept: { 'application/json': ['.json'], 'text/csv': ['.csv'] } }] }); const f = await fh.getFile(), t = await f.text(); seasonImport(t, f.name); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else $('#s-file').click(); }
+async function saveSeasonFile() { const name = (A.S.name || 'season').replace(/[^\w-]+/g, '_') + '.saillens.json'; if (window.showSaveFilePicker) { try { A.fh = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'SailLens season', accept: { 'application/json': ['.json'] } }] }); await saveSeasonSnapshot(); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else dl(name, JSON.stringify(A.S)); }
+function dayCal(d) { A.dayCal = A.dayCal || new Map(); if (!A.dayCal.has(d.id)) A.dayCal.set(d.id, calAll(SL.seasonPool({ days: [d] }), d.magVar || 0)); return A.dayCal.get(d.id); }
 R.season = () => {
   const c = pane('season'), S = A.S, st = A.sst = A.sst || { binVar: 'BSPpol%', xmode: 'Upwind', clear: false }, on = S.days.filter(d => !A.sOff.has(d.id)), nPh = on.reduce((s, d) => s + d.phases.length, 0);
   const fin0 = h('input', { type: 'file', id: 's-file', hidden: '', accept: '.json,.csv', onchange: async e => { const f = e.target.files[0]; if (f) { try { seasonImport(await f.text(), f.name); } catch (x) { banner(x.message, true); } show('season'); } } });
-  c.append(h('div', { class: 'kpis' }, kpi('Days', on.length, '', S.days.length !== on.length ? S.days.length + ' in file' : (S.days.length ? S.days[0].date + ' → ' + S.days[S.days.length - 1].date : 'empty')), kpi('Phases', nPh.toLocaleString()), kpi('Upwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Upwind').map(p => p.v['VMG%']))), '%'), kpi('Downwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Downwind').map(p => p.v['VMG%']))), '%'), kpi('Manoeuvres', on.reduce((s, d) => s + (d.mans || []).length, 0))));
+  c.append(h('div', { class: 'kpis' }, kpi('Sessions', on.length, '', S.days.length !== on.length ? S.days.length + ' in file' : (S.days.length ? S.days[0].date + ' → ' + S.days[S.days.length - 1].date : 'empty')), kpi('Phases', nPh.toLocaleString()), kpi('Upwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Upwind').map(p => p.v['VMG%']))), '%'), kpi('Downwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Downwind').map(p => p.v['VMG%']))), '%'), kpi('Manoeuvres', on.reduce((s, d) => s + (d.mans || []).length, 0))));
   c.append(card('Season database',
     h('div', { class: 'bar' }, field('Season name', h('input', { type: 'text', id: 's-name', value: S.name, style: 'width:220px', onchange: e => { S.name = e.target.value; seasonChanged(); } })),
       h('button', { class: 'primary', disabled: !A.D || A.demo ? '' : null, onclick: () => { addDay(); show('season'); } }, A.D && !A.demo ? `Add ${dstr(A.D.sum.t0).slice(0, 10)} to the season` : 'Add current day'), h('button', { onclick: openSeasonFile }, 'Open season file or RaceReplay export…'), h('button', { onclick: saveSeasonFile }, A.fh ? 'Save to another file…' : 'Save season file…'), fin0,
       h('button', { class: 'danger', onclick: () => { if (!st.clear) { st.clear = true; show('season'); return; } st.clear = false; A.S = SL.newSeason(); A.fh = null; seasonChanged(); show('season'); } }, st.clear ? 'Click again to empty the season' : 'Empty season')),
     h('p', { class: 'muted', id: 's-saved' }, A.sSaved || ''),
-    h('p', { class: 'muted' }, 'Each day you add stores its phases (with sails, race legs and about 40 channels), its tacks and gybes and its calibration figures. The season is kept in this browser and, once you save or open a season file, written back to that file after every change. To bring in history from RaceReplay, export the T_Phase table from the Access database as a CSV text file and open it here.')));
+    h('p', { class: 'muted' }, 'Each session you add stores its processing settings and phases (with sails, race legs and about 40 channels), its tacks and gybes and its calibration figures. The season is kept in this browser and, once you save a season file, written back to that file after every change. Raw log files are not stored here: keep the originals to reprocess a session. Imports never replace an existing session with different data. To bring in history from RaceReplay, export the T_Phase table from the Access database as a CSV text file and open it here.')));
   if (!S.days.length) { c.append(card(null, h('p', { class: 'muted' }, 'The season is empty. Process a day and press “Add current day”, or open a season file.'))); return; }
   // days
-  c.append(card('Days', table(['Use', 'Date', 'Description', 'Location', 'Phases', 'TWS', 'Sails', 'Polar', 'Source', ''], S.days.map(d => [h('input', { type: 'checkbox', 'aria-label': 'Use ' + d.date, checked: A.sOff.has(d.id) ? null : '', onchange: e => { e.target.checked ? A.sOff.delete(d.id) : A.sOff.add(d.id); seasonChanged(false); show('season'); } }), { t: d.date, c: 'b' }, d.desc || '', d.location || '', d.phases.length, d.sum && fin(d.sum.tws) ? `${f1(d.sum.twsMin, 0)}–${f1(d.sum.twsMax, 0)} kn` : '', (d.sum && d.sum.sails || []).join(', '), d.polar || '', d.src || 'SailLens', h('button', { class: 'mini danger', onclick: () => { S.days.splice(S.days.indexOf(d), 1); seasonChanged(); show('season'); } }, 'Remove')]), 'num')));
+  c.append(card('Sessions', table(['Use', 'Date', 'Boat', 'Start', 'Description', 'Location', 'Phases', 'TWS', 'Sails', 'Polar', 'Source', ''], S.days.map(d => [h('input', { type: 'checkbox', 'aria-label': 'Use ' + d.date, checked: A.sOff.has(d.id) ? null : '', onchange: e => { e.target.checked ? A.sOff.delete(d.id) : A.sOff.add(d.id); seasonChanged(false); show('season'); } }), { t: d.date, c: 'b' }, d.boat || 'Boat', Number.isFinite(d.start) ? new Date(d.start + (d.off || 0) * 36e5).toISOString().slice(11, 19) : '-', d.desc || '', d.location || '', d.phases.length, d.sum && fin(d.sum.tws) ? `${f1(d.sum.twsMin, 0)}–${f1(d.sum.twsMax, 0)} kn` : '', (d.sum && d.sum.sails || []).join(', '), d.polar || '', d.src || 'SailLens', h('button', { class: 'mini danger', onclick: () => { S.days.splice(S.days.indexOf(d), 1); seasonChanged(); show('season'); } }, 'Remove')]), 'num')));
   if (!on.length) return;
   withScope('season', () => {
     // trend
     const s2 = card('Day-by-day trend'), cv = h('canvas'); c.append(s2); s2.append(legend([[css('--s1'), 'Upwind VMG%'], [css('--s2'), 'Downwind VMG%']]), h('div', {}, cv));
-    const per = on.map(d => { const ps = A.SP.filter(p => p.day === d.date), m = (md, k) => SL.mean(ps.filter(p => p.mode === md).map(p => p.v[k])), tk = (d.mans || []).filter(x => x.type === 'Tack' && fin(x.loss)), gy = (d.mans || []).filter(x => x.type === 'Gybe' && fin(x.loss)); return { d, up: m('Upwind', 'VMG%'), dn: m('Downwind', 'VMG%'), nUp: ps.filter(p => p.mode === 'Upwind').length, nDn: ps.filter(p => p.mode === 'Downwind').length, tack: SL.median(tk.map(x => x.loss)), gybe: SL.median(gy.map(x => x.loss)), nT: tk.length, nG: gy.length }; });
+    const per = on.map(d => { const ps = A.SP.filter(p => p.sessionId === d.id), m = (md, k) => SL.mean(ps.filter(p => p.mode === md).map(p => p.v[k])), tk = (d.mans || []).filter(x => x.type === 'Tack' && fin(x.loss)), gy = (d.mans || []).filter(x => x.type === 'Gybe' && fin(x.loss)); return { d, up: m('Upwind', 'VMG%'), dn: m('Downwind', 'VMG%'), nUp: ps.filter(p => p.mode === 'Upwind').length, nDn: ps.filter(p => p.mode === 'Downwind').length, tack: SL.median(tk.map(x => x.loss)), gybe: SL.median(gy.map(x => x.loss)), nT: tk.length, nG: gy.length }; });
     const vals = per.flatMap(x => [x.up, x.dn]).filter(fin), p = plot(cv, { xr: [-0.5, per.length - 0.5], yr: [Math.min(92, ...vals) - 1, Math.max(102, ...vals) + 1], h: 250, yl: 'mean VMG%', ysuf: '%', xfmt: v => Number.isInteger(v) && per[v] ? per[v].d.date.slice(5) : '' }); p.zero(100);
     for (const [k, col, nk] of [['up', css('--s1'), 'nUp'], ['dn', css('--s2'), 'nDn']]) { p.line(per.map((x, i) => [i, x[k]]), col, 2); per.forEach((x, i) => p.dot(i, x[k], col, `<b>${x.d.date}</b> ${x.d.desc || ''}<br>${k === 'up' ? 'Upwind' : 'Downwind'} VMG% ${f1(x[k])} on ${x[nk]} phases`, null, false, 5)); }
-    s2.append(h('h4', {}, 'Calibration and manoeuvres per day'), table(['Day', 'Cal score', 'BSP factor', 'Heading °', 'Masthead °', 'TWA up °', 'TWA down °', 'TWS dn %', 'Tack loss m', 'Gybe loss m'], per.map(x => { const r = dayCal(x.d), wb = m => r.wind.err ? NaN : SL.mean(r.wind.bins.filter(b => b.mode === m).map(b => b.e)), sc = scale('ΔTWD', [3]); return [{ t: x.d.date, c: 'b' }, { t: r.score, c: 'b verdict ' + (r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad') }, r.bsp.err ? '–' : r.bsp.k.toFixed(3), r.bsp.err ? '–' : { t: f1(r.bsp.delta), s: heat(r.bsp.delta, sc) }, r.awa.err ? '–' : { t: f1(r.awa.read), s: heat(r.awa.read * 2, sc) }, { t: f1(wb('Upwind')), s: heat(wb('Upwind'), sc) }, { t: f1(wb('Downwind')), s: heat(wb('Downwind'), sc) }, r.wind.err || !r.wind.twsDn ? '–' : f1(r.wind.twsDn.pct), x.nT ? f1(x.tack, 0) + ' (' + x.nT + ')' : '–', x.nG ? f1(x.gybe, 0) + ' (' + x.nG + ')' : '–']; }), 'num'),
+    s2.append(h('h4', {}, 'Calibration and manoeuvres per day'), table(['Day', 'Cal score', 'BSP factor', 'Heading °', 'Masthead °', 'TWA up °', 'TWA down °', 'TWS dn %', 'Tack loss m', 'Gybe loss m'], per.map(x => { const r = dayCal(x.d), wb = m => r.wind.err ? NaN : SL.mean(r.wind.bins.filter(b => b.mode === m).map(b => b.e)), sc = scale('ΔTWD', [3]); return [{ t: x.d.date, c: 'b' }, { t: f1(r.score, 0), c: 'b verdict ' + (!fin(r.score) ? '' : r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad') }, r.bsp.err ? '–' : r.bsp.k.toFixed(3), r.bsp.err ? '–' : { t: f1(r.bsp.delta), s: heat(r.bsp.delta, sc) }, r.awa.err ? '–' : { t: f1(r.awa.read), s: heat(r.awa.read * 2, sc) }, { t: f1(wb('Upwind')), s: heat(wb('Upwind'), sc) }, { t: f1(wb('Downwind')), s: heat(wb('Downwind'), sc) }, r.wind.err || !r.wind.twsDn ? '–' : f1(r.wind.twsDn.pct), x.nT ? f1(x.tack, 0) + ' (' + x.nT + ')' : '–', x.nG ? f1(x.gybe, 0) + ' (' + x.nG + ')' : '–']; }), 'num'),
       h('p', { class: 'muted' }, 'A calibration figure that sits at the same value day after day is an instrument offset; one that moves around is wind shear, current or noise. For the pooled season estimate, open Calibration in Season mode.'));
     // crossover
     const s3 = card(['Sail crossover ', mlTag()], bar(field('Mode', sel('x-mode', ['Upwind', 'Downwind', 'Reaching'], st.xmode, v => { st.xmode = v; R.season(); }))));
@@ -1652,11 +1796,11 @@ async function boot() {
   window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drop'); });
   window.addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('drop'); });
   window.addEventListener('drop', async e => { e.preventDefault(); document.body.classList.remove('drop'); for (const f of e.dataTransfer.files) await loadFile(f); });
-  window.addEventListener('beforeunload', e => { if (A.evDirty) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (A.evDirty || A.sDirty) { e.preventDefault(); e.returnValue = ''; } });
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (A.tab !== 'setup' && A.tab !== 'report' && A.tab !== 'events') show(A.tab); }, 200); });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => show(A.tab));
   A.chart = store.get('saillens-chart'); if (!A.chart || A.chart.type !== 'sailchart') A.chart = SL.newChart(); A.chart.shapes = A.chart.shapes || []; A.chart.cells = A.chart.cells || {};
-  A.S = SL.newSeason(); A.sOff = new Set(); const saved = await idb.get('season'); if (saved && saved.app === 'SailLens' && Array.isArray(saved.days)) A.S = saved; seasonChanged(false); if (A.S.days.length) A.sSaved = 'Loaded from this browser.';
+  A.S = SL.newSeason(); A.sOff = new Set(); try { const saved = await idb.get('season'); if (saved) { if (saved.app !== 'SailLens' || !Array.isArray(saved.days) || (saved.version != null && ![1, 2].includes(saved.version))) throw new Error('Unsupported season format'); SL.seasonMerge(A.S, saved.days); A.S.name = saved.name || 'Season'; A.sSaved = 'Loaded from this browser.'; } } catch (error) { A.sSaved = 'Could not restore browser data: ' + error.message; } seasonChanged(false);
   loadDemo(); show('home');
 }
 document.addEventListener('DOMContentLoaded', boot);
@@ -1785,7 +1929,7 @@ function headlines() {
   for (const ty of ['Tack', 'Gybe']) { const g = D.mans.filter(m => m.type === ty && fin(m.loss)); if (g.length >= 3) add('', `${ty === 'Tack' ? 'Tacks' : 'Gybes'} cost a median ${f1(SL.median(g.map(m => m.loss)), 0)} m (${g.length}); the best ${f1(Math.min(...g.map(m => m.loss)), 0)} m, the worst ${f1(Math.max(...g.map(m => m.loss)), 0)} m.`, 'man', 'Manoeuvres'); }
   for (const s of SL.starts(D)) add(s.pct >= 90 ? 'good' : 'warn', `Start ${s.race ? 'R' + s.race : ''}: ${f1(s.pct, 0)}% of target speed at the gun` + (fin(s.t95) ? (s.t95 > 3 ? `, up to speed ${s.t95} s later.` : ', already at speed.') : ', and not up to 95% within three minutes.'), 'summary', 'Summary');
   const r = withScope('day', () => calAll(D.phases, D.magVar)), fnd = calFindings(r, D.logMagVar, D.magVar).filter(f => f[0] === 'warn' || f[0] === 'bad');
-  if (fnd.length) fnd.slice(0, 2).forEach(f => add(f[0], 'Calibration: ' + f[1], 'cal', 'Calibration')); else add('good', `Calibration looks consistent (score ${r.score}/100).`, 'cal', 'Calibration');
+  if (fnd.length) fnd.slice(0, 2).forEach(f => add(f[0], 'Calibration: ' + f[1], 'cal', 'Calibration')); else if (fin(r.score)) add('good', `Calibration looks consistent (score ${r.score}/100).`, 'cal', 'Calibration'); else add('muted', 'Insufficient data for a complete calibration score.', 'cal', 'Calibration');
   if (!SL.chartEmpty(A.chart)) { const st = SL.chartStats(A.chart, D.phases.filter(p => SL.sailTokens(p.sails).length)), tot = st.on + st.off; if (tot >= 10) add(st.on / tot > 0.8 ? 'good' : '', `${f1(st.on / tot * 100, 0)}% of phases were sailed with the sails the crossover chart allows` + (st.rows[0] ? `; most often off chart: ${st.rows[0].used} at ${st.rows[0].tws} kn / ${st.rows[0].twa}° where the chart says ${st.rows[0].chart}.` : '.'), 'sails', 'Sail chart'); }
   const w = SL.windStats(D); if (w) add('', `Wind ${f1(w.first, 0)}° to ${f1(w.last, 0)}°` + (Math.abs(w.slope) >= 2 ? ` (${w.slope > 0 ? 'veering' : 'backing'} ${f1(Math.abs(w.slope), 0)}°/h)` : ' (no steady trend)') + `, swinging about ±${f1(w.amp, 0)}°` + (fin(w.period) ? ` roughly every ${f1(w.period / 60, 0)} min` : '') + `; median ${f1(w.twsMed)} kn with gusts ${f1((w.gust - 1) * 100, 0)}% above that.`, 'wind', 'Wind');
   const m = withScope('day', () => mlModel('Upwind')); if (!m.err && m.cvR2 > 0.08) { const ins = mlInsights(m); if (ins[0]) add('', 'Model: ' + ins[0], 'ml', 'ML insights'); }
@@ -1813,9 +1957,9 @@ R.home = () => {
   const m = meta(), H = headlines(), tl = H.tl, tk = D.mans.filter(x => x.type === 'Tack' && fin(x.loss)), cls = v => !fin(v) ? '' : v >= 98 ? 'good' : v >= 94 ? '' : 'warn';
   const chartSt = SL.chartEmpty(A.chart) ? null : SL.chartStats(A.chart, D.phases.filter(p => SL.sailTokens(p.sails).length));
   c.append(h('section', { class: 'card hero' }, h('div', {}, h('h3', { class: 'big' }, [m.boat, dstr(D.sum.t0).slice(0, 10)].join(' · ')), h('p', { class: 'muted' }, [m.desc, m.location, m.daytype, `${f1(D.sum.TWS.avg)} kn from ${D.sum.TWD ? f1(D.sum.TWD.avg, 0) + '°' : '–'}`, dur(D.sum.sailing) + ' sailing'].filter(Boolean).join(' · ') + (A.demo ? ' · example data' : ''))),
-    bar(h('button', { class: 'primary', disabled: A.demo ? '' : null, onclick: () => { addDay(); show('home'); } }, hasS && A.S.days.some(d => d.date === dstr(D.sum.t0).slice(0, 10)) ? 'Update this day in the season' : 'Add this day to the season'), h('button', { onclick: () => show('report') }, 'Build the report'))));
+    bar(h('button', { class: 'primary', disabled: A.demo ? '' : null, onclick: () => { addDay(); show('home'); } }, 'Add this session to the season'), h('button', { onclick: () => show('report') }, 'Build the report'))));
   c.append(h('div', { class: 'kpis' }, kpi('Given away vs target', mmss(tl.total), '', tl.sailed ? `${f1(tl.total / tl.sailed * 100)}% of ${dur(tl.sailed)}` : '', tl.sailed && tl.total / tl.sailed > 0.04 ? 'warn' : ''), kpi('Upwind VMG%', f1(H.up.m), '%', H.up.n + ' phases', cls(H.up.m)), kpi('Downwind VMG%', f1(H.dn.m), '%', H.dn.n + ' phases', cls(H.dn.m)),
-    kpi('Tack loss', tk.length ? f1(SL.median(tk.map(x => x.loss)), 0) : '–', tk.length ? 'm' : '', tk.length ? 'median of ' + tk.length : 'no tacks measured'), kpi('Calibration', H.r.score, '/100', '', H.r.score >= 85 ? 'good' : H.r.score >= 65 ? 'warn' : 'bad'),
+    kpi('Tack loss', tk.length ? f1(SL.median(tk.map(x => x.loss)), 0) : '–', tk.length ? 'm' : '', tk.length ? 'median of ' + tk.length : 'no tacks measured'), kpi('Calibration', f1(H.r.score, 0), fin(H.r.score) ? '/100' : '', fin(H.r.score) ? '' : 'insufficient data', !fin(H.r.score) ? '' : H.r.score >= 85 ? 'good' : H.r.score >= 65 ? 'warn' : 'bad'),
     chartSt && chartSt.on + chartSt.off ? kpi('On the sail chart', f1(chartSt.on / (chartSt.on + chartSt.off) * 100, 0), '%', (chartSt.on + chartSt.off) + ' phases') : kpi('Phases', D.phases.length, '', D.cfg.phaseLen + ' s each')));
   const mapCv = h('canvas'), tlBox = h('div');
   c.append(h('div', { class: 'homegrid' },
