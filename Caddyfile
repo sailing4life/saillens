@@ -1,0 +1,8 @@
+:{$PORT:8080} {
+	root * /srv
+	encode gzip
+	header Cache-Control "no-cache"
+	header X-Content-Type-Options "nosniff"
+	header Referrer-Policy "no-referrer"
+	file_server
+}

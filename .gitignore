@@ -1,0 +1,7 @@
+# sailing data never belongs in the repository
+*.saillens.json
+*.calibration.json
+*.sailchart.json
+*.ev.xml
+*.csv
+*.accdb
