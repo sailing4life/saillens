@@ -2,6 +2,8 @@
 /* SailLens core, part 2: calibration models, event writing, season database. No DOM access. */
 (() => {
 const { D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, MODES } = SL;
+const mixedBoats = ps => new Set(ps.map(p => p.boat || 'Boat')).size > 1;
+const boatError = () => ({ err: 'Select sessions from one boat before deriving calibration.' });
 
 /* dense linear solve (Gaussian elimination, partial pivoting); returns null if singular */
 function solve(A, b) {
@@ -15,10 +17,11 @@ function rng(seed) { let s = seed; return () => (s = (s * 16807) % 2147483647) /
    Model per phase: SOG vector = k * R(delta) * (BSP along water heading) + current(window).
    Current is free per 15-minute window, so only changes in the boat's own vector identify k and delta. */
 function calBsp(D, phases) {
+  if (mixedBoats(phases || D.phases)) return boatError();
   const ps = (phases || D.phases).filter(p => fin(p.v.SOG) && fin(p.v.COG) && fin(p.v.HDG) && p.v.BSP > 2);
   if (ps.length < 12) return { err: 'Needs at least 12 phases with BSP, HDG, SOG and COG.' };
   const useCse = ps.every(p => fin(p.v.Course)), mv = D.magVar || 0;
-  const rows = ps.map(p => { const th = ((useCse ? p.v.Course : p.v.HDG) + mv) * D2R, cg = p.v.COG * D2R, b = p.v.BSP; return { p, w: Math.floor(p.t / 9e5) + (p.day ? '|' + p.day : ''), W: [b * Math.sin(th), b * Math.cos(th)], Wp: [b * Math.cos(th), -b * Math.sin(th)], S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], th }; });
+  const rows = ps.map(p => { const th = ((useCse ? p.v.Course : p.v.HDG) + (p.magVar ?? mv)) * D2R, cg = p.v.COG * D2R, b = p.v.BSP; return { p, w: Math.floor(p.t / 9e5) + (p.sessionId || p.day ? '|' + (p.sessionId || p.day) : ''), W: [b * Math.sin(th), b * Math.cos(th)], Wp: [b * Math.cos(th), -b * Math.sin(th)], S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], th }; });
   const wins = new Map(); for (const r of rows) { if (!wins.has(r.w)) wins.set(r.w, []); wins.get(r.w).push(r); }
   const good = [...wins.values()].filter(g => { if (g.length < 4) return false; let sx = 0, sy = 0; for (const r of g) { sx += Math.sin(r.th); sy += Math.cos(r.th); } return Math.hypot(sx, sy) / g.length < 0.92; }); // needs a spread of headings
   if (good.length < 2) return { err: 'Needs at least two 15-minute windows that contain both tacks (or a clear change of heading).' };
@@ -42,11 +45,12 @@ function calBsp(D, phases) {
    a BSP factor (changes the length of the boat's vector), a heading offset (turns it the same way on both tacks) and a leeway
    gain (turns it opposite ways). Least squares over all pairs, bootstrap over pairs for the ranges. */
 function calCurrent(phases, mv) {
-  const ps = phases.filter(p => fin(p.v.SOG) && fin(p.v.COG) && fin(p.v.HDG) && p.v.BSP > 2).slice().sort((a, b) => (a.day || '') < (b.day || '') ? -1 : (a.day || '') > (b.day || '') ? 1 : a.t - b.t);
+  if (mixedBoats(phases)) return boatError();
+  const ps = phases.filter(p => fin(p.v.SOG) && fin(p.v.COG) && fin(p.v.HDG) && p.v.BSP > 2).slice().sort((a, b) => (a.sessionId || a.day || '') < (b.sessionId || b.day || '') ? -1 : (a.sessionId || a.day || '') > (b.sessionId || b.day || '') ? 1 : a.t - b.t);
   const hasLee = ps.length > 0 && ps.every(p => fin(p.v.Leeway)), fam = p => p.mode === 'Upwind' ? 0 : p.mode === 'Downwind' ? 2 : 1, pairs = [];
-  const vec = p => { const th = (p.v.HDG + (mv || 0)) * D2R, cg = p.v.COG * D2R, b = p.v.BSP, le = hasLee ? p.v.Leeway * D2R : 0; return { S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], W: [b * Math.sin(th), b * Math.cos(th)], Q: [b * Math.cos(th), -b * Math.sin(th)], le }; };
-  for (let i = 0; i + 1 < ps.length; i++) { const a = ps[i], b = ps[i + 1]; if (a.tack === b.tack || fam(a) !== fam(b) || fam(a) === 1 || (a.day || '') !== (b.day || '') || b.t - a.t > 300000) continue;
-    const bef = [], aft = []; for (let j = i; j >= 0 && bef.length < 3 && ps[j].tack === a.tack && fam(ps[j]) === fam(a) && a.t - ps[j].t < 200000 && (ps[j].day || '') === (a.day || ''); j--) bef.push(ps[j]); for (let j = i + 1; j < ps.length && aft.length < 3 && ps[j].tack === b.tack && fam(ps[j]) === fam(b) && ps[j].t - b.t < 200000 && (ps[j].day || '') === (b.day || ''); j++) aft.push(ps[j]);
+  const vec = p => { const th = (p.v.HDG + (p.magVar ?? mv ?? 0)) * D2R, cg = p.v.COG * D2R, b = p.v.BSP, le = hasLee ? p.v.Leeway * D2R : 0; return { S: [p.v.SOG * Math.sin(cg), p.v.SOG * Math.cos(cg)], W: [b * Math.sin(th), b * Math.cos(th)], Q: [b * Math.cos(th), -b * Math.sin(th)], le }; };
+  for (let i = 0; i + 1 < ps.length; i++) { const a = ps[i], b = ps[i + 1]; if (a.tack === b.tack || fam(a) !== fam(b) || fam(a) === 1 || (a.sessionId || a.day || '') !== (b.sessionId || b.day || '') || b.t - a.t > 300000) continue;
+    const bef = [], aft = []; for (let j = i; j >= 0 && bef.length < 3 && ps[j].tack === a.tack && fam(ps[j]) === fam(a) && a.t - ps[j].t < 200000 && (ps[j].sessionId || ps[j].day || '') === (a.sessionId || a.day || ''); j--) bef.push(ps[j]); for (let j = i + 1; j < ps.length && aft.length < 3 && ps[j].tack === b.tack && fam(ps[j]) === fam(b) && ps[j].t - b.t < 200000 && (ps[j].sessionId || ps[j].day || '') === (b.sessionId || b.day || ''); j++) aft.push(ps[j]);
     const avg = g => { const v = g.map(vec), m = k => [mean(v.map(x => x[k][0])), mean(v.map(x => x[k][1]))]; return { S: m('S'), W: m('W'), Q: m('Q'), L: [mean(v.map(x => x.le * x.Q[0])), mean(v.map(x => x.le * x.Q[1]))] }; };
     pairs.push({ p: a, q: b, type: fam(a) === 0 ? 'Tack' : 'Gybe', tws: mean(bef.concat(aft).map(x => x.v.TWS)), A: avg(bef), B: avg(aft), n: bef.length + aft.length }); }
   if (pairs.length < 3) return { err: 'Needs at least 3 tacks or gybes with steady phases on both sides, and BSP, HDG, SOG and COG.' };
@@ -98,7 +102,8 @@ function calWindDay(ps) {
 }
 /* phases may span several days: fit each day on its own wind history, then pool the per-band results by inverse variance */
 function calWind(phases) {
-  const days = new Map(); for (const p of phases) { const k = p.day || 'day'; if (!days.has(k)) days.set(k, []); days.get(k).push(p); }
+  if (mixedBoats(phases)) return boatError();
+  const days = new Map(); for (const p of phases) { const k = p.sessionId || p.day || 'day'; if (!days.has(k)) days.set(k, []); days.get(k).push(p); }
   const fits = [...days.values()].map(calWindDay).filter(Boolean); if (!fits.length) return { err: 'Needs upwind or downwind phases on both tacks (at least 3 per tack in a wind band).' };
   const pool = xs => { xs = xs.filter(x => x && fin(x.v) && x.se > 0); if (!xs.length) return null; const w = xs.map(x => 1 / (x.se * x.se + 0.04)), sw = w.reduce((a, b) => a + b, 0); return { v: xs.reduce((s, x, i) => s + w[i] * x.v, 0) / sw, se: Math.sqrt(1 / sw), k: xs.length }; };
   const bins = []; for (const m of ['Upwind', 'Downwind']) BANDS.forEach((b, bi) => { const xs = fits.map(f => f.bins.find(q => q.mode === m && q.bi === bi)).filter(Boolean); if (!xs.length) return; const pv = pool(xs.map(x => ({ v: x.e, se: x.se }))); if (pv) bins.push({ mode: m, band: b[2], n: xs.reduce((s, x) => s + x.n, 0), days: xs.length, e: pv.v, se: pv.se, tws: mean(xs.map(x => x.tws)) }); });
@@ -107,6 +112,7 @@ function calWind(phases) {
 }
 /* masthead unit offset from the port/starboard asymmetry of |AWA| upwind, controlling for wind and how hard the boat is being sailed */
 function calAwa(phases) {
+  if (mixedBoats(phases)) return boatError();
   const ps = phases.filter(p => p.mode === 'Upwind' && fin(p.v.AWA) && fin(p.v.AWS) && fin(p.v.BSP)); const nP = ps.filter(p => p.tack === 'Port').length, nS = ps.length - nP;
   if (nP < 5 || nS < 5) return { err: 'Needs at least 5 upwind phases on each tack with AWA and AWS.' };
   const f = [p => 1, p => p.tack === 'Stbd' ? 1 : -1, p => p.v.AWS - 14, p => p.v.BSP - 7, p => (p.v['Heel_norm'] != null && fin(p.v['Heel_norm']) ? Math.abs(p.v['Heel_norm']) : 15) - 15], k = f.length;
@@ -121,6 +127,7 @@ function calAwa(phases) {
   return { read: be[1], se: inv ? Math.sqrt(Math.max(0, s2 * inv[1])) : NaN, raw, nP, nS, twsAsym, sens, fromTws: Math.abs(sens) > 0.02 ? twsAsym / sens : NaN };
 }
 function calScore(bsp, wind, awa) { // 0..100, a rough single number to trend over a season
+  if (!bsp || bsp.err || !fin(bsp.k) || !fin(bsp.delta) || !wind || wind.err || !wind.bins || !wind.bins.length || wind.bins.some(b => !fin(b.e)) || !wind.twsDn || !fin(wind.twsDn.pct) || !awa || awa.err || !fin(awa.read)) return null;
   let s = 100; const pen = (v, tol, w) => { if (fin(v)) s -= Math.min(w, Math.max(0, Math.abs(v) - tol) / tol * w / 2); };
   if (bsp && !bsp.err) { pen((bsp.k - 1) * 100, 1, 25); pen(bsp.delta, 1.5, 20); }
   if (wind && !wind.err) { for (const b of wind.bins) pen(b.e, 1.5, 30 / wind.bins.length); if (wind.twsDn) pen(wind.twsDn.pct, 3, 10); }
@@ -157,30 +164,32 @@ function suggestMarks(D) {
 const SVARS = ['TWS', 'TWA', 'absTWA', 'TWD', 'BSP', 'SOG', 'COG', 'HDG', 'Course', 'AWA', 'absAWA', 'AWS', 'Heel', 'Heel_norm', 'abs_heel', 'Rudder', 'Rudder_norm', 'abs_rudder', 'Leeway', 'Trim', 'Forestay', 'Polar_BSP', 'Target_TWA', 'Target_BSP', 'BSPpol%', 'BSP_trg%', 'VMG', 'VMG%', 'ΔBSP', 'ΔTWA', 'ΔVMG', 'ΔVMG%', 'BSP-SOG', 'HDG-COG', 'Cur_E', 'Cur_N', 'CUR_RATE', 'CUR_DIR', 'Vang', 'Trav', 'Main', 'BackStay', 'Cunningham', 'Outhaul', 'Rake', 'MastButt', 'Downhaul', 'Boom', 'Twist', 'Heave', 'WvSigHt', 'Load S', 'Load P', 'RunnerS', 'RunnerP', 'JibH', 'MainH', 'Depth', 'SeaTemp'];
 const r3 = v => fin(v) ? Math.round(v * 1000) / 1000 : null;
 function dayRecord(D, meta, extra) {
-  const keys = SVARS.concat(Object.keys(D.L.manual)).filter(k => D.ch[k]), off = D.cfg.dispOff || 0, d = new Date(D.sum.t0 + off * 36e5), date = d.toISOString().slice(0, 10);
-  return { id: (meta.boat || 'Boat') + '|' + date, boat: meta.boat || 'Boat', date, desc: meta.desc || '', location: meta.location || '', dayType: meta.daytype || '', polar: extra.polar || '', off, added: Date.now(), magVar: D.magVar,
+  const keys = [...new Set(SVARS.concat(Object.keys(D.L.manual)))].filter(k => D.ch[k]), clockOffset = SL.logOffset(D.raw, D.cfg), shift = clockOffset * 36e5, off = (D.cfg.dispOff || 0) + clockOffset, start = D.sum.t0 - shift, end = D.sum.t1 - shift, date = new Date(start + off * 36e5).toISOString().slice(0, 10);
+  return { id: (meta.boat || 'Boat') + '|' + date + '|' + start + '|' + end, boat: meta.boat || 'Boat', date, start, end, timeBasis: 'utc', desc: meta.desc || '', location: meta.location || '', dayType: meta.daytype || '', polar: extra.polar || '', off, added: Date.now(), magVar: D.magVar,
+    recipe: JSON.parse(JSON.stringify({ version: 2, cfg: D.cfg, calibration: extra.calibration || null, polarRows: D.P ? D.P.rows : null, files: extra.files || {}, events: extra.events || null, importQuality: D.raw.diagnostics || null, timeBasis: D.raw.timeBasis || 'floating' })),
     sum: { tws: r3(D.sum.TWS.avg), twsMin: r3(D.sum.TWS.min), twsMax: r3(D.sum.TWS.max), twd: D.sum.TWD ? r3(D.sum.TWD.avg) : null, tacks: D.sum.tacks, gybes: D.sum.gybes, sailing: D.sum.sailing, racing: D.sum.racing, dist: r3(D.sum.dist), sails: D.sum.sails }, cal: extra.cal || null,
-    keys, phases: D.phases.map(p => ({ t: p.t, d: p.i1 - p.i, m: MODES.indexOf(p.mode), k: p.tack === 'Stbd' ? 1 : 0, s: p.sails, r: p.race, l: p.leg, x: p.testing ? 1 : 0, v: keys.map(k => r3(p.v[k])) })),
-    mans: D.mans.map(m => ({ t: D.raw.t0 + m.i * 1000, type: m.type, to: m.to, tws: r3(m.tws), loss: r3(m.loss), rate: r3(m.rate), angle: r3(m.angle), bspIn: r3(m.bspIn), bspMin: r3(m.bspMin), sail: m.sail >= 0 ? D.L.sailNames[m.sail] : '-' })) };
+    keys, phases: D.phases.map(p => ({ t: p.t - shift, d: p.i1 - p.i, m: MODES.indexOf(p.mode), k: p.tack === 'Stbd' ? 1 : 0, s: p.sails, r: p.race, l: p.leg, x: p.testing ? 1 : 0, v: keys.map(k => r3(p.v[k])) })),
+    mans: D.mans.map(m => ({ t: D.raw.t0 + m.i * 1000 - shift, type: m.type, to: m.to, tws: r3(m.tws), loss: r3(m.loss), rate: r3(m.rate), angle: r3(m.angle), bspIn: r3(m.bspIn), bspMin: r3(m.bspMin), sail: m.sail >= 0 ? D.L.sailNames[m.sail] : '-' })) };
 }
 function seasonPool(S) { // expand to the same phase objects the day analysis uses
-  const out = []; for (const d of S.days) { const lab = d.date + (d.desc ? ' ' + d.desc : ''); for (const q of d.phases) { const v = {}; d.keys.forEach((k, i) => { v[k] = q.v[i] == null ? NaN : q.v[i]; }); if (fin(v.AWA) && !fin(v.absAWA)) v.absAWA = Math.abs(v.AWA); out.push({ t: q.t, i: null, i1: null, dur: q.d, tack: q.k ? 'Stbd' : 'Port', mode: MODES[q.m], sails: q.s, race: q.r, leg: q.l, raceLeg: q.r ? 'R' + q.r + 'L' + q.l : '-', testing: q.x, v, day: d.date, dayLabel: lab, off: d.off, magVar: d.magVar }); } }
+  const out = []; for (const d of S.days) { const lab = d.date + ' ' + (d.boat || 'Boat') + (d.desc ? ' ' + d.desc : ''); for (const q of d.phases) { const v = {}; d.keys.forEach((k, i) => { v[k] = q.v[i] == null ? NaN : q.v[i]; }); if (fin(v.AWA) && !fin(v.absAWA)) v.absAWA = Math.abs(v.AWA); out.push({ t: q.t, i: null, i1: null, dur: q.d, tack: q.k ? 'Stbd' : 'Port', mode: MODES[q.m] || 'Unknown', sails: q.s, race: q.r, leg: q.l, raceLeg: q.r ? 'R' + q.r + 'L' + q.l : '-', testing: q.x, v, day: d.date, sessionId: d.id, boat: d.boat, dayLabel: lab, off: d.off, magVar: d.magVar }); } }
   return out;
 }
 /* import a CSV export of RaceReplay's T_Phase table (Access: External Data > Export > Text file) */
-function csvParse(text) { const rows = []; let row = [], cur = '', q = false; for (let i = 0; i < text.length; i++) { const c = text[i]; if (q) { if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; } else if (c === '"') q = true; else if (c === ',' || c === ';' || c === '\t') { row.push(cur); cur = ''; } else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; } else if (c !== '\r') cur += c; } if (cur || row.length) { row.push(cur); rows.push(row); } return rows; }
+function csvParse(text) { return [...SL.csvRows(text)]; }
 const RRMAP = { HEEL: 'Heel_norm', RUDDER: 'Rudder_norm', BSPpol: 'Polar_BSP', BSP_trg: 'Target_BSP', TWA_trg: 'Target_TWA', FORESTAY: 'Forestay', TRIM: 'Trim', CSE: 'Course' };
 const RRSKIP = /^(id|ConfigNum|StartDateTime|StopDateTime|Duration|SailingMode$|PhaseType$|DataFrequency|RaceLegNum|RaceNum|PhaseTack$|BalanceType|MadeOnboard|TestRating|NumPoints|PointDensity|GPS_|MainsailReef|.*_Bin$|Burn|DayNight|DistToLn|Name$|BoatName|.*Str$|TestSubject|Mainsail|Headsail|Staysail|Spinnaker|Comments|COG_mag|CSE_mag|HDG_mag|TWD_mag|MagVar|VMG_trg|DistanceNM|geo)/;
 function seasonFromPhaseCsv(text, dayInfo) {
-  const rows = csvParse(text), hd = rows[0].map(s => s.trim()), ix = n => hd.indexOf(n); if (ix('StartDateTime') < 0 || ix('TWS') < 0) throw new Error('This CSV does not look like a T_Phase export (needs StartDateTime and TWS columns).');
+  const rows = csvParse(text), hd = (rows[0] || []).map(s => s.trim()), ix = n => hd.indexOf(n); if (ix('StartDateTime') < 0 || ix('TWS') < 0) throw new Error('This CSV does not look like a T_Phase export (needs StartDateTime and TWS columns).');
   const num = hd.map((n, i) => RRSKIP.test(n) ? null : n), days = new Map();
   for (const r of rows.slice(1)) {
-    if (r.length < hd.length - 2) continue; const g = n => ix(n) >= 0 ? r[ix(n)] : '', dur = +g('Duration'); if (!(dur > 0 && dur <= 180) || /CompleteRaceLeg|PortStbd/.test(g('PhaseTypeStr'))) continue;
-    const tl = SL.parseTime(g('StartDateTime')); if (!fin(tl)) continue; const date = g('StartDateTime').slice(0, 10), boat = g('BoatName') || 'Boat', id = boat + '|' + date, off = 0;
-    const v = {}; num.forEach((n, i) => { if (n && r[i] !== '' && fin(+r[i])) v[RRMAP[n] || n] = +r[i]; });
-    const port = /port/i.test(g('PhaseTackStr')) || v.TWA < 0, sg = port ? -1 : 1, md = Math.max(0, MODES.indexOf(g('SailingModeStr')));
+    if (r.length < hd.length - 2) continue; const g = n => ix(n) >= 0 ? r[ix(n)] : '', dur = SL.csvNumber(g('Duration')); if (!(dur > 0 && dur <= 180) || /CompleteRaceLeg|PortStbd/.test(g('PhaseTypeStr'))) continue;
+    const tl = SL.parseTime(g('StartDateTime')); if (!fin(tl)) continue; const date = new Date(tl).toISOString().slice(0, 10), boat = g('BoatName') || 'Boat', id = boat + '|' + date, off = 0;
+    const v = {}; num.forEach((n, i) => { const value = SL.csvNumber(r[i]); if (n && fin(value)) v[RRMAP[n] || n] = value; });
+    const port = /port/i.test(g('PhaseTackStr')) || v.TWA < 0, sg = port ? -1 : 1, md = MODES.indexOf(g('SailingModeStr'));
+    if (fin(v.TWA)) v.TWA = sg * Math.abs(v.TWA);
     if (fin(v.Heel_norm)) { v.Heel = sg * v.Heel_norm; v.abs_heel = Math.abs(v.Heel_norm); } if (fin(v.Rudder_norm)) { v.Rudder = sg * v.Rudder_norm; v.abs_rudder = Math.abs(v.Rudder_norm); } if (fin(v.AWA)) v.AWA = sg * Math.abs(v.AWA);
-    v.absTWA = Math.abs(v.TWA); const vt = +g('VMG_trg'); v.VMG = Math.abs(v.VMG); v['ΔBSP'] = v.BSP - v.Target_BSP; v['ΔTWA'] = v.absTWA - v.Target_TWA; if (fin(vt)) v['ΔVMG'] = v.VMG - Math.abs(vt); v['ΔVMG%'] = v['VMG%'] - 100; if (md === 1 || md === 2) v['VMG%'] = v['BSPpol%'];
+    v.absTWA = Math.abs(v.TWA); const vt = SL.csvNumber(g('VMG_trg')); v.VMG = Math.abs(v.VMG); v['ΔBSP'] = v.BSP - v.Target_BSP; v['ΔTWA'] = v.absTWA - v.Target_TWA; if (fin(vt)) v['ΔVMG'] = v.VMG - Math.abs(vt); v['ΔVMG%'] = v['VMG%'] - 100; if (md === 1 || md === 2) v['VMG%'] = v['BSPpol%'];
     if (fin(v.SOG)) v['BSP-SOG'] = v.BSP - v.SOG; if (fin(v.HDG) && fin(v.COG)) v['HDG-COG'] = w180(v.HDG - v.COG);
     const sails = [g('Spinnaker'), g('Headsail'), g('Staysail')].filter(Boolean).join('/') || (g('Mainsail') ? g('Mainsail') + ' only' : '-');
     if (!days.has(id)) { const inf = (dayInfo && dayInfo[date]) || {}; days.set(id, { id, boat, date, desc: inf.desc || '', location: inf.location || '', dayType: inf.dayType || '', polar: inf.polar || '', off: 0, local: true, added: Date.now(), magVar: 0, sum: null, cal: null, keys: [], phases: [], mans: [], src: 'RaceReplay database' }); }
@@ -188,10 +197,31 @@ function seasonFromPhaseCsv(text, dayInfo) {
   }
   const out = [...days.values()];
   for (const d of out) { const ks = new Set(); d.phases.forEach(p => Object.keys(p._v).forEach(k => ks.add(k))); d.keys = [...ks]; d.phases.forEach(p => { p.v = d.keys.map(k => r3(p._v[k])); delete p._v; }); d.phases.sort((a, b) => a.t - b.t); const tw = d.phases.map(p => p.v[d.keys.indexOf('TWS')]); d.sum = { tws: r3(mean(tw)), twsMin: r3(Math.min(...tw)), twsMax: r3(Math.max(...tw)), sails: [...new Set(d.phases.flatMap(p => p.s.replace(/ only$/, '').split('/')))].sort() }; }
+  if (!out.length) throw new Error('No valid phases found in the CSV.');
+  for (const d of out) { d.start = d.phases[0].t; d.end = Math.max(...d.phases.map(p => p.t + p.d * 1000)); d.id += '|' + d.start + '|' + d.end; d.unknownModes = d.phases.filter(p => p.m < 0).length; }
   return out.sort((a, b) => a.date < b.date ? -1 : 1);
 }
-function seasonMerge(S, days) { let add = 0, rep = 0; for (const d of days) { const i = S.days.findIndex(x => x.id === d.id); if (i >= 0) { S.days[i] = d; rep++; } else { S.days.push(d); add++; } } S.days.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0); return { add, rep }; }
-const newSeason = () => ({ app: 'SailLens', version: 1, name: 'Season', days: [] });
+function validateDay(d) {
+  if (!d || typeof d.id !== 'string' || !d.id || typeof d.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(d.date) || !Array.isArray(d.keys) || d.keys.some(k => typeof k !== 'string') || new Set(d.keys).size !== d.keys.length || !Array.isArray(d.phases)) throw new Error('Invalid session in season file.');
+  for (const p of d.phases) if (!p || !fin(p.t) || !fin(p.d) || p.d <= 0 || !Number.isInteger(p.m) || p.m < -1 || p.m > 3 || !Array.isArray(p.v) || p.v.length !== d.keys.length || p.v.some(v => v != null && !fin(v))) throw new Error('Invalid phase in session ' + d.id + '.');
+}
+function seasonMerge(S, days) {
+  // Validate and resolve the entire import before changing the existing season.
+  const next = S.days.slice(); let add = 0, same = 0;
+  const content = d => JSON.stringify(d, (k, v) => k === 'added' ? undefined : v);
+  const span = d => [fin(d.start) ? d.start : Math.min(...d.phases.map(p => p.t)), fin(d.end) ? d.end : Math.max(...d.phases.map(p => p.t + p.d * 1000))];
+  for (const d of days) { validateDay(d); const old = next.find(x => x.id === d.id);
+    if (old) { if (content(old) !== content(d)) throw new Error('Session ' + d.id + ' already exists with different data. Export a backup, then remove that session explicitly before replacing it. Nothing was imported.'); same++; }
+    else {
+      const [start, end] = span(d), overlap = next.find(x => { const [a, b] = span(x); return (x.boat || 'Boat') === (d.boat || 'Boat') && start < b && end > a; });
+      if (overlap) throw new Error('Session ' + d.id + ' overlaps existing data for this boat. Nothing was imported; resolve the overlap before adding it.');
+      next.push(d); add++;
+    }
+  }
+  next.sort((a, b) => a.date.localeCompare(b.date) || ((a.start || a.phases[0]?.t || 0) - (b.start || b.phases[0]?.t || 0)));
+  S.days = next; S.version = 2; return { add, same, rep: 0 };
+}
+const newSeason = () => ({ app: 'SailLens', version: 2, name: 'Season', days: [] });
 /* sail crossover: per mode, where one sail's trend of VMG% against TWS overtakes another's */
 function crossover(phases, mode, yKey) {
   const ps = phases.filter(p => (p.mode === mode || (mode === 'Reaching' && p.mode === 'BroadReaching')) && fin(p.v[yKey]) && p.sails && p.sails !== '-' && !/ only$/.test(p.sails)), by = {};

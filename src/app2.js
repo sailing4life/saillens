@@ -38,7 +38,7 @@ function calFindings(r, logMagVar, mv) {
 function blkCalModel(c, r, o) {
   o = o || {}; const { bsp, wind, awa } = r, cl = (v, a, b) => !fin(v) ? '' : Math.abs(v) <= a ? 'good' : Math.abs(v) <= b ? 'warn' : 'bad';
   const up = wind.err ? [] : wind.bins.filter(b => b.mode === 'Upwind'), wmax = wind.err || !wind.bins.length ? NaN : wind.bins.reduce((a, b) => Math.abs(b.e) > Math.abs(a.e) ? b : a).e;
-  c.append(h('div', { class: 'kpis' }, kpi('Calibration score', r.score, '/100', 'rough overall figure', r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad'),
+  c.append(h('div', { class: 'kpis' }, kpi('Calibration score', f1(r.score, 0), fin(r.score) ? '/100' : '', fin(r.score) ? 'rough overall figure' : 'insufficient data for a complete score', !fin(r.score) ? '' : r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad'),
     kpi('BSP factor', bsp.err ? '–' : bsp.k.toFixed(3), '', bsp.err ? 'not enough data' : `range ${bsp.kLo.toFixed(3)}–${bsp.kHi.toFixed(3)}`, bsp.err ? '' : cl((bsp.k - 1) * 100, 1, 2.5)),
     kpi('Heading vs GPS', bsp.err ? '–' : f1(bsp.delta), '°', bsp.err ? '' : `range ${f1(bsp.dLo)} to ${f1(bsp.dHi)}`, bsp.err ? '' : cl(bsp.delta, 1.5, 3)),
     kpi('Masthead offset', awa.err ? '–' : f1(awa.read), '°', awa.err ? 'not enough data' : '± ' + f1(awa.se) + ' · + is to starboard', awa.err ? '' : cl(awa.read, 0.7, 1.5)),
@@ -151,48 +151,66 @@ R.ml = () => {
 };
 
 /* ---------------- Season database ---------------- */
-const idb = { db: null, open() { return this.db || (this.db = new Promise((res, rej) => { const r = indexedDB.open('saillens', 1); r.onupgradeneeded = () => r.result.createObjectStore('kv'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); },
-  async get(k) { try { const d = await this.open(); return await new Promise(res => { const r = d.transaction('kv').objectStore('kv').get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }); } catch (e) { return null; } },
-  async set(k, v) { try { const d = await this.open(); await new Promise(res => { const t = d.transaction('kv', 'readwrite'); t.objectStore('kv').put(v, k); t.oncomplete = res; t.onerror = res; }); return true; } catch (e) { return false; } } };
-async function writeLinked() { if (!A.fh) return false; try { const w = await A.fh.createWritable(); await w.write(JSON.stringify(A.S)); await w.close(); A.sSaved = 'Saved to ' + A.fh.name + ' at ' + new Date().toTimeString().slice(0, 8); return true; } catch (e) { A.sSaved = 'Could not write to ' + A.fh.name + ': ' + e.message; return false; } }
+const idb = SL.createStore(indexedDB);
+async function writeLinked(handle, text) {
+  if (!handle) return false;
+  const writer = await handle.createWritable();
+  try { await writer.write(text); await writer.close(); return true; }
+  catch (error) { try { await writer.abort(); } catch (_) {} throw error; }
+}
+const persistSeason = SL.serialWriter(async job => {
+  let browserOK = false, fileOK = false, failure = '';
+  try { browserOK = await idb.set('season', job.snapshot); } catch (error) { failure = 'Browser save failed: ' + error.message; }
+  if (job.handle) { try { fileOK = await writeLinked(job.handle, job.text); } catch (error) { failure += (failure ? ' ' : '') + 'File save failed: ' + error.message; } }
+  if (job.rev !== A.sRev) return;
+  A.sDirty = job.handle ? !fileOK : !browserOK;
+  A.sSaved = [browserOK ? 'Saved in this browser.' : '', fileOK ? 'Saved to ' + job.handle.name + '.' : '', failure, !job.handle && browserOK ? 'Export a season file for a separate backup.' : ''].filter(Boolean).join(' ');
+  const element = $('#s-saved'); if (element) element.textContent = A.sSaved;
+  if (failure) banner(A.sSaved, true);
+});
+function saveSeasonSnapshot() {
+  const text = JSON.stringify(A.S), rev = A.sRev = (A.sRev || 0) + 1;
+  A.sDirty = true; A.sSaved = 'Saving...';
+  return persistSeason({ rev, text, snapshot: JSON.parse(text), handle: A.fh });
+}
 function seasonChanged(save) {
   A.sOff = A.sOff || new Set(); A.SP = SL.seasonPool({ days: A.S.days.filter(d => !A.sOff.has(d.id)) }); A.SK = new Set(); A.S.days.forEach(d => { if (!A.sOff.has(d.id)) d.keys.forEach(k => A.SK.add(k)); }); if (A.SK.has('AWA')) A.SK.add('absAWA'); A.ml = {}; A.dayCal = new Map();
-  if (save !== false) { idb.set('season', A.S); if (A.fh) writeLinked().then(() => { const e = $('#s-saved'); if (e) e.textContent = A.sSaved; }); else A.sSaved = 'Kept in this browser. Save a season file to keep it on OneDrive and share it.'; }
+  if (save !== false) saveSeasonSnapshot();
 }
 function seasonImport(text, name) {
-  let days; if (/^﻿?\s*\{/.test(text.slice(0, 50))) { const o = JSON.parse(text); if (o.app !== 'SailLens' || !Array.isArray(o.days)) throw new Error('This JSON file is not a SailLens season file.'); days = o.days; if (o.name && (!A.S.days.length || A.S.name === 'Season')) A.S.name = o.name; } else days = SL.seasonFromPhaseCsv(text);
-  const r = SL.seasonMerge(A.S, days); seasonChanged(); banner(`${name}: ${r.add} day(s) added, ${r.rep} replaced. The season now has ${A.S.days.length} days and ${A.S.days.reduce((s, d) => s + d.phases.length, 0)} phases.`);
+  let days, importedName; if (/^\s*\{/.test(text.replace(/^\uFEFF/, ''))) { const o = JSON.parse(text.replace(/^\uFEFF/, '')); if (o.app !== 'SailLens' || !Array.isArray(o.days) || (o.version != null && ![1, 2].includes(o.version))) throw new Error('Unsupported SailLens season file.'); days = o.days; importedName = o.name; } else days = SL.seasonFromPhaseCsv(text);
+  const r = SL.seasonMerge(A.S, days); if (importedName && (!A.S.days.length || A.S.name === 'Season')) A.S.name = importedName; seasonChanged(); banner(`${name}: ${r.add} session(s) added, ${r.same} identical session(s) skipped. The season now has ${A.S.days.length} sessions and ${A.S.days.reduce((s, d) => s + d.phases.length, 0)} phases.${days.some(d => d.unknownModes) ? " Missing sailing modes are labelled Unknown and excluded from upwind/downwind models." : ""}`);
 }
 function addDay() {
   if (!A.D) return; if (A.demo) { banner('This is the example data. Load your own log first.', true); return; }
   const r = withScope('day', () => calAll(A.D.phases, A.D.magVar)), w = r.wind.err ? [] : r.wind.bins;
-  const rec = SL.dayRecord(A.D, meta(), { polar: A.files.polar || (A.D.polarSrc === 'log' ? 'Expedition targets' : A.D.polarSrc), cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
-  const res = SL.seasonMerge(A.S, [rec]); seasonChanged(); banner(`${rec.date} ${res.rep ? 'replaced in' : 'added to'} the season: ${rec.phases.length} phases, ${rec.mans.length} manoeuvres.`);
+  const rec = SL.dayRecord(A.D, meta(), { polar: A.files.polar || (A.D.polarSrc === 'log' ? 'Expedition targets' : A.D.polarSrc), files: A.files, calibration: A.calib, events: A.events, cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
+  try { const res = SL.seasonMerge(A.S, [rec]); seasonChanged(); banner(`${rec.date}: ${res.same ? 'identical session already saved' : 'session added'} (${rec.phases.length} phases, ${rec.mans.length} manoeuvres).`); } catch (error) { banner(error.message, true); }
 }
-async function openSeasonFile() { if (window.showOpenFilePicker) { try { const [fh] = await window.showOpenFilePicker({ types: [{ description: 'SailLens season or RaceReplay phase export', accept: { 'application/json': ['.json'], 'text/csv': ['.csv'] } }] }); const f = await fh.getFile(), t = await f.text(); if (/\.json$/i.test(f.name)) A.fh = fh; seasonImport(t, f.name); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else $('#s-file').click(); }
-async function saveSeasonFile() { const name = (A.S.name || 'season').replace(/[^\w-]+/g, '_') + '.saillens.json'; if (window.showSaveFilePicker) { try { A.fh = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'SailLens season', accept: { 'application/json': ['.json'] } }] }); await writeLinked(); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else dl(name, JSON.stringify(A.S)); }
-function dayCal(d) { A.dayCal = A.dayCal || new Map(); if (!A.dayCal.has(d.id)) A.dayCal.set(d.id, calAll(SL.seasonPool({ days: [d] }), 0)); return A.dayCal.get(d.id); }
+async function openSeasonFile() { if (window.showOpenFilePicker) { try { const [fh] = await window.showOpenFilePicker({ types: [{ description: 'SailLens season or RaceReplay phase export', accept: { 'application/json': ['.json'], 'text/csv': ['.csv'] } }] }); const f = await fh.getFile(), t = await f.text(); seasonImport(t, f.name); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else $('#s-file').click(); }
+async function saveSeasonFile() { const name = (A.S.name || 'season').replace(/[^\w-]+/g, '_') + '.saillens.json'; if (window.showSaveFilePicker) { try { A.fh = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: 'SailLens season', accept: { 'application/json': ['.json'] } }] }); await saveSeasonSnapshot(); show('season'); } catch (e) { if (e.name !== 'AbortError') banner(e.message, true); } } else dl(name, JSON.stringify(A.S)); }
+function dayCal(d) { A.dayCal = A.dayCal || new Map(); if (!A.dayCal.has(d.id)) A.dayCal.set(d.id, calAll(SL.seasonPool({ days: [d] }), d.magVar || 0)); return A.dayCal.get(d.id); }
 R.season = () => {
   const c = pane('season'), S = A.S, st = A.sst = A.sst || { binVar: 'BSPpol%', xmode: 'Upwind', clear: false }, on = S.days.filter(d => !A.sOff.has(d.id)), nPh = on.reduce((s, d) => s + d.phases.length, 0);
   const fin0 = h('input', { type: 'file', id: 's-file', hidden: '', accept: '.json,.csv', onchange: async e => { const f = e.target.files[0]; if (f) { try { seasonImport(await f.text(), f.name); } catch (x) { banner(x.message, true); } show('season'); } } });
-  c.append(h('div', { class: 'kpis' }, kpi('Days', on.length, '', S.days.length !== on.length ? S.days.length + ' in file' : (S.days.length ? S.days[0].date + ' → ' + S.days[S.days.length - 1].date : 'empty')), kpi('Phases', nPh.toLocaleString()), kpi('Upwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Upwind').map(p => p.v['VMG%']))), '%'), kpi('Downwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Downwind').map(p => p.v['VMG%']))), '%'), kpi('Manoeuvres', on.reduce((s, d) => s + (d.mans || []).length, 0))));
+  c.append(h('div', { class: 'kpis' }, kpi('Sessions', on.length, '', S.days.length !== on.length ? S.days.length + ' in file' : (S.days.length ? S.days[0].date + ' → ' + S.days[S.days.length - 1].date : 'empty')), kpi('Phases', nPh.toLocaleString()), kpi('Upwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Upwind').map(p => p.v['VMG%']))), '%'), kpi('Downwind VMG%', f1(SL.mean(A.SP.filter(p => p.mode === 'Downwind').map(p => p.v['VMG%']))), '%'), kpi('Manoeuvres', on.reduce((s, d) => s + (d.mans || []).length, 0))));
   c.append(card('Season database',
     h('div', { class: 'bar' }, field('Season name', h('input', { type: 'text', id: 's-name', value: S.name, style: 'width:220px', onchange: e => { S.name = e.target.value; seasonChanged(); } })),
       h('button', { class: 'primary', disabled: !A.D || A.demo ? '' : null, onclick: () => { addDay(); show('season'); } }, A.D && !A.demo ? `Add ${dstr(A.D.sum.t0).slice(0, 10)} to the season` : 'Add current day'), h('button', { onclick: openSeasonFile }, 'Open season file or RaceReplay export…'), h('button', { onclick: saveSeasonFile }, A.fh ? 'Save to another file…' : 'Save season file…'), fin0,
       h('button', { class: 'danger', onclick: () => { if (!st.clear) { st.clear = true; show('season'); return; } st.clear = false; A.S = SL.newSeason(); A.fh = null; seasonChanged(); show('season'); } }, st.clear ? 'Click again to empty the season' : 'Empty season')),
     h('p', { class: 'muted', id: 's-saved' }, A.sSaved || ''),
-    h('p', { class: 'muted' }, 'Each day you add stores its phases (with sails, race legs and about 40 channels), its tacks and gybes and its calibration figures. The season is kept in this browser and, once you save or open a season file, written back to that file after every change. To bring in history from RaceReplay, export the T_Phase table from the Access database as a CSV text file and open it here.')));
+    h('p', { class: 'muted' }, 'Each session you add stores its processing settings and phases (with sails, race legs and about 40 channels), its tacks and gybes and its calibration figures. The season is kept in this browser and, once you save a season file, written back to that file after every change. Raw log files are not stored here: keep the originals to reprocess a session. Imports never replace an existing session with different data. To bring in history from RaceReplay, export the T_Phase table from the Access database as a CSV text file and open it here.')));
   if (!S.days.length) { c.append(card(null, h('p', { class: 'muted' }, 'The season is empty. Process a day and press “Add current day”, or open a season file.'))); return; }
   // days
-  c.append(card('Days', table(['Use', 'Date', 'Description', 'Location', 'Phases', 'TWS', 'Sails', 'Polar', 'Source', ''], S.days.map(d => [h('input', { type: 'checkbox', 'aria-label': 'Use ' + d.date, checked: A.sOff.has(d.id) ? null : '', onchange: e => { e.target.checked ? A.sOff.delete(d.id) : A.sOff.add(d.id); seasonChanged(false); show('season'); } }), { t: d.date, c: 'b' }, d.desc || '', d.location || '', d.phases.length, d.sum && fin(d.sum.tws) ? `${f1(d.sum.twsMin, 0)}–${f1(d.sum.twsMax, 0)} kn` : '', (d.sum && d.sum.sails || []).join(', '), d.polar || '', d.src || 'SailLens', h('button', { class: 'mini danger', onclick: () => { S.days.splice(S.days.indexOf(d), 1); seasonChanged(); show('season'); } }, 'Remove')]), 'num')));
+  c.append(card('Sessions', table(['Use', 'Date', 'Boat', 'Start', 'Description', 'Location', 'Phases', 'TWS', 'Sails', 'Polar', 'Source', ''], S.days.map(d => [h('input', { type: 'checkbox', 'aria-label': 'Use ' + d.date, checked: A.sOff.has(d.id) ? null : '', onchange: e => { e.target.checked ? A.sOff.delete(d.id) : A.sOff.add(d.id); seasonChanged(false); show('season'); } }), { t: d.date, c: 'b' }, d.boat || 'Boat', Number.isFinite(d.start) ? new Date(d.start + (d.off || 0) * 36e5).toISOString().slice(11, 19) : '-', d.desc || '', d.location || '', d.phases.length, d.sum && fin(d.sum.tws) ? `${f1(d.sum.twsMin, 0)}–${f1(d.sum.twsMax, 0)} kn` : '', (d.sum && d.sum.sails || []).join(', '), d.polar || '', d.src || 'SailLens', h('button', { class: 'mini danger', onclick: () => { S.days.splice(S.days.indexOf(d), 1); seasonChanged(); show('season'); } }, 'Remove')]), 'num')));
   if (!on.length) return;
   withScope('season', () => {
     // trend
     const s2 = card('Day-by-day trend'), cv = h('canvas'); c.append(s2); s2.append(legend([[css('--s1'), 'Upwind VMG%'], [css('--s2'), 'Downwind VMG%']]), h('div', {}, cv));
-    const per = on.map(d => { const ps = A.SP.filter(p => p.day === d.date), m = (md, k) => SL.mean(ps.filter(p => p.mode === md).map(p => p.v[k])), tk = (d.mans || []).filter(x => x.type === 'Tack' && fin(x.loss)), gy = (d.mans || []).filter(x => x.type === 'Gybe' && fin(x.loss)); return { d, up: m('Upwind', 'VMG%'), dn: m('Downwind', 'VMG%'), nUp: ps.filter(p => p.mode === 'Upwind').length, nDn: ps.filter(p => p.mode === 'Downwind').length, tack: SL.median(tk.map(x => x.loss)), gybe: SL.median(gy.map(x => x.loss)), nT: tk.length, nG: gy.length }; });
+    const per = on.map(d => { const ps = A.SP.filter(p => p.sessionId === d.id), m = (md, k) => SL.mean(ps.filter(p => p.mode === md).map(p => p.v[k])), tk = (d.mans || []).filter(x => x.type === 'Tack' && fin(x.loss)), gy = (d.mans || []).filter(x => x.type === 'Gybe' && fin(x.loss)); return { d, up: m('Upwind', 'VMG%'), dn: m('Downwind', 'VMG%'), nUp: ps.filter(p => p.mode === 'Upwind').length, nDn: ps.filter(p => p.mode === 'Downwind').length, tack: SL.median(tk.map(x => x.loss)), gybe: SL.median(gy.map(x => x.loss)), nT: tk.length, nG: gy.length }; });
     const vals = per.flatMap(x => [x.up, x.dn]).filter(fin), p = plot(cv, { xr: [-0.5, per.length - 0.5], yr: [Math.min(92, ...vals) - 1, Math.max(102, ...vals) + 1], h: 250, yl: 'mean VMG%', ysuf: '%', xfmt: v => Number.isInteger(v) && per[v] ? per[v].d.date.slice(5) : '' }); p.zero(100);
     for (const [k, col, nk] of [['up', css('--s1'), 'nUp'], ['dn', css('--s2'), 'nDn']]) { p.line(per.map((x, i) => [i, x[k]]), col, 2); per.forEach((x, i) => p.dot(i, x[k], col, `<b>${x.d.date}</b> ${x.d.desc || ''}<br>${k === 'up' ? 'Upwind' : 'Downwind'} VMG% ${f1(x[k])} on ${x[nk]} phases`, null, false, 5)); }
-    s2.append(h('h4', {}, 'Calibration and manoeuvres per day'), table(['Day', 'Cal score', 'BSP factor', 'Heading °', 'Masthead °', 'TWA up °', 'TWA down °', 'TWS dn %', 'Tack loss m', 'Gybe loss m'], per.map(x => { const r = dayCal(x.d), wb = m => r.wind.err ? NaN : SL.mean(r.wind.bins.filter(b => b.mode === m).map(b => b.e)), sc = scale('ΔTWD', [3]); return [{ t: x.d.date, c: 'b' }, { t: r.score, c: 'b verdict ' + (r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad') }, r.bsp.err ? '–' : r.bsp.k.toFixed(3), r.bsp.err ? '–' : { t: f1(r.bsp.delta), s: heat(r.bsp.delta, sc) }, r.awa.err ? '–' : { t: f1(r.awa.read), s: heat(r.awa.read * 2, sc) }, { t: f1(wb('Upwind')), s: heat(wb('Upwind'), sc) }, { t: f1(wb('Downwind')), s: heat(wb('Downwind'), sc) }, r.wind.err || !r.wind.twsDn ? '–' : f1(r.wind.twsDn.pct), x.nT ? f1(x.tack, 0) + ' (' + x.nT + ')' : '–', x.nG ? f1(x.gybe, 0) + ' (' + x.nG + ')' : '–']; }), 'num'),
+    s2.append(h('h4', {}, 'Calibration and manoeuvres per day'), table(['Day', 'Cal score', 'BSP factor', 'Heading °', 'Masthead °', 'TWA up °', 'TWA down °', 'TWS dn %', 'Tack loss m', 'Gybe loss m'], per.map(x => { const r = dayCal(x.d), wb = m => r.wind.err ? NaN : SL.mean(r.wind.bins.filter(b => b.mode === m).map(b => b.e)), sc = scale('ΔTWD', [3]); return [{ t: x.d.date, c: 'b' }, { t: f1(r.score, 0), c: 'b verdict ' + (!fin(r.score) ? '' : r.score >= 85 ? 'good' : r.score >= 65 ? 'warn' : 'bad') }, r.bsp.err ? '–' : r.bsp.k.toFixed(3), r.bsp.err ? '–' : { t: f1(r.bsp.delta), s: heat(r.bsp.delta, sc) }, r.awa.err ? '–' : { t: f1(r.awa.read), s: heat(r.awa.read * 2, sc) }, { t: f1(wb('Upwind')), s: heat(wb('Upwind'), sc) }, { t: f1(wb('Downwind')), s: heat(wb('Downwind'), sc) }, r.wind.err || !r.wind.twsDn ? '–' : f1(r.wind.twsDn.pct), x.nT ? f1(x.tack, 0) + ' (' + x.nT + ')' : '–', x.nG ? f1(x.gybe, 0) + ' (' + x.nG + ')' : '–']; }), 'num'),
       h('p', { class: 'muted' }, 'A calibration figure that sits at the same value day after day is an instrument offset; one that moves around is wind shear, current or noise. For the pooled season estimate, open Calibration in Season mode.'));
     // crossover
     const s3 = card(['Sail crossover ', mlTag()], bar(field('Mode', sel('x-mode', ['Upwind', 'Downwind', 'Reaching'], st.xmode, v => { st.xmode = v; R.season(); }))));
@@ -243,11 +261,11 @@ async function boot() {
   window.addEventListener('dragover', e => { e.preventDefault(); document.body.classList.add('drop'); });
   window.addEventListener('dragleave', e => { if (!e.relatedTarget) document.body.classList.remove('drop'); });
   window.addEventListener('drop', async e => { e.preventDefault(); document.body.classList.remove('drop'); for (const f of e.dataTransfer.files) await loadFile(f); });
-  window.addEventListener('beforeunload', e => { if (A.evDirty) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (A.evDirty || A.sDirty) { e.preventDefault(); e.returnValue = ''; } });
   let rt; window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { if (A.tab !== 'setup' && A.tab !== 'report' && A.tab !== 'events') show(A.tab); }, 200); });
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => show(A.tab));
   A.chart = store.get('saillens-chart'); if (!A.chart || A.chart.type !== 'sailchart') A.chart = SL.newChart(); A.chart.shapes = A.chart.shapes || []; A.chart.cells = A.chart.cells || {};
-  A.S = SL.newSeason(); A.sOff = new Set(); const saved = await idb.get('season'); if (saved && saved.app === 'SailLens' && Array.isArray(saved.days)) A.S = saved; seasonChanged(false); if (A.S.days.length) A.sSaved = 'Loaded from this browser.';
+  A.S = SL.newSeason(); A.sOff = new Set(); try { const saved = await idb.get('season'); if (saved) { if (saved.app !== 'SailLens' || !Array.isArray(saved.days) || (saved.version != null && ![1, 2].includes(saved.version))) throw new Error('Unsupported season format'); SL.seasonMerge(A.S, saved.days); A.S.name = saved.name || 'Season'; A.sSaved = 'Loaded from this browser.'; } } catch (error) { A.sSaved = 'Could not restore browser data: ' + error.message; } seasonChanged(false);
   loadDemo(); show('home');
 }
 document.addEventListener('DOMContentLoaded', boot);

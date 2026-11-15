@@ -17,62 +17,89 @@ const ALIAS = { BSP: ['bsp', 'boatspeed', 'boat speed', 'stw'], AWA: ['awa'], AW
   Heel: ['heel', 'roll'], Rudder: ['rudder', 'rud'], Forestay: ['forestay'], Trim: ['trim', 'pitch'], Leeway: ['leeway'] };
 function canon(name) { const l = name.trim().toLowerCase(); for (const k in ALIAS) if (ALIAS[k].includes(l)) return k; return name.trim(); }
 function parseTime(s) {
-  s = s.trim();
+  s = String(s ?? '').trim();
   if (/^-?\d+(\.\d+)?$/.test(s)) { const v = +s; if (v > 1e16) return v / 1e4 - 11644473600000; if (v > 1e11) return v; if (v > 1e9) return v * 1000; if (v > 20000 && v < 80000) return Math.round((v - 25569) * 864e5); return NaN; }
-  let m = s.match(/^(\d{4})[-\/.](\d\d?)[-\/.](\d\d?)[T ](\d\d?):(\d\d):(\d\d(?:\.\d+)?)/);
-  if (m) return Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], 0) + m[6] * 1000;
-  m = s.match(/^(\d\d?)[-\/.](\d\d?)[-\/.](\d{4})[T ](\d\d?):(\d\d):(\d\d(?:\.\d+)?)/);
-  if (m) return Date.UTC(+m[3], m[2] - 1, +m[1], +m[4], +m[5], 0) + m[6] * 1000;
-  return Date.parse(s);
+  const m = s.match(/^(\d{4}|\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4}|\d{1,2})[T ](\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?(Z|[+-]\d{2}:?\d{2})?$/i);
+  if (!m) return NaN;
+  const y = +(m[1].length === 4 ? m[1] : m[3]), mo = +m[2], d = +(m[1].length === 4 ? m[3] : m[1]), h = +m[4], mi = +m[5], sec = +(m[6] || 0);
+  const t = Date.UTC(y, mo - 1, d, h, mi, 0), check = new Date(t);
+  if (mo < 1 || mo > 12 || d < 1 || h > 23 || mi > 59 || sec >= 60 || check.getUTCFullYear() !== y || check.getUTCMonth() !== mo - 1 || check.getUTCDate() !== d) return NaN;
+  let offset = 0;
+  if (m[7] && m[7].toUpperCase() !== 'Z') { const z = m[7].replace(':', ''), zh = +z.slice(1, 3), zm = +z.slice(3); if (zh > 23 || zm > 59) return NaN; offset = (zh * 60 + zm) * (z[0] === '-' ? -1 : 1); }
+  return t + Math.round(sec * 1000) - offset * 60000;
 }
+// Floating clocks retain the file's wall time; explicitly zoned/epoch times are UTC.
+const utcTime = s => /(?:Z|[+-]\d{2}:?\d{2})$/i.test(String(s).trim()) || (/^\d+(?:\.\d+)?$/.test(String(s).trim()) && +s > 1e9);
+const logOffset = (raw, cfg) => raw && raw.timeBasis === 'utc' ? 0 : (cfg.logOff || 0);
+function csvDelimiter(text) {
+  const counts = { ',': 0, ';': 0, '\t': 0 }; let quoted = false;
+  for (let i = 0; i < text.length; i++) { const c = text[i]; if (c === '"') { if (quoted && text[i + 1] === '"') i++; else quoted = !quoted; } else if (!quoted) { if (c === '\n' || c === '\r') break; if (c in counts) counts[c]++; } }
+  return Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+}
+function* csvRows(text, delimiter = csvDelimiter(text)) {
+  let row = [], value = '', quoted = false;
+  for (let i = text.charCodeAt(0) === 0xFEFF ? 1 : 0; i < text.length; i++) {
+    const c = text[i];
+    if (quoted) { if (c === '"') { if (text[i + 1] === '"') { value += '"'; i++; } else quoted = false; } else value += c; }
+    else if (c === '"' && !value.trim()) quoted = true;
+    else if (c === delimiter) { row.push(value); value = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(value); if (row.some(v => v.trim())) yield row; row = []; value = ''; }
+    else value += c;
+  }
+  if (quoted) throw new Error('CSV contains an unclosed quoted field.');
+  if (value || row.length) { row.push(value); yield row; }
+}
+const csvNumber = s => { const v = String(s ?? '').trim(); return v ? Number(v.replace(',', '.')) : NaN; };
 function parseLog(text) {
-  const cols = new Map(); let t0 = NaN, maxI = -1, cap = 1 << 15;
-  const put = (i, k, v) => {
-    let c = cols.get(k); if (!c) { c = new Float64Array(cap).fill(NaN); cols.set(k, c); }
-    if (i >= c.length) { let nc = c.length; while (nc <= i) nc *= 2; const b = new Float64Array(nc).fill(NaN); b.set(c); c = b; cols.set(k, c); }
-    c[i] = v;
-  };
-  const idx = t => { if (!fin(t)) return -1; if (!fin(t0)) t0 = Math.floor(t / 1000) * 1000; const i = Math.floor((t - t0) / 1000); if (i < 0 || i > 4e6) return -1; if (i > maxI) maxI = i; return i; };
-  let pos = 0, lineNo = 0; const nextLine = () => { if (pos >= text.length) return null; let e = text.indexOf('\n', pos); if (e < 0) e = text.length; let l = text.slice(pos, e); pos = e + 1; if (l.endsWith('\r')) l = l.slice(0, -1); return l; };
-  let first = nextLine(); if (first && first.charCodeAt(0) === 0xFEFF) first = first.slice(1);
-  let format;
-  if (/^!boat/i.test(first)) {
-    format = 'Expedition log';
-    const names = first.split(','); let ids = null, l;
-    const idName = {};
-    while ((l = nextLine()) !== null) {
-      if (!l) continue;
-      if (l[0] === '!') { if (/^!boat,/i.test(l) && !ids) { ids = l.split(','); for (let i = 1; i < ids.length; i++) idName[ids[i]] = canon(names[i] || ('ch' + ids[i])); } continue; }
-      const p = l.split(','); let k = 1, t;
-      if (p.length % 2 === 0) { t = parseTime(p[1]); k = 2; } else { for (let j = 1; j < p.length - 1; j += 2) if (p[j] === '0') { t = parseTime(p[j + 1]); break; } }
-      const i = idx(t); if (i < 0) continue;
-      for (; k < p.length - 1; k += 2) { if (p[k] === '0') continue; const nm = ids ? idName[p[k]] : canon(names[+p[k] + 1] || ('ch' + p[k])); if (nm) put(i, nm, +p[k + 1]); }
-    }
-  } else {
-    format = 'CSV table';
-    const dl = [',', ';', '\t'].sort((a, b) => first.split(b).length - first.split(a).length)[0];
-    const hdr = first.split(dl).map(s => s.replace(/^"|"$/g, '').trim());
-    const low = hdr.map(h => h.toLowerCase());
-    let ti = low.findIndex(h => ['utc', 'time', 'timestamp', 'datetime', 'date_time', 'date time', 'isodatetime'].includes(h));
+  text = String(text).replace(/^\uFEFF/, '');
+  const expedition = /^!boat/i.test(text), delimiter = expedition ? ',' : csvDelimiter(text), format = expedition ? 'Expedition log' : 'CSV table';
+  function* records() {
+    const rows = csvRows(text, delimiter), first = rows.next().value;
+    if (!first) throw new Error('The log file is empty.');
+    const keys = first.map(canon), low = first.map(s => s.trim().toLowerCase()), ids = Object.create(null);
+    let hasIds = false, ti = low.findIndex(h => ['utc', 'time', 'utc time', 'timestamp', 'datetime', 'date_time', 'date time', 'isodatetime'].includes(h));
     const di = low.indexOf('date'), tmi = low.findIndex(h => h === 'time' || h === 'utc time');
-    if (ti < 0 && di < 0) ti = 0;
-    const keys = hdr.map(canon); let l;
-    while ((l = nextLine()) !== null) {
-      if (!l) continue; const p = l.split(dl);
-      const t = (di >= 0 && tmi >= 0 && di !== tmi) ? parseTime(p[di].replace(/"/g, '') + ' ' + p[tmi].replace(/"/g, '')) : parseTime((p[ti] || '').replace(/"/g, ''));
-      const i = idx(t); if (i < 0) continue;
-      for (let k = 0; k < p.length; k++) { if (k === ti || k === di || k === tmi) continue; const s = p[k]; if (s === '' || s === undefined) continue; const v = +s; if (fin(v)) put(i, keys[k], v); }
+    if (!expedition && ti < 0 && di < 0) throw new Error('No recognised time column in the CSV header.');
+    for (const p of rows) {
+      if (expedition && p[0][0] === '!') { if (/^!boat$/i.test(p[0]) && !hasIds) { p.forEach((id, i) => { if (i) ids[id] = keys[i] || 'ch' + id; }); hasIds = true; } continue; }
+      let stamp, start = 1;
+      if (expedition) { if (p.length % 2 === 0) { stamp = p[1]; start = 2; } else for (let j = 1; j < p.length - 1; j += 2) if (p[j] === '0') stamp = p[j + 1]; }
+      else stamp = di >= 0 && tmi >= 0 && di !== tmi ? p[di] + ' ' + p[tmi] : p[ti >= 0 ? ti : di];
+      yield { p, stamp, t: parseTime(stamp), start, keys, ids, hasIds, ti, di, tmi };
     }
   }
-  const n = maxI + 1; if (n < 10) throw new Error('No timestamped rows found in the log file.');
-  const ch = {};
-  for (const [k, c0] of cols) {
-    const c = c0.slice(0, n); let cnt = 0, last = NaN, age = 99;
-    for (let i = 0; i < n; i++) { if (fin(c[i])) { cnt++; last = c[i]; age = 0; } else if (++age <= 10) c[i] = last; }
-    if (cnt >= Math.max(5, n * 0.01)) ch[k] = c;
+  let lo = Infinity, hi = -Infinity, previous = -Infinity;
+  const bases = new Set(), diagnostics = { rows: 0, invalidTimes: 0, outOfOrder: 0, aggregatedSamples: 0, invalidValues: 0, channels: {} };
+  for (const r of records()) { diagnostics.rows++; if (!fin(r.t)) { diagnostics.invalidTimes++; continue; } bases.add(utcTime(r.stamp) ? 'utc' : 'floating'); if (r.t < previous) diagnostics.outOfOrder++; previous = r.t; lo = Math.min(lo, r.t); hi = Math.max(hi, r.t); }
+  if (!fin(lo)) throw new Error('No timestamped rows found in the log file.');
+  if (bases.size > 1) throw new Error('Mixed UTC and timezone-free timestamps. Use one time convention per log.');
+  const t0 = Math.floor(lo / 1000) * 1000, n = Math.floor((hi - t0) / 1000) + 1;
+  if (n > 7 * 86400) throw new Error('Log spans more than seven days. Check timestamps or split it into sessions.');
+  const cols = new Map();
+  const put = (i, k, value) => {
+    if (!k || !String(value ?? '').trim()) return;
+    const v = csvNumber(value); if (!fin(v)) { diagnostics.invalidValues++; return; }
+    let c = cols.get(k); if (!c) { c = { sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    if (c.count[i]++) diagnostics.aggregatedSamples++;
+    if (c.cos) { c.sum[i] += Math.sin(v * D2R); c.cos[i] += Math.cos(v * D2R); } else c.sum[i] += v;
+  };
+  for (const r of records()) {
+    if (!fin(r.t)) continue; const i = Math.floor((r.t - t0) / 1000);
+    if (expedition) { for (let k = r.start; k < r.p.length - 1; k += 2) if (r.p[k] !== '0') put(i, r.hasIds ? r.ids[r.p[k]] : r.keys[+r.p[k] + 1] || 'ch' + r.p[k], r.p[k + 1]); }
+    else r.keys.forEach((k, j) => { if (j !== r.ti && j !== r.di && j !== r.tmi) put(i, k, r.p[j]); });
+  }
+  const ch = Object.create(null), age = Object.create(null), counts = Object.create(null);
+  for (const [k, c] of cols) {
+    const a = c.sum, ages = new Uint8Array(n).fill(255); let last = NaN, elapsed = 255, observed = 0, held = 0;
+    for (let i = 0; i < n; i++) {
+      if (c.count[i]) { a[i] = c.cos ? (Math.hypot(a[i], c.cos[i]) < 1e-10 ? NaN : (ANG.test(k) ? w360 : w180)(Math.atan2(a[i], c.cos[i]) * R2D)) : a[i] / c.count[i]; last = a[i]; elapsed = fin(last) ? 0 : 255; observed++; }
+      else { elapsed = Math.min(255, elapsed + 1); a[i] = elapsed <= 10 ? last : NaN; if (fin(a[i])) held++; }
+      ages[i] = elapsed;
+    }
+    ch[k] = a; age[k] = ages; counts[k] = c.count; diagnostics.channels[k] = { observed, held, missing: n - observed - held };
   }
   if (ch.Lat && ch.Lon) for (let i = 0; i < n; i++) if (ch.Lat[i] === 0 && ch.Lon[i] === 0) { ch.Lat[i] = NaN; ch.Lon[i] = NaN; }
-  return { t0, n, ch, format };
+  return { t0, n, ch, age, counts, diagnostics, timeBasis: [...bases][0], format };
 }
 
 /* ---------- event file ---------- */
@@ -86,9 +113,9 @@ function parseEvents(text) {
     let m = text.match(/<event_file\s+hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; else { m = text.match(/<events\s+utc_offset_hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; }
     m = text.match(/<log_file\s+hours="(-?[\d.]+)"/); if (m) out.logOff = +m[1];
     const blk = (text.match(/<events[\s\S]*?<\/events>/) || [text])[0];
-    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t, type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '' }); });
+    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t + (utcTime(ts) ? out.evOff * 36e5 : 0), type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '' }); });
   } else {
-    for (const l of text.split(/\r?\n/)) { const p = l.split(/[,;\t]/); if (p.length < 2) continue; const t = parseTime(p[0]); if (fin(t)) out.events.push({ tl: t, type: p[1].trim(), attr: (p[2] || '').trim(), comments: (p[3] || '').trim() }); }
+    for (const p of csvRows(text)) { if (p.length < 2) continue; const t = parseTime(p[0]); if (fin(t)) out.events.push({ tl: t, type: p[1].trim(), attr: (p[2] || '').trim(), comments: (p[3] || '').trim() }); }
   }
   out.events.sort((a, b) => a.tl - b.tl);
   return out;
@@ -134,13 +161,22 @@ function makePolar(rows, src) {
 function polarText(rows) { return rows.map(r => [r.tws, ...r.pts.map(p => p[0].toFixed(1) + '\t' + p[1].toFixed(2))].join('\t')).join('\r\n') + '\r\n'; }
 
 /* ---------- processing ---------- */
-const DEF = { phaseLen: 30, phaseGap: 10, minBsp: 2, sdTwa: 6, sdBsp: 0.6, sdTws: 2, manBefore: 15, manAfter: 45, upMargin: 10, dnMargin: 12, polMin: 70, polMax: 125, magVar: null, evOff: 0, logOff: 0, tStart: null, tEnd: null, useEvents: true, racingOnly: false };
+const DEF = { phaseLen: 30, phaseGap: 10, maxHold: 2, minBsp: 2, sdTwa: 6, sdBsp: 0.6, sdTws: 2, manBefore: 15, manAfter: 45, upMargin: 10, dnMargin: 12, polMin: 70, polMax: 125, magVar: null, evOff: 0, logOff: 0, tStart: null, tEnd: null, useEvents: true, racingOnly: false };
 const MODES = ['Upwind', 'Reaching', 'BroadReaching', 'Downwind'];
+function validateConfig(cfg) {
+  for (const k of ['phaseLen', 'phaseGap', 'manBefore', 'manAfter', 'maxHold']) if (!Number.isInteger(cfg[k]) || cfg[k] < (k === 'phaseLen' ? 2 : 0)) throw new Error(k + ' must be a whole number ' + (k === 'phaseLen' ? 'of at least 2.' : 'of at least 0.'));
+  if (cfg.maxHold > 10) throw new Error('Max held sample age cannot exceed 10 seconds.');
+  for (const k of ['minBsp', 'sdTwa', 'sdBsp', 'sdTws', 'upMargin', 'dnMargin', 'polMin', 'polMax']) if (!fin(cfg[k]) || cfg[k] < 0) throw new Error(k + ' must be a non-negative number.');
+  if (cfg.polMin >= cfg.polMax) throw new Error('Minimum polar percentage must be below maximum.');
+  for (const k of ['evOff', 'logOff', 'dispOff']) if (cfg[k] != null && (!fin(cfg[k]) || Math.abs(cfg[k]) > 24)) throw new Error(k + ' must be a UTC offset between -24 and 24 hours.');
+  for (const k of ['tStart', 'tEnd', 'magVar']) if (cfg[k] != null && !fin(cfg[k])) throw new Error(k + ' is invalid.');
+  if (cfg.tStart != null && cfg.tEnd != null && cfg.tStart >= cfg.tEnd) throw new Error('The end of the time window must be after its start.');
+}
 
 function applyEvents(raw, ev, cfg) {
   const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), sailNames: [], list: [], manual: {}, dayStart: null, dayStop: null };
   if (!ev || !cfg.useEvents) return L;
-  const toI = tl => Math.round((tl - cfg.evOff * 36e5 + cfg.logOff * 36e5 - raw.t0) / 1000);
+  const toI = tl => Math.round((tl - cfg.evOff * 36e5 + logOffset(raw, cfg) * 36e5 - raw.t0) / 1000);
   const E = ev.events.map(e => ({ ...e, i: toI(e.tl) }));
   L.list = E;
   const fill = (arr, a, b, v) => { a = Math.max(0, a); b = Math.min(n, b); for (let i = a; i < b; i++) arr[i] = v; };
@@ -155,6 +191,7 @@ function applyEvents(raw, ev, cfg) {
   }
   if (rs >= 0) { fill(L.race, rs, n, race); fill(L.leg, rs, n, leg); }
   let ts = -1; for (const e of E) { if (e.type === 'StartTesting') ts = e.i; else if (e.type === 'StopTesting' && ts >= 0) { fill(L.testing, ts, e.i, 1); ts = -1; } }
+  if (ts >= 0) fill(L.testing, ts, n, 1);
   const man = E.filter(e => e.type === 'ManualEntry');
   man.forEach(e => e.attr.split(';').forEach(kv => { const [k, v] = kv.split('='); if (!k || !fin(+v)) return; const key = k.trim(); if (!L.manual[key]) L.manual[key] = new Float64Array(n).fill(NaN); fill(L.manual[key], e.i, n, +v); }));
   return L;
@@ -189,20 +226,33 @@ function applyCalib(ch, n, c) {
 }
 function process(raw, opt) {
   const cfg = { ...DEF, ...opt.cfg }, n = raw.n, ch = { ...raw.ch };
-  const need = k => { if (!ch[k]) ch[k] = new Float64Array(n).fill(NaN); return ch[k]; };
+  validateConfig(cfg);
+  // Derived channels always get their own arrays, including names also present in the source.
+  const need = k => (ch[k] = new Float64Array(n).fill(NaN));
   const warn = [];
+  for (const k of Object.keys(ch)) if (raw.age && raw.age[k]) { ch[k] = Float64Array.from(ch[k]); for (let i = 0; i < n; i++) if (raw.age[k][i] > cfg.maxHold) ch[k][i] = NaN; }
+  if (raw.diagnostics) {
+    const q = raw.diagnostics;
+    if (q.invalidTimes) warn.push(q.invalidTimes + ' rows skipped because their timestamps were invalid.');
+    if (q.outOfOrder) warn.push(q.outOfOrder + ' out-of-order timestamps were placed in chronological order.');
+    if (q.invalidValues) warn.push(q.invalidValues + ' non-numeric channel values were ignored.');
+    if (q.aggregatedSamples) warn.push('Subsecond samples averaged into 1-second bins; original rates are not retained.');
+    if (['BSP', 'TWA', 'TWS', 'AWA', 'AWS'].some(k => q.channels[k] && q.channels[k].observed < n)) warn.push('Gaps present: values are held for at most ' + cfg.maxHold + ' seconds; longer gaps are excluded from phases. See import quality in Setup.');
+  }
+  if (raw.timeBasis === 'utc' && cfg.logOff) warn.push('The log contains UTC timestamps; the log UTC offset setting is ignored.');
   const L = applyEvents(raw, opt.events, cfg);
   for (const k in L.manual) ch[k] = L.manual[k];
   const calibrated = applyCalib(ch, n, opt.calib);
   // true wind if missing
-  if (!ch.TWA && ch.AWA && ch.AWS && ch.BSP) { const twa = need('TWA'), tws = need('TWS'); for (let i = 0; i < n; i++) { const a = ch.AWA[i] * D2R, x = ch.AWS[i] * Math.cos(a) - ch.BSP[i], y = ch.AWS[i] * Math.sin(a); twa[i] = Math.atan2(y, x) * R2D; tws[i] = Math.hypot(x, y); } warn.push('TWA/TWS were not in the log; computed from AWA, AWS and BSP.'); }
+  if ((!ch.TWA || !ch.TWS) && ch.AWA && ch.AWS && ch.BSP) { const missing = ['TWA', 'TWS'].filter(k => !ch[k]), twa = !ch.TWA ? need('TWA') : null, tws = !ch.TWS ? need('TWS') : null; for (let i = 0; i < n; i++) { const a = ch.AWA[i] * D2R, x = ch.AWS[i] * Math.cos(a) - ch.BSP[i], y = ch.AWS[i] * Math.sin(a); if (twa) twa[i] = Math.atan2(y, x) * R2D; if (tws) tws[i] = Math.hypot(x, y); } warn.push(missing.join('/') + ' missing; computed from AWA, AWS and BSP.'); }
   for (const k of ['BSP', 'TWA', 'TWS']) if (!ch[k]) throw new Error('The log needs at least BSP, TWA and TWS (or AWA and AWS). Missing: ' + k);
   if (!ch.TWD && ch.HDG) { const d = need('TWD'); for (let i = 0; i < n; i++) d[i] = w360(ch.HDG[i] + ch.TWA[i]); }
   const BSP = ch.BSP, TWA = ch.TWA, TWS = ch.TWS;
   let i0 = 0, i1 = n;
   if (cfg.tStart != null) i0 = Math.max(0, Math.round((cfg.tStart - raw.t0) / 1000)); else if (L.dayStart != null) i0 = Math.max(0, L.dayStart);
-  if (cfg.tEnd != null) i1 = Math.min(n, Math.round((cfg.tEnd - raw.t0) / 1000)); else if (L.dayStop != null && L.dayStop > i0) i1 = Math.min(n, L.dayStop);
-  if (i1 - i0 < 60) { warn.push('The time window / event file does not overlap the log; using the whole log.'); i0 = 0; i1 = n; }
+  if (cfg.tEnd != null) i1 = Math.min(n, Math.round((cfg.tEnd - raw.t0) / 1000)); else if (L.dayStop != null) i1 = Math.min(n, L.dayStop);
+  if (i1 <= i0) throw new Error('The selected time window / event file does not overlap the log. Check times and UTC offsets.');
+  if (i1 - i0 < cfg.phaseLen) warn.push('Selected window is shorter than one phase.');
   const magVar = cfg.magVar != null ? cfg.magVar : 0, logMagVar = ch.MagVar ? (median(ch.MagVar.subarray(i0, i1)) || 0) : null;
 
   // polar source
@@ -242,6 +292,8 @@ function process(raw, opt) {
   for (let i = i0 + 1; i < i1 - 10; i++) {
     if (sgn[i] === cur) continue; let ok = true; for (let k = 1; k < 8; k++) if (sgn[i + k] !== sgn[i]) { ok = false; break; }
     if (!ok) continue; cur = sgn[i];
+    for (let k = Math.max(i0, i - 30); k < Math.min(i1, i + 60); k++) if (!fin(BSP[k]) || !fin(TWA[k]) || !fin(TWS[k])) { ok = false; break; }
+    if (!ok) continue;
     const bIn = win(BSP, i - 25, i - 5, mean); if (!(bIn > cfg.minBsp)) continue;
     const a0 = win(aT, i - 25, i - 8, mean), a1 = win(aT, i + 12, i + 30, mean);
     const type = a0 < 90 && a1 < 90 ? 'Tack' : a0 > 90 && a1 > 90 ? 'Gybe' : null; if (!type) continue;
@@ -260,6 +312,7 @@ function process(raw, opt) {
   for (let i = i0; i < i1; i++) if (!(BSP[i] >= cfg.minBsp) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i] < 0 || (cfg.racingOnly && !L.race[i])) bad[i] = 1;
   for (const m of mans) for (let k = Math.max(i0, m.i - cfg.manBefore); k < Math.min(i1, m.i + cfg.manAfter); k++) bad[k] = 1;
   for (let i = i0 + 1; i < i1; i++) if (L.sail[i] !== L.sail[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
+  for (let i = i0 + 1; i < i1; i++) if (L.race[i] !== L.race[i - 1] || L.leg[i] !== L.leg[i - 1] || L.testing[i] !== L.testing[i - 1] || mode[i] !== mode[i - 1] || tack[i] !== tack[i - 1]) bad[i] = 1;
   const cs = new Int32Array(n + 1); for (let i = 0; i < n; i++) cs[i + 1] = cs[i] + bad[i];
   const names = Object.keys(ch), phases = [], PL = cfg.phaseLen;
   for (let i = i0; i + PL <= i1;) {
@@ -456,6 +509,6 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;
