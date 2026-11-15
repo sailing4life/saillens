@@ -116,8 +116,9 @@ function blkLegs(c) {
   const D = A.D; if (!D.legs.length) { c.append(h('p', { class: 'muted' }, 'No legs found.')); return; }
   const ex = ['Forestay'].concat(manualKeys()).filter(hasVar), s1 = scale('BSPpol%', []), s2 = scale('ΔTWA', [6]);
   const ar = { Upwind: '↑ Up', Downwind: '↓ Down', Reaching: '→ Reach', BroadReaching: '↘ Broad' };
-  c.append(table(['Leg', 'Mode', 'Duration', 'Sails', 'Ph', 'TWS', 'BSP', 'BSP_trg%', 'BSPpol%', 'TWA', 'ΔTwaTrg', 'VMG', 'VMG%', 'Heel', 'Rudder'].concat(ex),
-    D.legs.map(l => [{ t: l.name, c: 'b' }, ar[l.mode], dur(l.dur), l.sails, l.n, f1(l.v.TWS), f1(l.v.BSP, 2), { t: f1(l.v['BSP_trg%']), s: heat(l.v['BSP_trg%'], s1) }, { t: f1(l.v['BSPpol%']), s: heat(l.v['BSPpol%'], s1) }, f1(l.v.absTWA), { t: f1(l.v['ΔTWA']), s: heat(-Math.abs(l.v['ΔTWA']) + 3, s2) }, f1(l.v.VMG, 2), { t: f1(l.v['VMG%']), s: heat(l.v['VMG%'], s1) }, f1(l.v.Heel), f1(l.v.Rudder)].concat(ex.map(k => f1(l.v[k], 2)))), 'num'));
+  const tlm = {}; SL.timeLost(D).legs.forEach(l => { tlm[l.name] = l; });
+  c.append(table(['Leg', 'Mode', 'Duration', 'Sails', 'Ph', 'TWS', 'BSP', 'BSP_trg%', 'BSPpol%', 'TWA', 'ΔTwaTrg', 'VMG', 'VMG%', 'Heel', 'Rudder'].concat(ex, ['Lost s', 'Tacks', 'Fav %']),
+    D.legs.map(l => [{ t: l.name, c: 'b' }, ar[l.mode], dur(l.dur), l.sails, l.n, f1(l.v.TWS), f1(l.v.BSP, 2), { t: f1(l.v['BSP_trg%']), s: heat(l.v['BSP_trg%'], s1) }, { t: f1(l.v['BSPpol%']), s: heat(l.v['BSPpol%'], s1) }, f1(l.v.absTWA), { t: f1(l.v['ΔTWA']), s: heat(-Math.abs(l.v['ΔTWA']) + 3, s2) }, f1(l.v.VMG, 2), { t: f1(l.v['VMG%']), s: heat(l.v['VMG%'], s1) }, f1(l.v.Heel), f1(l.v.Rudder)].concat(ex.map(k => f1(l.v[k], 2)), tlm[l.name] ? [{ t: f1(tlm[l.name].total, 0), c: 'b' }, tlm[l.name].tacks, fin(tlm[l.name].fav) ? f1(tlm[l.name].fav, 0) : '–'] : ['', '', ''])), 'num'));
 }
 function blkDist(c, mode) {
   const D = A.D, md = SL.MODES.indexOf(mode), vars = ['TWS', 'absTWA', 'BSPpol%', 'BSP_trg%', 'abs_heel', 'abs_rudder'].filter(k => D.ch[k]);

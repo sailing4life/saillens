@@ -60,6 +60,19 @@ h4{margin:10px 0 2px;font:600 11.5px/1.2 var(--font);color:var(--ink2);text-tran
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(360px,100%),1fr));gap:16px}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(400px,100%),1fr));gap:14px}
 .grid2>div,.cols>div,.cols>section{min-width:0}
+.card.hero{flex-direction:row;justify-content:space-between;align-items:center;flex-wrap:wrap;background:linear-gradient(120deg,var(--side) 0%,#16405a 100%);color:#fff;border:0}
+.card.hero h3.big{margin:0;font:600 28px/1.15 var(--disp);letter-spacing:.01em;color:#fff}
+.card.hero .muted{color:#b9cddd;font-size:13.5px}
+.card.hero button{background:transparent;color:#fff;border-color:#4b6b82}
+.card.hero button.primary{background:#4fd0e0;border-color:#4fd0e0;color:#06222a}
+.card.hero button:disabled{opacity:.5;cursor:default}
+.homegrid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:16px;align-items:start}
+ul.heads{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+ul.heads li{display:grid;grid-template-columns:12px minmax(0,1fr) auto;gap:10px;align-items:start;padding:9px 0;border-bottom:1px solid var(--grid);line-height:1.45}
+ul.heads li:last-child{border-bottom:0}
+ul.heads .dot{width:9px;height:9px;border-radius:50%;margin-top:6px;background:var(--muted)}
+ul.heads li.good .dot{background:var(--good)}ul.heads li.warn .dot{background:var(--warn)}ul.heads li.bad .dot{background:var(--bad)}
+.card ol{margin:0;padding-left:22px;display:flex;flex-direction:column;gap:6px}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:11px 14px;display:flex;flex-direction:column;gap:1px;min-width:0}
 .kpi span{font:600 10.5px/1.3 var(--font);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
@@ -124,7 +137,7 @@ body.drop::after{content:"Drop log, event, polar or season files";position:fixed
 .report h1{font:600 32px/1.1 var(--disp);margin:0}.report h2{font:600 18px/1.2 var(--disp);margin:0 0 8px;border-bottom:2px solid var(--ink);padding-bottom:4px}
 .rsec{display:flex;flex-direction:column;gap:8px}
 textarea.note{background:transparent;border:1px dashed var(--line);width:100%;resize:vertical}
-@media (max-width:900px){body{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px 10px;gap:4px}aside h6,aside .foot span{display:none}#nav{display:flex;gap:4px}aside .foot{margin:0;padding:0;flex-direction:row}.brand{padding:0 8px 0 2px}aside button.nav{width:auto;white-space:nowrap}.chartgrid,.polgrid{grid-template-columns:minmax(0,1fr)}.topbar{position:static}}
+@media (max-width:900px){body{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px 10px;gap:4px}aside h6,aside .foot span{display:none}#nav{display:flex;gap:4px}aside .foot{margin:0;padding:0;flex-direction:row}.brand{padding:0 8px 0 2px}aside button.nav{width:auto;white-space:nowrap}.chartgrid,.polgrid,.homegrid{grid-template-columns:minmax(0,1fr)}.topbar{position:static}}
 @media print{aside,.topbar,.noprint,#banner,.tabpane:not(#t-report),.tip{display:none!important}body{background:#fff;display:block}main{padding:0;max-width:none}.report{border:0;padding:0;width:auto!important}.rsec{break-inside:avoid}textarea.note{border:0}textarea.note:placeholder-shown{display:none}.scroll{overflow:visible}.card,.kpi{box-shadow:none}}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
 </style>
@@ -871,6 +884,66 @@ Object.assign(SL, { calCurrent, solve, calBsp, calWind, calAwa, calScore, events
 })();
 
 'use strict';
+/* SailLens core, part 3: time lost against target, favoured tack, starts, manoeuvre traces, wind statistics. No DOM access. */
+(() => {
+const { D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, MODES } = SL;
+
+/* spans to report on: race legs when the event file has them, otherwise the automatic legs */
+function legSpans(D) {
+  const out = [], L = D.L;
+  if (D.phases.some(p => p.race)) { let s = -1, key = ''; for (let i = D.i0; i <= D.i1; i++) { const k = i < D.i1 && L.race[i] ? 'R' + L.race[i] + 'L' + L.leg[i] : ''; if (k !== key) { if (key) out.push({ name: key, i0: s, i1: i }); s = i; key = k; } } }
+  else for (const l of D.legs) out.push({ name: l.name, i0: l.i0, i1: l.i1 });
+  return out;
+}
+/* seconds given away against the target: each second sailed at x% of target VMG (or polar speed when reaching) costs (1 - x) seconds.
+   Split into steady sailing and the 45 s around each tack or gybe. Also: how much of each leg was sailed on the favoured board. */
+function timeLost(D) {
+  const vp = D.ch['VMG%'], bsp = D.ch.BSP, inMan = new Uint8Array(D.n); for (const m of D.mans) for (let k = Math.max(D.i0, m.i - 5); k < Math.min(D.i1, m.i + 40); k++) inMan[k] = 1;
+  const legs = legSpans(D).map(s => {
+    let steady = 0, man = 0, n = 0, nUp = 0, nDn = 0; const tw = D.ch.TWD ? cmean(D.ch.TWD.subarray(s.i0, s.i1)) : NaN; let fav = 0, favN = 0;
+    for (let i = s.i0; i < s.i1; i++) { if (!(bsp[i] > 1) || !fin(vp[i])) continue; const l = 1 - Math.max(0, Math.min(130, vp[i])) / 100; n++; if (inMan[i]) man += l; else steady += l; const md = D.mode[i]; if (md === 0) nUp++; else if (md === 3) nDn++;
+      if (fin(tw) && (md === 0 || md === 3) && !inMan[i]) { const d = w180(D.ch.TWD[i] - tw); if (Math.abs(d) >= 2) { const lifted = D.tack[i] > 0 ? d > 0 : d < 0; favN++; if (md === 0 ? lifted : !lifted) fav++; } } }
+    const mode = nUp > n * 0.5 ? 'Upwind' : nDn > n * 0.5 ? 'Downwind' : 'Reaching';
+    return { name: s.name, i0: s.i0, i1: s.i1, mode, dur: s.i1 - s.i0, sailed: n, steady, man, total: steady + man, tacks: D.mans.filter(m => m.i >= s.i0 && m.i < s.i1).length, fav: favN > 60 && mode !== 'Reaching' ? fav / favN * 100 : NaN };
+  }).filter(l => l.sailed > 60);
+  return { legs, steady: legs.reduce((a, l) => a + l.steady, 0), man: legs.reduce((a, l) => a + l.man, 0), total: legs.reduce((a, l) => a + l.total, 0), sailed: legs.reduce((a, l) => a + l.sailed, 0) };
+}
+/* what happened at each start gun */
+function starts(D) {
+  const out = [], bt = D.ch['BSP_trg%'], bp = D.ch['BSPpol%'];
+  for (const e of D.L.list) { if (e.type !== 'RaceStartGun' || e.i < D.i0 + 5 || e.i >= D.i1 - 60) continue; const i = e.i, pct = k => (Math.abs(D.ch.TWA[k]) < 70 && fin(bt[k])) ? bt[k] : bp[k], at = mean([pct(i - 1), pct(i), pct(i + 1)]);
+    let t95 = NaN; for (let k = i; k < Math.min(D.i1 - 5, i + 180); k++) { let ok = true; for (let j = 0; j < 5; j++) if (!(pct(k + j) >= 95)) { ok = false; break; } if (ok) { t95 = k - i; break; } }
+    let d60 = 0; if (D.ch.SOG) for (let k = i; k < i + 60; k++) if (fin(D.ch.SOG[k])) d60 += D.ch.SOG[k] * 0.5144;
+    const m = (e.comments || '').match(/(-?[\d.]+)\s*below line/i);
+    out.push({ i, race: e.attr, bsp: mean(D.ch.BSP.subarray(i - 1, i + 2)), pct: at, twa: mean(D.ch.TWA.subarray(i - 1, i + 2)), tws: mean(D.ch.TWS.subarray(i - 5, i + 5)), t95, d60, below: m ? +m[1] : NaN, note: e.comments || '', pre: mean(Array.from({ length: 20 }, (v, j) => pct(i - 20 + j))), post: mean(Array.from({ length: 30 }, (v, j) => pct(i + j))) }); }
+  return out;
+}
+/* each tack or gybe as a trace from 20 s before to 60 s after: BSP relative to the speed going in, and VMG along the wind axis relative to steady VMG */
+function manTraces(D) {
+  const ch = D.ch, out = [];
+  for (const m of D.mans) { const i = m.i; if (i - 30 < D.i0 || i + 70 > D.i1 || !(m.bspIn > 2)) continue; const bsp = [], vmg = []; let v = null;
+    if (ch.COG && ch.SOG && ch.TWD && fin(m.loss) && fin(m.vmgRef) && m.vmgRef > 1) { const tw = cmean([cmean(ch.TWD.subarray(i - 60 < D.i0 ? D.i0 : i - 60, i - 10)), cmean(ch.TWD.subarray(i + 30, Math.min(D.i1, i + 60)))]), s = m.type === 'Tack' ? 1 : -1; v = k => s * ch.SOG[k] * Math.cos((ch.COG[k] - (tw + D.magVar)) * D2R) / m.vmgRef * 100; }
+    for (let k = i - 20; k <= i + 60; k++) { bsp.push(ch.BSP[k] / m.bspIn * 100); vmg.push(v ? v(k) : NaN); }
+    out.push({ m, bsp, vmg }); }
+  return out;
+}
+/* the day's wind: trend, oscillation, gustiness */
+function windStats(D) {
+  const tw = D.ch.TWD, ws = D.ch.TWS; if (!tw) return null; const st = 10, t = [], d = [], s = [], m0 = cmean(tw.subarray(D.i0, D.i1));
+  for (let i = D.i0 + 30; i < D.i1 - 30; i += st) { if (!(D.ch.BSP[i] > 1)) continue; const a = cmean(tw.subarray(i - 30, i + 30)); if (!fin(a)) continue; t.push(i); d.push(w180(a - m0)); s.push(mean(ws.subarray(i - 30, i + 30))); }
+  if (t.length < 30) return null;
+  // linear trend in degrees per hour
+  const mt = mean(t), md = mean(d); let sxx = 0, sxy = 0; for (let k = 0; k < t.length; k++) { sxx += (t[k] - mt) ** 2; sxy += (t[k] - mt) * (d[k] - md); } const slope = sxx ? sxy / sxx * 3600 : 0;
+  // oscillation: detrend with a 20-minute running mean, then the first clear peak of the autocorrelation
+  const W = Math.round(600 / st), det = d.map((v, k) => v - mean(d.slice(Math.max(0, k - W), Math.min(d.length, k + W + 1)))), v0 = mean(det.map(x => x * x)); let per = NaN, best = 0.2;
+  if (v0 > 0) { const ac = lag => { let a = 0, n = 0; for (let k = 0; k + lag < det.length; k++) { a += det[k] * det[k + lag]; n++; } return n ? a / n / v0 : 0; }; let prev = ac(Math.round(90 / st)), rising = false; for (let lag = Math.round(120 / st); lag < Math.min(det.length / 2, Math.round(2400 / st)); lag++) { const c = ac(lag); if (c > prev) rising = true; else if (rising && prev > best) { per = (lag - 1) * st; best = prev; break; } prev = c; } }
+  const tws = Array.from(ws.subarray(D.i0, D.i1)).filter((x, k) => fin(x) && D.ch.BSP[D.i0 + k] > 1);
+  return { t, d, s, mean: m0, slope, period: per, acPeak: best, amp: sd(det) * 1.4, lo: quant(d, 0.05), hi: quant(d, 0.95), twsMed: median(tws), gust: quant(tws, 0.95) / (median(tws) || 1), lull: quant(tws, 0.05) / (median(tws) || 1), twsSd: sd(tws), first: w360(m0 + mean(d.slice(0, Math.ceil(d.length / 6)))), last: w360(m0 + mean(d.slice(-Math.ceil(d.length / 6)))) };
+}
+Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
+})();
+
+'use strict';
 /* SailLens UI infrastructure: DOM helpers, canvas plotting, colour scales, reusable blocks. */
 const $ = (s, r = document) => r.querySelector(s);
 function h(tag, attrs, ...kids) { const e = document.createElement(tag); for (const k in attrs || {}) { const v = attrs[k]; if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'html') e.innerHTML = v; else if (k === 'style') e.style.cssText = v; else if (v !== false && v != null) e.setAttribute(k, v); } for (const c of kids.flat(Infinity)) if (c != null && c !== false) e.append(c); return e; }
@@ -988,8 +1061,9 @@ function blkLegs(c) {
   const D = A.D; if (!D.legs.length) { c.append(h('p', { class: 'muted' }, 'No legs found.')); return; }
   const ex = ['Forestay'].concat(manualKeys()).filter(hasVar), s1 = scale('BSPpol%', []), s2 = scale('ΔTWA', [6]);
   const ar = { Upwind: '↑ Up', Downwind: '↓ Down', Reaching: '→ Reach', BroadReaching: '↘ Broad' };
-  c.append(table(['Leg', 'Mode', 'Duration', 'Sails', 'Ph', 'TWS', 'BSP', 'BSP_trg%', 'BSPpol%', 'TWA', 'ΔTwaTrg', 'VMG', 'VMG%', 'Heel', 'Rudder'].concat(ex),
-    D.legs.map(l => [{ t: l.name, c: 'b' }, ar[l.mode], dur(l.dur), l.sails, l.n, f1(l.v.TWS), f1(l.v.BSP, 2), { t: f1(l.v['BSP_trg%']), s: heat(l.v['BSP_trg%'], s1) }, { t: f1(l.v['BSPpol%']), s: heat(l.v['BSPpol%'], s1) }, f1(l.v.absTWA), { t: f1(l.v['ΔTWA']), s: heat(-Math.abs(l.v['ΔTWA']) + 3, s2) }, f1(l.v.VMG, 2), { t: f1(l.v['VMG%']), s: heat(l.v['VMG%'], s1) }, f1(l.v.Heel), f1(l.v.Rudder)].concat(ex.map(k => f1(l.v[k], 2)))), 'num'));
+  const tlm = {}; SL.timeLost(D).legs.forEach(l => { tlm[l.name] = l; });
+  c.append(table(['Leg', 'Mode', 'Duration', 'Sails', 'Ph', 'TWS', 'BSP', 'BSP_trg%', 'BSPpol%', 'TWA', 'ΔTwaTrg', 'VMG', 'VMG%', 'Heel', 'Rudder'].concat(ex, ['Lost s', 'Tacks', 'Fav %']),
+    D.legs.map(l => [{ t: l.name, c: 'b' }, ar[l.mode], dur(l.dur), l.sails, l.n, f1(l.v.TWS), f1(l.v.BSP, 2), { t: f1(l.v['BSP_trg%']), s: heat(l.v['BSP_trg%'], s1) }, { t: f1(l.v['BSPpol%']), s: heat(l.v['BSPpol%'], s1) }, f1(l.v.absTWA), { t: f1(l.v['ΔTWA']), s: heat(-Math.abs(l.v['ΔTWA']) + 3, s2) }, f1(l.v.VMG, 2), { t: f1(l.v['VMG%']), s: heat(l.v['VMG%'], s1) }, f1(l.v.Heel), f1(l.v.Rudder)].concat(ex.map(k => f1(l.v[k], 2)), tlm[l.name] ? [{ t: f1(tlm[l.name].total, 0), c: 'b' }, tlm[l.name].tacks, fin(tlm[l.name].fav) ? f1(tlm[l.name].fav, 0) : '–'] : ['', '', ''])), 'num'));
 }
 function blkDist(c, mode) {
   const D = A.D, md = SL.MODES.indexOf(mode), vars = ['TWS', 'absTWA', 'BSPpol%', 'BSP_trg%', 'abs_heel', 'abs_rudder'].filter(k => D.ch[k]);
@@ -1090,12 +1164,12 @@ function blkCal(c, off) {
 'use strict';
 /* SailLens tabs (part 1): shell, loading, setup, events, summary, chart, phases, performance, XY, polar. */
 const R = {};
-const TABS = [['Day', [['setup', 'Setup', 'M3 4h10M3 8h10M3 12h6'], ['events', 'Events', 'M4 2v12M4 3h8l-2 3 2 3H4'], ['summary', 'Summary', 'M2 13h12M4 13V8M8 13V3M12 13V6'], ['chart', 'Chart & replay', 'M2 12l4-7 3 4 2-3 3 6z'], ['phases', 'Phases', 'M2 4h12M2 8h12M2 12h12']]],
-  ['Analysis', [['perf', 'Performance', 'M2 13l4-5 3 2 5-7M11 3h3v3'], ['xy', 'XY & correlation', 'M2 2v12h12M5 10h.01M8 7h.01M11 5h.01M7 11h.01'], ['polar', 'Polar', 'M3 2v12M3 14a6 6 0 0 0 0-12a9 9 0 0 1 9 6 9 9 0 0 1-9 6'], ['sails', 'Sail chart', 'M2 2v12h12M2 9c4 0 4-5 12-5M6 14c0-4 4-6 8-6'], ['cal', 'Calibration', 'M8 2v3M8 11v3M2 8h3M11 8h3M8 8l2-2'], ['ml', 'ML insights', 'M8 2l1.5 4L14 8l-4.5 2L8 14l-1.5-4L2 8l4.5-2z']]],
+const TABS = [['', [['home', 'Home', 'M2 8l6-5 6 5M4 7v6h8V7']]], ['Day', [['setup', 'Setup', 'M3 4h10M3 8h10M3 12h6'], ['events', 'Events', 'M4 2v12M4 3h8l-2 3 2 3H4'], ['summary', 'Summary', 'M2 13h12M4 13V8M8 13V3M12 13V6'], ['chart', 'Chart & replay', 'M2 12l4-7 3 4 2-3 3 6z'], ['phases', 'Phases', 'M2 4h12M2 8h12M2 12h12']]],
+  ['Analysis', [['perf', 'Performance', 'M2 13l4-5 3 2 5-7M11 3h3v3'], ['xy', 'XY & correlation', 'M2 2v12h12M5 10h.01M8 7h.01M11 5h.01M7 11h.01'], ['polar', 'Polar', 'M3 2v12M3 14a6 6 0 0 0 0-12a9 9 0 0 1 9 6 9 9 0 0 1-9 6'], ['sails', 'Sail chart', 'M2 2v12h12M2 9c4 0 4-5 12-5M6 14c0-4 4-6 8-6'], ['cal', 'Calibration', 'M8 2v3M8 11v3M2 8h3M11 8h3M8 8l2-2'], ['man', 'Manoeuvres', 'M2 12c3 0 3-8 6-8s3 8 6 8'], ['wind', 'Wind', 'M2 6h8a2 2 0 1 0-2-2M2 10h10a2 2 0 1 1-2 2'], ['ml', 'ML insights', 'M8 2l1.5 4L14 8l-4.5 2L8 14l-1.5-4L2 8l4.5-2z']]],
   ['Season', [['season', 'Season database', 'M3 4c0-1 2-2 5-2s5 1 5 2v8c0 1-2 2-5 2s-5-1-5-2zM3 4c0 1 2 2 5 2s5-1 5-2M3 8c0 1 2 2 5 2s5-1 5-2']]],
   ['Output', [['report', 'Report', 'M4 2h6l3 3v9H4zM10 2v3h3M6 8h5M6 11h5']]]];
 const TITLE = Object.fromEntries(TABS.flatMap(g => g[1].map(t => [t[0], t[1]])));
-const DAYONLY = new Set(['summary', 'chart', 'events', 'report']), ANY = new Set(['setup', 'season']);
+const DAYONLY = new Set(['summary', 'chart', 'events', 'report', 'wind']), ANY = new Set(['setup', 'season', 'home']);
 const pane = id => { const e = $('#t-' + id); e.textContent = ''; return e; };
 const card = (title, ...kids) => h('section', { class: 'card' }, title ? h('h3', {}, title) : null, kids);
 const mlTag = () => h('span', { class: 'tag' }, 'model');
@@ -1235,7 +1309,8 @@ R.summary = () => {
   s2.append(bar(filterBar(() => R.summary()), field('Average of', sel('bin-var', varList(), st.binVar, v => { st.binVar = v; rb(); }))), b2);
   const s3 = card('Leg averages'); blkLegs(s3); s3.append(bar(h('button', { onclick: () => dl('legs.csv', legsCsv()) }, 'Export legs CSV')));
   const s4 = card('Data distribution'), b4 = h('div'); s4.append(bar(field('Mode', sel('dist-mode', SL.MODES, st.dist, v => { st.dist = v; b4.textContent = ''; blkDist(b4, v); }))), b4);
-  c.append(s1, s2, s3, s4); rb(); blkDist(b4, st.dist); A.scope = sv;
+  const sts = SL.starts(D), s5 = sts.length ? card('Starts', table(['Race', 'Time', 'TWS', 'BSP at gun', '% of target', 'Last 20 s before', 'First 30 s after', 'Up to speed', 'First minute', 'Line (from Expedition)'], sts.map(x => { const row = [{ t: 'R' + x.race, c: 'b' }, tstr(iT(x.i)), f1(x.tws), f1(x.bsp, 2), { t: f1(x.pct, 0) + '%', c: 'b verdict ' + (x.pct >= 90 ? 'good' : 'warn') }, f1(x.pre, 0) + '%', f1(x.post, 0) + '%', fin(x.t95) ? x.t95 + ' s' : 'over 3 min', f1(x.d60, 0) + ' m', x.note]; row._attrs = { class: 'click', onclick: () => { A.cur = x.i; show('chart'); } }; return row; }), 'num'), h('p', { class: 'muted' }, '% of target is boat speed against target speed when close-hauled, against the polar otherwise. Up to speed: seconds after the gun until the boat holds 95% for five seconds.')) : null;
+  c.append(s1, s5, s2, s3, s4); rb(); blkDist(b4, st.dist); A.scope = sv;
 };
 const csvRow = a => a.map(x => /[",\n]/.test(String(x)) ? '"' + String(x).replace(/"/g, '""') + '"' : x).join(',');
 function legsCsv() { const sv = A.scope; A.scope = 'day'; const ks = varList(); A.scope = sv; return [csvRow(['Leg', 'Mode', 'Duration_s', 'Sails', 'Phases'].concat(ks))].concat(A.D.legs.map(l => csvRow([l.name, l.mode, l.dur, l.sails, l.n].concat(ks.map(k => fin(l.v[k]) ? +l.v[k].toFixed(3) : ''))))).join('\r\n'); }
@@ -1479,15 +1554,9 @@ R.ml = () => {
   const lt = SL.learnTargets(phases()), s4 = card('Targets learned from your best sailing');
   if (lt.length) s4.append(h('p', { class: 'muted' }, 'For each wind band: the median angle and speed of the top quarter of phases by VMG, next to the current target.'), table(['Mode', 'TWS', 'Phases', 'Best TWA', 'Target TWA', 'Δ', 'Best BSP', 'Target BSP', 'Δ', '|Heel|'], lt.map(r => [r.mode, { t: r.tws, c: 'b' }, r.n, f1(r.twa), f1(r.tTwa), { t: f1(r.twa - r.tTwa), c: 'b' }, f1(r.bsp, 2), f1(r.tBsp, 2), { t: f1(r.bsp - r.tBsp, 2), c: 'b' }, f1(r.heel)]), 'num'), bar(h('button', { onclick: () => dl('learned_polar.txt', SL.polarText(SL.learnPolar(phases(), 0.7))) }, 'Export learned polar (Expedition format)')), h('p', { class: 'muted' }, season() ? 'Based on every day in the season database that matches the filters.' : 'One day is thin evidence for changing a polar. Add days to the season database and look again in Season mode.'));
   else s4.append(h('p', { class: 'muted' }, 'Needs at least 10 upwind or downwind phases in a 2-knot wind band.'));
-  const mans = allMans().filter(x => fin(x.loss)), s5 = card('Manoeuvre losses'); c.append(s4, s5);
-  if (mans.length) { const avg = t => SL.median(mans.filter(x => x.type === t).map(x => x.loss)); s5.append(h('p', {}, `Median loss per tack ${f1(avg('Tack'), 0)} m, per gybe ${f1(avg('Gybe'), 0)} m of distance made good, compared with holding steady VMG. `, h('span', { class: 'muted' }, 'Measured from SOG and COG along the wind axis, 5 s before to 40 s after. A wind shift or puff during the turn moves a single figure by several metres, so trust the median and the trend, not one tack.')));
-    const cv = h('canvas'); s5.append(legend([[css('--s1'), 'Tack'], [css('--s2'), 'Gybe']]), h('div', { style: 'max-width:760px' }, cv)); const xs = mans.map(x => x.rate), ys = mans.map(x => x.loss); const p = plot(cv, { xr: [0, Math.max(...xs) * 1.1], yr: [Math.min(0, SL.quant(ys, 0.02)) - 5, SL.quant(ys, 0.98) + 5], xl: 'peak turn rate (°/s)', yl: 'loss (m)', h: 260 }); p.zero(0);
-    for (const t of ['Tack', 'Gybe']) { const g = mans.filter(x => x.type === t), col = css(t === 'Tack' ? '--s1' : '--s2'); g.forEach(x => p.dot(x.rate, x.loss, col, `<b>${x.lab}</b> ${t} to ${x.to.toLowerCase()}<br>loss ${f1(x.loss, 0)} m · turn ${f1(x.rate)}°/s · TWS ${f1(x.tws)}<br>BSP in ${f1(x.bspIn)} → min ${f1(x.bspMin)}`, x, false, 4)); if (g.length >= 6) p.line(SL.loess(g.map(x => x.rate), g.map(x => x.loss), 0.9, 20), col, 2); }
-    s5.append(table(['Time', 'Type', 'To', 'TWS', 'BSP in', 'BSP min', 'Turn °/s', 'Angle', 'Loss m'], mans.slice().sort((a, b) => b.loss - a.loss).slice(0, 60).map(x => { const r = [x.lab, x.type, x.to, f1(x.tws), f1(x.bspIn), f1(x.bspMin), f1(x.rate), f1(x.angle, 0), { t: f1(x.loss, 0), c: 'b' }]; r._attrs = go(x); return r; }), 'num')); }
-  else s5.append(h('p', { class: 'muted' }, 'Needs COG, SOG and TWD in the log.'));
-  if (!season()) { const D = A.D, ws = SL.windShifts(D), gl = SL.glitches(D).filter(x => x.n);
-    c.append(h('div', { class: 'cols' }, card('Wind shifts (' + ws.length + ')', ws.length ? table(['Time', 'From', 'To', 'Shift'], ws.map(w => { const r = [tstr(iT(w.i)), f1(w.from, 0) + '°', f1(w.to, 0) + '°', { t: (w.d > 0 ? 'right ' : 'left ') + f1(Math.abs(w.d), 0) + '°', c: 'b' }]; r._attrs = go(w); return r; }), 'num') : h('p', { class: 'muted' }, 'No shift of 8° or more between consecutive 3-minute averages.')),
-      card('Sensor spikes', gl.length ? table(['Channel', 'Single-sample spikes'], gl.map(x => [x.k, x.n]), 'num') : h('p', {}, 'No single-sample spikes found in BSP, wind, heading, heel or rudder.')))); }
+  c.append(s4);
+  if (!season()) { const gl = SL.glitches(A.D).filter(x => x.n); c.append(card('Sensor spikes', gl.length ? table(['Channel', 'Single-sample spikes'], gl.map(x => [x.k, x.n]), 'num') : h('p', {}, 'No single-sample spikes found in BSP, wind, heading, heel or rudder.'))); }
+  c.append(h('p', { class: 'muted' }, 'Manoeuvre losses and wind shifts have their own tabs: Manoeuvres and Wind.'));
 };
 
 /* ---------------- Season database ---------------- */
@@ -1575,7 +1644,7 @@ R.report = () => withScope('day', () => {
 async function boot() {
   initTips();
   const nav = $('#nav'), panes = $('#panes');
-  for (const [g, items] of TABS) { nav.append(h('h6', {}, g)); for (const [id, lab, d] of items) { const b = h('button', { class: 'nav', type: 'button', 'data-tab': id, onclick: () => show(id) }); b.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`; b.append(lab); nav.append(b); panes.append(h('div', { id: 't-' + id, class: 'tabpane', hidden: '' })); } }
+  for (const [g, items] of TABS) { if (g) nav.append(h('h6', {}, g)); for (const [id, lab, d] of items) { const b = h('button', { class: 'nav', type: 'button', 'data-tab': id, onclick: () => show(id) }); b.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`; b.append(lab); nav.append(b); panes.append(h('div', { id: 't-' + id, class: 'tabpane', hidden: '' })); } }
   document.querySelectorAll('#scope button').forEach(b => b.addEventListener('click', () => { A.scope = b.dataset.scope; show(A.tab); }));
   const themes = ['auto', 'light', 'dark']; let th = 'auto'; try { th = localStorage.getItem('saillens-theme') || 'auto'; } catch (e) { /* storage unavailable */ }
   const setTheme = () => { if (th === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', th); $('#theme').textContent = 'Theme: ' + th; };
@@ -1588,7 +1657,7 @@ async function boot() {
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => show(A.tab));
   A.chart = store.get('saillens-chart'); if (!A.chart || A.chart.type !== 'sailchart') A.chart = SL.newChart(); A.chart.shapes = A.chart.shapes || []; A.chart.cells = A.chart.cells || {};
   A.S = SL.newSeason(); A.sOff = new Set(); const saved = await idb.get('season'); if (saved && saved.app === 'SailLens' && Array.isArray(saved.days)) A.S = saved; seasonChanged(false); if (A.S.days.length) A.sSaved = 'Loaded from this browser.';
-  loadDemo(); show('summary');
+  loadDemo(); show('home');
 }
 document.addEventListener('DOMContentLoaded', boot);
 
@@ -1698,6 +1767,115 @@ function blkCalib(c, r) {
       h('button', { onclick: () => dl((cb.name || 'calibration').replace(/[^\w-]+/g, '_') + '.calibration.json', JSON.stringify(cb, null, 1)) }, 'Save calibration file'),
       on ? h('button', { onclick: () => dl((A.files.log || 'log').replace(/\.\w+$/, '') + '.postcal.csv', logCsv()) }, 'Export recalibrated log (CSV)') : null)));
 }
+
+'use strict';
+/* SailLens tabs (part 4): home dashboard, manoeuvres, wind. */
+const mmss = s => (s < 0 ? '−' : '') + Math.floor(Math.abs(s) / 60) + ':' + pad2(Math.floor(Math.abs(s)) % 60);
+const goTab = (tab, lab) => h('button', { class: 'mini', onclick: () => show(tab) }, lab || 'Open');
+
+/* the day in a handful of sentences, each pointing at the tab that backs it up */
+function headlines() {
+  const D = A.D, out = [], add = (tone, text, tab, lab) => out.push({ tone, text, tab, lab });
+  const tl = SL.timeLost(D), racing = D.phases.some(p => p.race);
+  if (tl.sailed > 300) { const worst = tl.legs.reduce((a, l) => l.total > a.total ? l : a, tl.legs[0]), share = tl.total / tl.sailed;
+    add(share > 0.04 ? 'warn' : share > 0.015 ? '' : 'good', tl.total > 0 ? `Against target you gave away ${mmss(tl.total)} over ${dur(tl.sailed)} of ${racing ? 'racing' : 'sailing'}: ${mmss(tl.steady)} in steady sailing and ${mmss(tl.man)} around tacks and gybes.` + (worst && worst.total > 10 ? ` Most of it on ${worst.name} (${worst.mode.toLowerCase()}): ${mmss(worst.total)}.` : '') : `You sailed ${mmss(-tl.total)} ahead of target over ${dur(tl.sailed)}. Either a very good day or targets that are too easy.`); }
+  const av = (md, k, tk) => { const g = D.phases.filter(p => p.mode === md && (!tk || p.tack === tk)); return { m: SL.mean(g.map(p => p.v[k])), n: g.length }; }, up = av('Upwind', 'VMG%'), dn = av('Downwind', 'VMG%');
+  if (up.n >= 5 || dn.n >= 5) add(Math.min(up.n >= 5 ? up.m : 200, dn.n >= 5 ? dn.m : 200) >= 97 ? 'good' : 'warn', [up.n >= 5 ? `Upwind you averaged ${f1(up.m)}% of target VMG (${up.n} phases)` : '', dn.n >= 5 ? `downwind ${f1(dn.m)}% (${dn.n} phases)` : ''].filter(Boolean).join(', ') + '.', 'perf', 'Performance');
+  for (const md of ['Upwind', 'Downwind']) { const p = av(md, 'VMG%', 'Port'), s = av(md, 'VMG%', 'Stbd'); if (p.n >= 8 && s.n >= 8 && Math.abs(p.m - s.m) >= 1.5) add('warn', `${md}, ${p.m < s.m ? 'port' : 'starboard'} tack was ${f1(Math.abs(p.m - s.m))} points slower than ${p.m < s.m ? 'starboard' : 'port'} (${f1(Math.min(p.m, s.m))}% against ${f1(Math.max(p.m, s.m))}%). Check the calibration before changing the trim.`, 'perf', 'Performance'); }
+  for (const ty of ['Tack', 'Gybe']) { const g = D.mans.filter(m => m.type === ty && fin(m.loss)); if (g.length >= 3) add('', `${ty === 'Tack' ? 'Tacks' : 'Gybes'} cost a median ${f1(SL.median(g.map(m => m.loss)), 0)} m (${g.length}); the best ${f1(Math.min(...g.map(m => m.loss)), 0)} m, the worst ${f1(Math.max(...g.map(m => m.loss)), 0)} m.`, 'man', 'Manoeuvres'); }
+  for (const s of SL.starts(D)) add(s.pct >= 90 ? 'good' : 'warn', `Start ${s.race ? 'R' + s.race : ''}: ${f1(s.pct, 0)}% of target speed at the gun` + (fin(s.t95) ? (s.t95 > 3 ? `, up to speed ${s.t95} s later.` : ', already at speed.') : ', and not up to 95% within three minutes.'), 'summary', 'Summary');
+  const r = withScope('day', () => calAll(D.phases, D.magVar)), fnd = calFindings(r, D.logMagVar, D.magVar).filter(f => f[0] === 'warn' || f[0] === 'bad');
+  if (fnd.length) fnd.slice(0, 2).forEach(f => add(f[0], 'Calibration: ' + f[1], 'cal', 'Calibration')); else add('good', `Calibration looks consistent (score ${r.score}/100).`, 'cal', 'Calibration');
+  if (!SL.chartEmpty(A.chart)) { const st = SL.chartStats(A.chart, D.phases.filter(p => SL.sailTokens(p.sails).length)), tot = st.on + st.off; if (tot >= 10) add(st.on / tot > 0.8 ? 'good' : '', `${f1(st.on / tot * 100, 0)}% of phases were sailed with the sails the crossover chart allows` + (st.rows[0] ? `; most often off chart: ${st.rows[0].used} at ${st.rows[0].tws} kn / ${st.rows[0].twa}° where the chart says ${st.rows[0].chart}.` : '.'), 'sails', 'Sail chart'); }
+  const w = SL.windStats(D); if (w) add('', `Wind ${f1(w.first, 0)}° to ${f1(w.last, 0)}°` + (Math.abs(w.slope) >= 2 ? ` (${w.slope > 0 ? 'veering' : 'backing'} ${f1(Math.abs(w.slope), 0)}°/h)` : ' (no steady trend)') + `, swinging about ±${f1(w.amp, 0)}°` + (fin(w.period) ? ` roughly every ${f1(w.period / 60, 0)} min` : '') + `; median ${f1(w.twsMed)} kn with gusts ${f1((w.gust - 1) * 100, 0)}% above that.`, 'wind', 'Wind');
+  const m = withScope('day', () => mlModel('Upwind')); if (!m.err && m.cvR2 > 0.08) { const ins = mlInsights(m); if (ins[0]) add('', 'Model: ' + ins[0], 'ml', 'ML insights'); }
+  if (A.S && A.S.days.length >= 2 && A.SP.length) { const su = SL.mean(A.SP.filter(p => p.mode === 'Upwind').map(p => p.v['VMG%'])); if (fin(su) && up.n >= 5) add(up.m >= su ? 'good' : '', `Upwind VMG% today ${f1(up.m)} against a season average of ${f1(su)} over ${A.S.days.length} days.`, 'season', 'Season'); }
+  return { out, tl, r, up, dn };
+}
+function blkTimeLost(c, tl) {
+  if (!tl.legs.length) { c.append(h('p', { class: 'muted' }, 'No legs to report yet.')); return; }
+  const cv = h('canvas'); c.append(legend([[css('--s1'), 'steady sailing'], [css('--s2'), 'around tacks and gybes']]), h('div', {}, cv));
+  const L = tl.legs, lo = Math.min(0, ...L.map(l => Math.min(l.steady, 0) + Math.min(l.man, 0))), hi = Math.max(10, ...L.map(l => Math.max(l.steady, 0) + Math.max(l.man, 0)));
+  const p = plot(cv, { xr: [lo * 1.08, hi * 1.08], yr: [0, L.length], h: 28 * L.length + 44, pl: 78, xl: 'seconds given away against target (left of zero = ahead of target)' }), x = p.c;
+  x.fillStyle = css('--surface'); x.fillRect(0, 0, p.pl - 1, p.H - p.pb); x.strokeStyle = css('--ink2'); x.beginPath(); x.moveTo(p.X(0), p.pt); x.lineTo(p.X(0), p.H - p.pb); x.stroke();
+  L.forEach((l, i) => { const y = p.Y(L.length - i) + 5, hh = p.Y(L.length - i - 1) - y - 5; let pos = 0, neg = 0; for (const [v, col, lab] of [[l.steady, css('--s1'), 'steady sailing'], [l.man, css('--s2'), 'tacks and gybes']]) { if (!v) continue; const a = v > 0 ? pos : neg, b = a + v; if (v > 0) pos = b; else neg = b; const x0 = p.X(Math.min(a, b)), x1 = p.X(Math.max(a, b)); x.fillStyle = col; x.beginPath(); x.roundRect(x0 + 1, y, Math.max(1, x1 - x0 - 2), hh, 3); x.fill(); cv._hits.push([(x0 + x1) / 2, y + hh / 2, `<b>${l.name}</b> ${l.mode}<br>${lab}: ${f1(v, 0)} s over ${dur(l.dur)}`, { i: l.i0 }]); }
+    x.fillStyle = css('--ink'); x.font = '600 11px ' + css('--font'); x.textAlign = 'right'; x.textBaseline = 'middle'; x.fillText(l.name, p.pl - 8, y + hh / 2); x.font = '11px ' + css('--font'); x.textAlign = 'left'; x.fillText(f1(l.total, 0) + ' s', p.X(Math.max(pos, 0)) + 6, y + hh / 2); });
+}
+
+/* ---------------- Home ---------------- */
+R.home = () => {
+  const c = pane('home'), D = A.D, hasS = A.S && A.S.days.length > 0;
+  if (!D) { c.append(card('Start here', h('p', {}, 'SailLens turns a day\'s log into phases, performance against target, calibration checks and a season database. Everything runs in this browser; no file leaves the computer.'),
+      h('ol', {}, h('li', {}, 'Load the log, polar and event file on ', goTab('setup', 'Setup'), '.'), h('li', {}, 'Mark sail changes, starts and marks on ', goTab('events', 'Events'), ' if the event file is missing them.'), h('li', {}, 'Read this page, then add the day to the ', goTab('season', 'Season database'), '.')),
+      bar(h('button', { class: 'primary', onclick: () => show('setup') }, 'Load files'), h('button', { onclick: () => { loadDemo(); show('home'); } }, 'Look around with example data'))));
+    if (hasS) c.append(card('Season', h('p', {}, `${A.S.name}: ${A.S.days.length} days, ${A.SP.length} phases in the season database.`), bar(goTab('season', 'Open the season'))));
+    return; }
+  const m = meta(), H = headlines(), tl = H.tl, tk = D.mans.filter(x => x.type === 'Tack' && fin(x.loss)), cls = v => !fin(v) ? '' : v >= 98 ? 'good' : v >= 94 ? '' : 'warn';
+  const chartSt = SL.chartEmpty(A.chart) ? null : SL.chartStats(A.chart, D.phases.filter(p => SL.sailTokens(p.sails).length));
+  c.append(h('section', { class: 'card hero' }, h('div', {}, h('h3', { class: 'big' }, [m.boat, dstr(D.sum.t0).slice(0, 10)].join(' · ')), h('p', { class: 'muted' }, [m.desc, m.location, m.daytype, `${f1(D.sum.TWS.avg)} kn from ${D.sum.TWD ? f1(D.sum.TWD.avg, 0) + '°' : '–'}`, dur(D.sum.sailing) + ' sailing'].filter(Boolean).join(' · ') + (A.demo ? ' · example data' : ''))),
+    bar(h('button', { class: 'primary', disabled: A.demo ? '' : null, onclick: () => { addDay(); show('home'); } }, hasS && A.S.days.some(d => d.date === dstr(D.sum.t0).slice(0, 10)) ? 'Update this day in the season' : 'Add this day to the season'), h('button', { onclick: () => show('report') }, 'Build the report'))));
+  c.append(h('div', { class: 'kpis' }, kpi('Given away vs target', mmss(tl.total), '', tl.sailed ? `${f1(tl.total / tl.sailed * 100)}% of ${dur(tl.sailed)}` : '', tl.sailed && tl.total / tl.sailed > 0.04 ? 'warn' : ''), kpi('Upwind VMG%', f1(H.up.m), '%', H.up.n + ' phases', cls(H.up.m)), kpi('Downwind VMG%', f1(H.dn.m), '%', H.dn.n + ' phases', cls(H.dn.m)),
+    kpi('Tack loss', tk.length ? f1(SL.median(tk.map(x => x.loss)), 0) : '–', tk.length ? 'm' : '', tk.length ? 'median of ' + tk.length : 'no tacks measured'), kpi('Calibration', H.r.score, '/100', '', H.r.score >= 85 ? 'good' : H.r.score >= 65 ? 'warn' : 'bad'),
+    chartSt && chartSt.on + chartSt.off ? kpi('On the sail chart', f1(chartSt.on / (chartSt.on + chartSt.off) * 100, 0), '%', (chartSt.on + chartSt.off) + ' phases') : kpi('Phases', D.phases.length, '', D.cfg.phaseLen + ' s each')));
+  const mapCv = h('canvas'), tlBox = h('div');
+  c.append(h('div', { class: 'homegrid' },
+    card('What the day says', h('ul', { class: 'heads' }, H.out.map(x => h('li', { class: x.tone }, h('span', { class: 'dot' }), h('span', {}, x.text), x.tab ? goTab(x.tab, x.lab) : null))), h('p', { class: 'muted' }, 'Written from the numbers on the other tabs; each line opens the tab that backs it up.')),
+    card('Track, coloured by VMG%', h('div', {}, mapCv), bar(goTab('chart', 'Open chart and replay')))),
+    card('Where the time went', h('p', { class: 'muted' }, 'Every second sailed at 96% of target VMG costs 0.04 s. Summed per leg and split between steady sailing and the 45 seconds around each tack or gybe.'), tlBox));
+  drawMap(mapCv, { v: 'VMG%', h: 380, barbs: true });
+  blkTimeLost(tlBox, tl);
+  tlBox.append(table(['Leg', 'Mode', 'Duration', 'Steady s', 'Manoeuvres s', 'Total s', '% of leg', 'Tacks / gybes', 'Favoured board %'], tl.legs.map(l => { const row = [{ t: l.name, c: 'b' }, l.mode, dur(l.dur), f1(l.steady, 0), f1(l.man, 0), { t: f1(l.total, 0), c: 'b' }, f1(l.total / l.sailed * 100), l.tacks, fin(l.fav) ? f1(l.fav, 0) : '–']; row._attrs = { class: 'click', onclick: () => { A.cur = l.i0; show('chart'); } }; return row; }), 'num'),
+    h('p', { class: 'muted' }, 'Favoured board: share of the leg sailed on the lifted tack upwind, or the headed gybe downwind, judged against the leg\'s own mean wind direction (shifts under 2° ignored). Tack-to-tack TWD calibration error leaks into this figure.'));
+};
+
+/* ---------------- Manoeuvres ---------------- */
+R.man = () => {
+  const c = pane('man'), st = A.mnst = A.mnst || { type: 'Tack' }, all = allMans().filter(x => x.type === st.type), mans = all.filter(x => fin(x.loss)), go = x => x.i != null ? { class: 'click', onclick: () => { A.cur = x.i; show('chart'); } } : {};
+  c.append(bar(field('Manoeuvre', sel('mn-type', ['Tack', 'Gybe'], st.type, v => { st.type = v; R.man(); })), season() ? filterBar(() => R.man()).slice(0, 1) : null));
+  if (!mans.length) { c.append(card(null, h('p', { class: 'muted' }, all.length ? 'These manoeuvres have no measured loss: that needs COG, SOG and TWD, and steady sailing before and after.' : `No ${st.type.toLowerCase()}s found.`))); return; }
+  const ls = mans.map(x => x.loss), md = SL.median(ls), best = mans.reduce((a, x) => x.loss < a.loss ? x : a), worst = mans.reduce((a, x) => x.loss > a.loss ? x : a);
+  c.append(h('div', { class: 'kpis' }, kpi(st.type === 'Tack' ? 'Tacks' : 'Gybes', mans.length), kpi('Median loss', f1(md, 0), 'm'), kpi('Best', f1(best.loss, 0), 'm', best.lab), kpi('Worst', f1(worst.loss, 0), 'm', worst.lab), kpi('Slowest point', f1(SL.median(mans.map(x => x.bspMin / x.bspIn * 100)), 0), '%', 'of speed going in'), kpi('Peak turn rate', f1(SL.median(mans.map(x => x.rate))), '°/s', 'median')));
+  if (!season()) { const tr = SL.manTraces(A.D).filter(t => t.m.type === st.type && fin(t.m.loss)), s1 = card('Through the ' + st.type.toLowerCase()); c.append(s1);
+    if (tr.length >= 2) { const g = h('div', { class: 'grid2' }), xs = Array.from({ length: 81 }, (v, i) => i - 20); s1.append(legend([[css('--muted'), 'each ' + st.type.toLowerCase()], [css('--ink'), 'median'], [css('--s3'), 'least lost'], [css('--s2'), 'most lost']]), g);
+      const bt = tr.reduce((a, t) => t.m.loss < a.m.loss ? t : a), wt = tr.reduce((a, t) => t.m.loss > a.m.loss ? t : a), jobs = [];
+      for (const [k, title, yr] of [['bsp', 'Boat speed, % of the speed going in', [40, 115]], ['vmg', 'VMG along the wind axis, % of steady VMG', [-20, 140]]]) { if (k === 'vmg' && !tr.some(t => fin(t.vmg[30]))) continue; const cv = h('canvas'); g.append(h('div', {}, cv)); jobs.push(() => { const p = plot(cv, { xr: [-20, 60], yr, h: 280, title, xl: 'seconds from the moment the bow goes through the wind' + (st.type === 'Gybe' ? ' (stern, for a gybe)' : ''), ysuf: '%' }); p.zero(100); p.c.strokeStyle = css('--ink2'); p.c.setLineDash([4, 4]); p.c.beginPath(); p.c.moveTo(p.X(0), p.pt); p.c.lineTo(p.X(0), p.H - p.pb); p.c.stroke(); p.c.setLineDash([]);
+          for (const t of tr) p.line(xs.map((x, i) => [x, t[k][i]]), alpha(css('--muted'), 0.45), 1);
+          p.line(xs.map((x, i) => [x, SL.median(tr.map(t => t[k][i]))]), css('--ink'), 2.5); p.line(xs.map((x, i) => [x, wt[k][i]]), css('--s2'), 2); p.line(xs.map((x, i) => [x, bt[k][i]]), css('--s3'), 2);
+          p.label('least lost ' + tstr(iT(bt.m.i)), 34, bt[k][54], css('--s3')); p.label('most lost ' + tstr(iT(wt.m.i)), 34, wt[k][54] - (yr[1] - yr[0]) * 0.08, css('--s2')); }); }
+      jobs.forEach(j => j());
+      s1.append(h('p', { class: 'muted' }, 'Every manoeuvre lined up on the moment of the turn. Where the median dips and how fast it climbs back shows what to work on: a deep, short dip is the turn itself, a slow climb is the build out of it.')); }
+    else s1.append(h('p', { class: 'muted' }, 'Needs at least two measured manoeuvres.')); }
+  const s2 = card('Loss against how it was sailed'); c.append(s2);
+  const cv = h('canvas'); s2.append(legend([[css('--port'), 'onto port'], [css('--stbd'), 'onto starboard']]), h('div', { style: 'max-width:820px' }, cv)); const xs2 = mans.map(x => x.rate), p = plot(cv, { xr: [0, Math.max(...xs2) * 1.1], yr: [Math.min(0, SL.quant(ls, 0.02)) - 5, SL.quant(ls, 0.98) + 5], xl: 'peak turn rate (°/s)', yl: 'loss (m)', h: 280 }); p.zero(0);
+  mans.forEach(x => p.dot(x.rate, x.loss, css(x.to === 'Port' ? '--port' : '--stbd'), `<b>${x.lab}</b> ${x.type} onto ${x.to.toLowerCase()}<br>loss ${f1(x.loss, 0)} m · turn ${f1(x.rate)}°/s · TWS ${f1(x.tws)}<br>BSP in ${f1(x.bspIn)} → min ${f1(x.bspMin)}`, x, x.to === 'Stbd', 4));
+  if (mans.length >= 6) p.line(SL.fitTrend(xs2, ls, trendCfg().type === 'None' ? 'Local (smooth)' : trendCfg().type, 20), css('--ink'), 2);
+  const by = k => { const o = {}; mans.forEach(x => { const key = k(x); (o[key] = o[key] || []).push(x.loss); }); return Object.keys(o).sort().map(key => [{ t: key, c: 'b' }, o[key].length, f1(SL.median(o[key]), 0), f1(Math.min(...o[key]), 0), f1(Math.max(...o[key]), 0)]); };
+  s2.append(h('div', { class: 'cols' }, h('div', {}, h('h4', {}, 'By direction'), table(['', 'Count', 'Median m', 'Best', 'Worst'], by(x => 'onto ' + x.to.toLowerCase()), 'num')), h('div', {}, h('h4', {}, 'By wind'), table(['', 'Count', 'Median m', 'Best', 'Worst'], by(x => x.tws < 8 ? 'under 8 kn' : x.tws < 12 ? '8–12 kn' : x.tws < 16 ? '12–16 kn' : 'over 16 kn'), 'num')), h('div', {}, h('h4', {}, 'By sail'), table(['', 'Count', 'Median m', 'Best', 'Worst'], by(x => (typeof x.sail === 'string' ? x.sail : x.sail >= 0 && A.D ? A.D.L.sailNames[x.sail] : '-') || '-'), 'num'))),
+    h('p', { class: 'muted' }, 'Loss is distance made good along the wind axis, from 5 s before to 40 s after, against holding the steady VMG either side. A puff or shift during the turn moves one figure by several metres: trust medians and the spread, not a single manoeuvre.'));
+  c.append(card('All ' + st.type.toLowerCase() + 's', table(['Time', 'Onto', 'TWS', 'BSP in', 'BSP min', 'Slowest %', 'Turn °/s', 'Angle', 'Loss m'], mans.slice().sort((a, b) => b.loss - a.loss).slice(0, 80).map(x => { const row = [x.lab, x.to, f1(x.tws), f1(x.bspIn), f1(x.bspMin), f1(x.bspMin / x.bspIn * 100, 0), f1(x.rate), f1(x.angle, 0), { t: f1(x.loss, 0), c: 'b' }]; row._attrs = go(x); return row; }), 'num')));
+};
+
+/* ---------------- Wind ---------------- */
+R.wind = () => {
+  const c = pane('wind'), D = A.D, w = SL.windStats(D);
+  if (!w) { c.append(card(null, h('p', { class: 'muted' }, 'Needs TWD in the log and at least five minutes of sailing.'))); return; }
+  const shifts = SL.windShifts(D);
+  c.append(h('div', { class: 'kpis' }, kpi('Mean direction', f1(w.mean, 0), '°', `${f1(SL.w360(w.mean + w.lo), 0)}° to ${f1(SL.w360(w.mean + w.hi), 0)}° for 90% of the day`), kpi('Trend', (w.slope > 0 ? '+' : '') + f1(w.slope, 0), '°/h', Math.abs(w.slope) < 2 ? 'no steady trend' : w.slope > 0 ? 'veering (going right)' : 'backing (going left)'), kpi('Swing', '±' + f1(w.amp, 0), '°', fin(w.period) ? 'about every ' + f1(w.period / 60, 0) + ' min' : 'no regular rhythm found'), kpi('Wind speed', f1(w.twsMed), 'kn', 'median'), kpi('Gusts', '+' + f1((w.gust - 1) * 100, 0), '%', 'top 5% against median'), kpi('Lulls', f1((w.lull - 1) * 100, 0), '%', 'bottom 5% against median')));
+  const s1 = card('Direction and speed through the day'), cv1 = h('canvas'), cv2 = h('canvas'); c.append(s1); s1.append(h('div', {}, cv1), h('div', {}, cv2));
+  const race = p => { const x = p.c; x.fillStyle = alpha(css('--accent'), 0.1); let rs = -1; for (let i = D.i0; i <= D.i1; i++) { const r = i < D.i1 && D.L.race[i]; if (r && rs < 0) rs = i; if (!r && rs >= 0) { x.fillRect(p.X(rs), p.pt, p.X(i) - p.X(rs), p.H - p.pt - p.pb); rs = -1; } } };
+  const dv = w.d.map(v => SL.w360(w.mean + v) > 360 ? v : v), lo = Math.min(...w.d) - 3, hi = Math.max(...w.d) + 3, tf = v => tstr(iT(v)).slice(0, 5);
+  const p1 = plot(cv1, { xr: [D.i0, D.i1], yr: [w.mean + lo, w.mean + hi], h: 250, yl: 'TWD, one-minute mean', ysuf: '°', xfmt: tf, pb: 22 }); race(p1); p1.zero(w.mean); p1.note('right', true); p1.note('left', false);
+  p1.line(w.t.map((t, k) => [t, w.mean + w.d[k]]), css('--s1'), 1.6); p1.line(SL.fitTrend(w.t, w.d.map(v => w.mean + v), 'Local (tight)', 40), css('--ink'), 2.5);
+  for (const sft of shifts) { const X = p1.X(sft.i); p1.c.strokeStyle = css('--ink2'); p1.c.setLineDash([4, 4]); p1.c.beginPath(); p1.c.moveTo(X, p1.pt); p1.c.lineTo(X, p1.H - p1.pb); p1.c.stroke(); p1.c.setLineDash([]); p1.label((sft.d > 0 ? 'R ' : 'L ') + f1(Math.abs(sft.d), 0) + '°', sft.i, w.mean + hi - 1, css('--ink2'), 'center'); }
+  w.t.forEach((t, k) => { if (k % 6 === 0) cv1._hits.push([p1.X(t), p1.Y(w.mean + w.d[k]), `<b>${tstr(iT(t))}</b> TWD ${f1(SL.w360(w.mean + w.d[k]), 0)}° · TWS ${f1(w.s[k])} kn`, { i: t }]); });
+  const p2 = plot(cv2, { xr: [D.i0, D.i1], yr: [Math.min(...w.s) - 0.5, Math.max(...w.s) + 0.5], h: 190, yl: 'TWS (kn)', xfmt: tf, pb: 22 }); race(p2); p2.line(w.t.map((t, k) => [t, w.s[k]]), css('--s2'), 1.6); p2.line(SL.fitTrend(w.t, w.s, 'Local (tight)', 40), css('--ink'), 2.5);
+  s1.append(h('p', { class: 'muted' }, 'Thin line: one-minute mean. Thick line: the slow movement. Dashed markers: shifts of 8° or more between consecutive three-minute averages. Shaded: racing. TWD is as logged, so a tack-to-tack calibration error shows up here as a step at every tack.'));
+  const s2 = card('Where the wind sat'), cv3 = h('canvas'), cv4 = h('canvas'); c.append(h('div', { class: 'cols' }, s2, card('Shifts (' + shifts.length + ')', shifts.length ? table(['Time', 'From', 'To', 'Shift'], shifts.map(x => { const row = [tstr(iT(x.i)), f1(x.from, 0) + '°', f1(x.to, 0) + '°', { t: (x.d > 0 ? 'right ' : 'left ') + f1(Math.abs(x.d), 0) + '°', c: 'b' }]; row._attrs = { class: 'click', onclick: () => { A.cur = x.i; show('chart'); } }; return row; }), 'num') : h('p', { class: 'muted' }, 'No shift of 8° or more between consecutive three-minute averages.')))); s2.append(h('div', {}, cv3), h('div', {}, cv4));
+  const bw = 2, b0 = Math.floor(lo / bw) * bw, nb = Math.ceil((hi - b0) / bw), hist = new Array(nb).fill(0); w.d.forEach(v => { const k = Math.floor((v - b0) / bw); if (k >= 0 && k < nb) hist[k]++; }); const mx = Math.max(...hist) / w.d.length * 100;
+  const p3 = plot(cv3, { xr: [w.mean + b0, w.mean + b0 + nb * bw], yr: [0, mx * 1.12], h: 210, xl: 'TWD (°)', yl: 'time %' }); hist.forEach((n, k) => { if (!n) return; const x0 = p3.X(w.mean + b0 + k * bw) + 1, x1 = p3.X(w.mean + b0 + (k + 1) * bw) - 1, y = p3.Y(n / w.d.length * 100); p3.c.fillStyle = css('--s1'); p3.c.beginPath(); p3.c.roundRect(x0, y, Math.max(1, x1 - x0), p3.H - p3.pb - y, [3, 3, 0, 0]); p3.c.fill(); cv3._hits.push([(x0 + x1) / 2, y, `${f1(SL.w360(w.mean + b0 + k * bw), 0)}°–${f1(SL.w360(w.mean + b0 + (k + 1) * bw), 0)}°: ${f1(n / w.d.length * 100)}% of the time`]); });
+  const p4 = plot(cv4, { xr: [Math.min(...w.s) - 0.3, Math.max(...w.s) + 0.3], yr: [w.mean + lo, w.mean + hi], h: 230, xl: 'TWS (kn)', yl: 'TWD', ysuf: '°' }); w.t.forEach((t, k) => p4.dot(w.s[k], w.mean + w.d[k], alpha(css('--s1'), 0.5), null, null, false, 2)); p4.line(SL.fitTrend(w.s, w.d.map(v => w.mean + v), 'Local (smooth)', 24), css('--ink'), 2.5);
+  s2.append(h('p', { class: 'muted' }, `Below: direction against speed. A sloping line means the puffs come from a different direction than the lulls (here ${f1(SL.corr(w.s, w.d), 2)} correlation), which tells you which way to expect the shift when the pressure arrives.`));
+};
 
 </script>
 </body>

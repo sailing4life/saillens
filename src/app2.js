@@ -145,15 +145,9 @@ R.ml = () => {
   const lt = SL.learnTargets(phases()), s4 = card('Targets learned from your best sailing');
   if (lt.length) s4.append(h('p', { class: 'muted' }, 'For each wind band: the median angle and speed of the top quarter of phases by VMG, next to the current target.'), table(['Mode', 'TWS', 'Phases', 'Best TWA', 'Target TWA', 'Δ', 'Best BSP', 'Target BSP', 'Δ', '|Heel|'], lt.map(r => [r.mode, { t: r.tws, c: 'b' }, r.n, f1(r.twa), f1(r.tTwa), { t: f1(r.twa - r.tTwa), c: 'b' }, f1(r.bsp, 2), f1(r.tBsp, 2), { t: f1(r.bsp - r.tBsp, 2), c: 'b' }, f1(r.heel)]), 'num'), bar(h('button', { onclick: () => dl('learned_polar.txt', SL.polarText(SL.learnPolar(phases(), 0.7))) }, 'Export learned polar (Expedition format)')), h('p', { class: 'muted' }, season() ? 'Based on every day in the season database that matches the filters.' : 'One day is thin evidence for changing a polar. Add days to the season database and look again in Season mode.'));
   else s4.append(h('p', { class: 'muted' }, 'Needs at least 10 upwind or downwind phases in a 2-knot wind band.'));
-  const mans = allMans().filter(x => fin(x.loss)), s5 = card('Manoeuvre losses'); c.append(s4, s5);
-  if (mans.length) { const avg = t => SL.median(mans.filter(x => x.type === t).map(x => x.loss)); s5.append(h('p', {}, `Median loss per tack ${f1(avg('Tack'), 0)} m, per gybe ${f1(avg('Gybe'), 0)} m of distance made good, compared with holding steady VMG. `, h('span', { class: 'muted' }, 'Measured from SOG and COG along the wind axis, 5 s before to 40 s after. A wind shift or puff during the turn moves a single figure by several metres, so trust the median and the trend, not one tack.')));
-    const cv = h('canvas'); s5.append(legend([[css('--s1'), 'Tack'], [css('--s2'), 'Gybe']]), h('div', { style: 'max-width:760px' }, cv)); const xs = mans.map(x => x.rate), ys = mans.map(x => x.loss); const p = plot(cv, { xr: [0, Math.max(...xs) * 1.1], yr: [Math.min(0, SL.quant(ys, 0.02)) - 5, SL.quant(ys, 0.98) + 5], xl: 'peak turn rate (°/s)', yl: 'loss (m)', h: 260 }); p.zero(0);
-    for (const t of ['Tack', 'Gybe']) { const g = mans.filter(x => x.type === t), col = css(t === 'Tack' ? '--s1' : '--s2'); g.forEach(x => p.dot(x.rate, x.loss, col, `<b>${x.lab}</b> ${t} to ${x.to.toLowerCase()}<br>loss ${f1(x.loss, 0)} m · turn ${f1(x.rate)}°/s · TWS ${f1(x.tws)}<br>BSP in ${f1(x.bspIn)} → min ${f1(x.bspMin)}`, x, false, 4)); if (g.length >= 6) p.line(SL.loess(g.map(x => x.rate), g.map(x => x.loss), 0.9, 20), col, 2); }
-    s5.append(table(['Time', 'Type', 'To', 'TWS', 'BSP in', 'BSP min', 'Turn °/s', 'Angle', 'Loss m'], mans.slice().sort((a, b) => b.loss - a.loss).slice(0, 60).map(x => { const r = [x.lab, x.type, x.to, f1(x.tws), f1(x.bspIn), f1(x.bspMin), f1(x.rate), f1(x.angle, 0), { t: f1(x.loss, 0), c: 'b' }]; r._attrs = go(x); return r; }), 'num')); }
-  else s5.append(h('p', { class: 'muted' }, 'Needs COG, SOG and TWD in the log.'));
-  if (!season()) { const D = A.D, ws = SL.windShifts(D), gl = SL.glitches(D).filter(x => x.n);
-    c.append(h('div', { class: 'cols' }, card('Wind shifts (' + ws.length + ')', ws.length ? table(['Time', 'From', 'To', 'Shift'], ws.map(w => { const r = [tstr(iT(w.i)), f1(w.from, 0) + '°', f1(w.to, 0) + '°', { t: (w.d > 0 ? 'right ' : 'left ') + f1(Math.abs(w.d), 0) + '°', c: 'b' }]; r._attrs = go(w); return r; }), 'num') : h('p', { class: 'muted' }, 'No shift of 8° or more between consecutive 3-minute averages.')),
-      card('Sensor spikes', gl.length ? table(['Channel', 'Single-sample spikes'], gl.map(x => [x.k, x.n]), 'num') : h('p', {}, 'No single-sample spikes found in BSP, wind, heading, heel or rudder.')))); }
+  c.append(s4);
+  if (!season()) { const gl = SL.glitches(A.D).filter(x => x.n); c.append(card('Sensor spikes', gl.length ? table(['Channel', 'Single-sample spikes'], gl.map(x => [x.k, x.n]), 'num') : h('p', {}, 'No single-sample spikes found in BSP, wind, heading, heel or rudder.'))); }
+  c.append(h('p', { class: 'muted' }, 'Manoeuvre losses and wind shifts have their own tabs: Manoeuvres and Wind.'));
 };
 
 /* ---------------- Season database ---------------- */
@@ -241,7 +235,7 @@ R.report = () => withScope('day', () => {
 async function boot() {
   initTips();
   const nav = $('#nav'), panes = $('#panes');
-  for (const [g, items] of TABS) { nav.append(h('h6', {}, g)); for (const [id, lab, d] of items) { const b = h('button', { class: 'nav', type: 'button', 'data-tab': id, onclick: () => show(id) }); b.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`; b.append(lab); nav.append(b); panes.append(h('div', { id: 't-' + id, class: 'tabpane', hidden: '' })); } }
+  for (const [g, items] of TABS) { if (g) nav.append(h('h6', {}, g)); for (const [id, lab, d] of items) { const b = h('button', { class: 'nav', type: 'button', 'data-tab': id, onclick: () => show(id) }); b.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`; b.append(lab); nav.append(b); panes.append(h('div', { id: 't-' + id, class: 'tabpane', hidden: '' })); } }
   document.querySelectorAll('#scope button').forEach(b => b.addEventListener('click', () => { A.scope = b.dataset.scope; show(A.tab); }));
   const themes = ['auto', 'light', 'dark']; let th = 'auto'; try { th = localStorage.getItem('saillens-theme') || 'auto'; } catch (e) { /* storage unavailable */ }
   const setTheme = () => { if (th === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', th); $('#theme').textContent = 'Theme: ' + th; };
@@ -254,6 +248,6 @@ async function boot() {
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => show(A.tab));
   A.chart = store.get('saillens-chart'); if (!A.chart || A.chart.type !== 'sailchart') A.chart = SL.newChart(); A.chart.shapes = A.chart.shapes || []; A.chart.cells = A.chart.cells || {};
   A.S = SL.newSeason(); A.sOff = new Set(); const saved = await idb.get('season'); if (saved && saved.app === 'SailLens' && Array.isArray(saved.days)) A.S = saved; seasonChanged(false); if (A.S.days.length) A.sSaved = 'Loaded from this browser.';
-  loadDemo(); show('summary');
+  loadDemo(); show('home');
 }
 document.addEventListener('DOMContentLoaded', boot);

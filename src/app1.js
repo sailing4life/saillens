@@ -1,12 +1,12 @@
 'use strict';
 /* SailLens tabs (part 1): shell, loading, setup, events, summary, chart, phases, performance, XY, polar. */
 const R = {};
-const TABS = [['Day', [['setup', 'Setup', 'M3 4h10M3 8h10M3 12h6'], ['events', 'Events', 'M4 2v12M4 3h8l-2 3 2 3H4'], ['summary', 'Summary', 'M2 13h12M4 13V8M8 13V3M12 13V6'], ['chart', 'Chart & replay', 'M2 12l4-7 3 4 2-3 3 6z'], ['phases', 'Phases', 'M2 4h12M2 8h12M2 12h12']]],
-  ['Analysis', [['perf', 'Performance', 'M2 13l4-5 3 2 5-7M11 3h3v3'], ['xy', 'XY & correlation', 'M2 2v12h12M5 10h.01M8 7h.01M11 5h.01M7 11h.01'], ['polar', 'Polar', 'M3 2v12M3 14a6 6 0 0 0 0-12a9 9 0 0 1 9 6 9 9 0 0 1-9 6'], ['sails', 'Sail chart', 'M2 2v12h12M2 9c4 0 4-5 12-5M6 14c0-4 4-6 8-6'], ['cal', 'Calibration', 'M8 2v3M8 11v3M2 8h3M11 8h3M8 8l2-2'], ['ml', 'ML insights', 'M8 2l1.5 4L14 8l-4.5 2L8 14l-1.5-4L2 8l4.5-2z']]],
+const TABS = [['', [['home', 'Home', 'M2 8l6-5 6 5M4 7v6h8V7']]], ['Day', [['setup', 'Setup', 'M3 4h10M3 8h10M3 12h6'], ['events', 'Events', 'M4 2v12M4 3h8l-2 3 2 3H4'], ['summary', 'Summary', 'M2 13h12M4 13V8M8 13V3M12 13V6'], ['chart', 'Chart & replay', 'M2 12l4-7 3 4 2-3 3 6z'], ['phases', 'Phases', 'M2 4h12M2 8h12M2 12h12']]],
+  ['Analysis', [['perf', 'Performance', 'M2 13l4-5 3 2 5-7M11 3h3v3'], ['xy', 'XY & correlation', 'M2 2v12h12M5 10h.01M8 7h.01M11 5h.01M7 11h.01'], ['polar', 'Polar', 'M3 2v12M3 14a6 6 0 0 0 0-12a9 9 0 0 1 9 6 9 9 0 0 1-9 6'], ['sails', 'Sail chart', 'M2 2v12h12M2 9c4 0 4-5 12-5M6 14c0-4 4-6 8-6'], ['cal', 'Calibration', 'M8 2v3M8 11v3M2 8h3M11 8h3M8 8l2-2'], ['man', 'Manoeuvres', 'M2 12c3 0 3-8 6-8s3 8 6 8'], ['wind', 'Wind', 'M2 6h8a2 2 0 1 0-2-2M2 10h10a2 2 0 1 1-2 2'], ['ml', 'ML insights', 'M8 2l1.5 4L14 8l-4.5 2L8 14l-1.5-4L2 8l4.5-2z']]],
   ['Season', [['season', 'Season database', 'M3 4c0-1 2-2 5-2s5 1 5 2v8c0 1-2 2-5 2s-5-1-5-2zM3 4c0 1 2 2 5 2s5-1 5-2M3 8c0 1 2 2 5 2s5-1 5-2']]],
   ['Output', [['report', 'Report', 'M4 2h6l3 3v9H4zM10 2v3h3M6 8h5M6 11h5']]]];
 const TITLE = Object.fromEntries(TABS.flatMap(g => g[1].map(t => [t[0], t[1]])));
-const DAYONLY = new Set(['summary', 'chart', 'events', 'report']), ANY = new Set(['setup', 'season']);
+const DAYONLY = new Set(['summary', 'chart', 'events', 'report', 'wind']), ANY = new Set(['setup', 'season', 'home']);
 const pane = id => { const e = $('#t-' + id); e.textContent = ''; return e; };
 const card = (title, ...kids) => h('section', { class: 'card' }, title ? h('h3', {}, title) : null, kids);
 const mlTag = () => h('span', { class: 'tag' }, 'model');
@@ -146,7 +146,8 @@ R.summary = () => {
   s2.append(bar(filterBar(() => R.summary()), field('Average of', sel('bin-var', varList(), st.binVar, v => { st.binVar = v; rb(); }))), b2);
   const s3 = card('Leg averages'); blkLegs(s3); s3.append(bar(h('button', { onclick: () => dl('legs.csv', legsCsv()) }, 'Export legs CSV')));
   const s4 = card('Data distribution'), b4 = h('div'); s4.append(bar(field('Mode', sel('dist-mode', SL.MODES, st.dist, v => { st.dist = v; b4.textContent = ''; blkDist(b4, v); }))), b4);
-  c.append(s1, s2, s3, s4); rb(); blkDist(b4, st.dist); A.scope = sv;
+  const sts = SL.starts(D), s5 = sts.length ? card('Starts', table(['Race', 'Time', 'TWS', 'BSP at gun', '% of target', 'Last 20 s before', 'First 30 s after', 'Up to speed', 'First minute', 'Line (from Expedition)'], sts.map(x => { const row = [{ t: 'R' + x.race, c: 'b' }, tstr(iT(x.i)), f1(x.tws), f1(x.bsp, 2), { t: f1(x.pct, 0) + '%', c: 'b verdict ' + (x.pct >= 90 ? 'good' : 'warn') }, f1(x.pre, 0) + '%', f1(x.post, 0) + '%', fin(x.t95) ? x.t95 + ' s' : 'over 3 min', f1(x.d60, 0) + ' m', x.note]; row._attrs = { class: 'click', onclick: () => { A.cur = x.i; show('chart'); } }; return row; }), 'num'), h('p', { class: 'muted' }, '% of target is boat speed against target speed when close-hauled, against the polar otherwise. Up to speed: seconds after the gun until the boat holds 95% for five seconds.')) : null;
+  c.append(s1, s5, s2, s3, s4); rb(); blkDist(b4, st.dist); A.scope = sv;
 };
 const csvRow = a => a.map(x => /[",\n]/.test(String(x)) ? '"' + String(x).replace(/"/g, '""') + '"' : x).join(',');
 function legsCsv() { const sv = A.scope; A.scope = 'day'; const ks = varList(); A.scope = sv; return [csvRow(['Leg', 'Mode', 'Duration_s', 'Sails', 'Phases'].concat(ks))].concat(A.D.legs.map(l => csvRow([l.name, l.mode, l.dur, l.sails, l.n].concat(ks.map(k => fin(l.v[k]) ? +l.v[k].toFixed(3) : ''))))).join('\r\n'); }
