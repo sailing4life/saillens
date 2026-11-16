@@ -13,7 +13,7 @@ function legSpans(D) {
 /* seconds given away against the target: each second sailed at x% of target VMG (or polar speed when reaching) costs (1 - x) seconds.
    Split into steady sailing and the 45 s around each tack or gybe. Also: how much of each leg was sailed on the favoured board. */
 function timeLost(D) {
-  const vp = D.ch['VMG%'], bsp = D.ch.BSP, inMan = new Uint8Array(D.n); for (const m of D.mans) for (let k = Math.max(D.i0, m.i - 5); k < Math.min(D.i1, m.i + 40); k++) inMan[k] = 1;
+  const vp = D.ch['VMG%'], bsp = D.ch.BSP, inMan = new Uint8Array(D.n); for (const m of D.mans) for (let k = Math.max(D.i0, m.i - 20); k < Math.min(D.i1, m.i + 16); k++) inMan[k] = 1;
   const legs = legSpans(D).map(s => {
     let steady = 0, man = 0, n = 0, nUp = 0, nDn = 0; const tw = D.ch.TWD ? cmean(D.ch.TWD.subarray(s.i0, s.i1)) : NaN; let fav = 0, favN = 0;
     for (let i = s.i0; i < s.i1; i++) { if (!(bsp[i] > 1) || !fin(vp[i])) continue; const l = 1 - Math.max(0, Math.min(130, vp[i])) / 100; n++; if (inMan[i]) man += l; else steady += l; const md = D.mode[i]; if (md === 0) nUp++; else if (md === 3) nDn++;
@@ -37,7 +37,7 @@ function starts(D) {
 function manTraces(D) {
   const ch = D.ch, out = [];
   for (const m of D.mans) { const i = m.i; if (i - 30 < D.i0 || i + 70 > D.i1 || !(m.bspIn > 2)) continue; const bsp = [], vmg = []; let v = null;
-    if (ch.COG && ch.SOG && ch.TWD && fin(m.loss) && fin(m.vmgRef) && m.vmgRef > 1) { const tw = cmean([cmean(ch.TWD.subarray(i - 60 < D.i0 ? D.i0 : i - 60, i - 10)), cmean(ch.TWD.subarray(i + 30, Math.min(D.i1, i + 60)))]), s = m.type === 'Tack' ? 1 : -1; v = k => s * ch.SOG[k] * Math.cos((ch.COG[k] - (tw + D.magVar)) * D2R) / m.vmgRef * 100; }
+    if (fin(m.loss) && fin(m.vb)) { const s = m.type === 'Tack' ? 1 : -1; v = k => s * ch.BSP[k] * Math.cos((ch.HDG[k] - (k < i ? m.twB : m.twA)) * D2R) / (k < i ? m.vb : m.va) * 100; }
     for (let k = i - 20; k <= i + 60; k++) { bsp.push(ch.BSP[k] / m.bspIn * 100); vmg.push(v ? v(k) : NaN); }
     out.push({ m, bsp, vmg }); }
   return out;

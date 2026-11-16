@@ -43,7 +43,7 @@ async function loadFile(file, kind) {
   const text = await file.text(), head = text.slice(0, 3000), l0 = head.split('\n')[0];
   let json = null; if (/^\uFEFF?\s*\{/.test(head)) { try { json = JSON.parse(text.replace(/^\uFEFF/, '')); } catch (e) { banner(file.name + ': not valid JSON.', true); return; } }
   if (json) kind = json.type === 'sailchart' ? 'chart' : json.type === 'calibration' ? 'calib' : 'season';
-  if (!kind) kind = /StartDateTime/.test(l0) && /TWS/.test(l0) ? 'season' : /<daysail|<events[\s>]/.test(text.slice(0, 20000)) ? 'ev' : /\.xml$/i.test(file.name) || /^\uFEFF?\s*</.test(head) ? 'chart' : (/^\uFEFF?!boat/i.test(text) || /(^|[,;\t])\s*"?(utc|time|bsp|timestamp)"?\s*([,;\t]|$)/i.test(l0)) ? 'log' : 'polar';
+  if (!kind) kind = (/StartDateTime/.test(l0) && /TWS/.test(l0)) || /DistanceLost_m/.test(l0) ? 'season' : /<daysail|<events[\s>]/.test(text.slice(0, 20000)) ? 'ev' : /\.xml$/i.test(file.name) || /^\uFEFF?\s*</.test(head) ? 'chart' : (/^\uFEFF?!boat/i.test(text) || /(^|[,;\t])\s*"?(utc|time|bsp|timestamp)"?\s*([,;\t]|$)/i.test(l0)) ? 'log' : 'polar';
   try {
     if (kind === 'season') { seasonImport(text, file.name); show('season'); return; }
     if (kind === 'chart') { A.chart = SL.parseSailChart(text, file.name.replace(/\.\w+$/, '')); A.files.chart = file.name; chartChanged(); show('sails'); banner(`${file.name}: sail chart loaded, ${A.chart.shapes.length} sail areas` + (Object.keys(A.chart.cells).length ? ` and ${Object.keys(A.chart.cells).length} painted cells.` : '.')); return; }

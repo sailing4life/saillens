@@ -226,7 +226,8 @@ function process(raw, opt) {
     vmg[i] = Math.abs(b * Math.cos(a * D2R));
     if (!fin(a) || !fin(w)) continue;
     let ut, dt_, tt, tb, pb = NaN;
-    if (P) { const u = P.up(w), d = P.dn(w); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
+    /* targets follow a 3 s mean of TWS, which matches RaceReplay's percentages; polar speed uses the sample itself */
+    if (P) { const w3 = fin(TWS[i - 1]) && fin(TWS[i + 1]) ? (TWS[i - 1] + w + TWS[i + 1]) / 3 : w, u = P.up(w3), d = P.dn(w3); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
     else if (logT) { pb = ch.PolBsp[i]; tt = lTwa[i]; tb = lBsp[i]; if (fin(tt) && (tt < 90) !== (a < 90)) { tt = NaN; tb = NaN; } ut = a < 90 && fin(tt) ? tt : 45; dt_ = a >= 90 && fin(tt) ? tt : 142; }
     else { ut = 45; dt_ = 142; }
     const m = a < ut + cfg.upMargin ? 0 : a > dt_ - cfg.dnMargin ? 3 : a < 100 ? 1 : 2; mode[i] = m;
@@ -246,15 +247,21 @@ function process(raw, opt) {
     const a0 = win(aT, i - 25, i - 8, mean), a1 = win(aT, i + 12, i + 30, mean);
     const type = a0 < 90 && a1 < 90 ? 'Tack' : a0 > 90 && a1 > 90 ? 'Gybe' : null; if (!type) continue;
     const m = { i, type, to: cur > 0 ? 'Stbd' : 'Port', tws: win(TWS, i - 30, i + 30, mean), bspIn: bIn, bspMin: win(BSP, i - 5, i + 25, a => Math.min(...a)), bspOut: win(BSP, i + 30, i + 45, mean), sail: L.sail[i] };
-    if (ch.COG && ch.SOG && ch.TWD) {
-      const tw = cmean([win(ch.TWD, i - 60, i - 10, cmean), win(ch.TWD, i + 30, i + 60, cmean)]), s = type === 'Tack' ? 1 : -1;
-      const v = k => s * ch.SOG[k] * Math.cos((ch.COG[k] - (tw + magVar)) * D2R);
-      let pre = 0, np = 0, post = 0, nq = 0; for (let k = Math.max(i0, i - 25); k < i - 5; k++) if (fin(v(k))) { pre += v(k); np++; } for (let k = i + 40; k < Math.min(i1, i + 60); k++) if (fin(v(k))) { post += v(k); nq++; }
-      if (np && nq && bIn >= 4 && m.bspOut >= 0.6 * bIn) { const ref = (pre / np + post / nq) / 2; let loss = 0; for (let k = i - 5; k < Math.min(i1, i + 40); k++) if (fin(v(k))) loss += (ref - v(k)) * 0.5144; m.loss = loss; m.vmgRef = ref; }
+    /* distance lost, the way RaceReplay measures it: VMG along the wind axis (BSP and heading against the mean TWD of the reference
+       window), compared with the steady 30 s before (ending 20 s ahead of the turn) up to the turn, and with the steady 30 s after
+       (16 to 46 s past the turn) from the turn on. Not measured when another manoeuvre falls inside those windows. */
+    const TB = 20, TA = 46, AV = 30, wB = i - TB - AV, wA = i + TA;
+    if (ch.TWD && ch.HDG && wB >= i0 && wA <= i1) {
+      const tB = cmean(ch.TWD.subarray(wB, i - TB)), tA = cmean(ch.TWD.subarray(wA - AV, wA)), s = type === 'Tack' ? 1 : -1;
+      const vw = (k, tw) => s * BSP[k] * Math.cos((ch.HDG[k] - tw) * D2R), avg = (f, lo, hi) => { let q = 0, cnt = 0; for (let k = lo; k < hi; k++) { const x = f(k); if (fin(x)) { q += x; cnt++; } } return cnt > (hi - lo) * 0.8 ? q / cnt : NaN; };
+      const vb = avg(k => vw(k, tB), wB, i - TB), va = avg(k => vw(k, tA), wA - AV, wA);
+      if (vb > 0.5 && va > 0.5) { let loss = 0; for (let k = i - TB; k < i; k++) if (fin(vw(k, tB))) loss += (vb - vw(k, tB)) * 0.5144; for (let k = i; k < wA - AV; k++) if (fin(vw(k, tA))) loss += (va - vw(k, tA)) * 0.5144; m.loss = loss; m.vb = vb; m.va = va; m.twB = tB; m.twA = tA; m.vmgRef = (vb + va) / 2;
+        if (ch.COG && ch.SOG) { const vg = (k, tw) => s * ch.SOG[k] * Math.cos((ch.COG[k] - tw - magVar) * D2R), gb = avg(k => vg(k, tB), wB, i - TB), ga = avg(k => vg(k, tA), wA - AV, wA); if (fin(gb) && fin(ga)) { let lg = 0; for (let k = i - TB; k < i; k++) if (fin(vg(k, tB))) lg += (gb - vg(k, tB)) * 0.5144; for (let k = i; k < wA - AV; k++) if (fin(vg(k, tA))) lg += (ga - vg(k, tA)) * 0.5144; m.lossGps = lg; } } }
     }
     if (ch.HDG) { let mx = 0; for (let k = Math.max(i0 + 3, i - 12); k < Math.min(i1, i + 15); k++) { const r = Math.abs(w180(ch.HDG[k] - ch.HDG[k - 3])) / 3; if (r > mx) mx = r; } m.rate = mx; m.angle = Math.abs(w180(win(ch.HDG, i + 20, i + 35, cmean) - win(ch.HDG, i - 30, i - 10, cmean))); if (m.angle < 30) continue; }
     mans.push(m);
   }
+  for (const m of mans) if (mans.some(o => o !== m && o.i > m.i - 50 && o.i < m.i + 46)) { m.crowded = true; delete m.loss; delete m.lossGps; }
   // validity mask + phases
   const bad = new Uint8Array(n + 1);
   for (let i = i0; i < i1; i++) if (!(BSP[i] >= cfg.minBsp) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i] < 0 || (cfg.racingOnly && !L.race[i])) bad[i] = 1;

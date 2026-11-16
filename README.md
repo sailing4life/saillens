@@ -21,6 +21,12 @@ Sailing log analysis in one HTML file. Open `SailLens.html` in Chrome or Edge, o
 
 joins `src/index.html` and the scripts in `src/` into `SailLens.html`. There are no dependencies.
 
+## Test
+
+    node tests/smoke.js
+
+runs the engine tests on the built-in example data.
+
 ## Deploy
 
 The `Dockerfile` serves `SailLens.html` with Caddy on `$PORT`. On Railway, connect this repository to a service; every push to `main` redeploys. Commit the rebuilt `SailLens.html` together with the source change.

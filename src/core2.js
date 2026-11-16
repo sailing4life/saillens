@@ -161,7 +161,7 @@ function dayRecord(D, meta, extra) {
   return { id: (meta.boat || 'Boat') + '|' + date, boat: meta.boat || 'Boat', date, desc: meta.desc || '', location: meta.location || '', dayType: meta.daytype || '', polar: extra.polar || '', off, added: Date.now(), magVar: D.magVar,
     sum: { tws: r3(D.sum.TWS.avg), twsMin: r3(D.sum.TWS.min), twsMax: r3(D.sum.TWS.max), twd: D.sum.TWD ? r3(D.sum.TWD.avg) : null, tacks: D.sum.tacks, gybes: D.sum.gybes, sailing: D.sum.sailing, racing: D.sum.racing, dist: r3(D.sum.dist), sails: D.sum.sails }, cal: extra.cal || null,
     keys, phases: D.phases.map(p => ({ t: p.t, d: p.i1 - p.i, m: MODES.indexOf(p.mode), k: p.tack === 'Stbd' ? 1 : 0, s: p.sails, r: p.race, l: p.leg, x: p.testing ? 1 : 0, v: keys.map(k => r3(p.v[k])) })),
-    mans: D.mans.map(m => ({ t: D.raw.t0 + m.i * 1000, type: m.type, to: m.to, tws: r3(m.tws), loss: r3(m.loss), rate: r3(m.rate), angle: r3(m.angle), bspIn: r3(m.bspIn), bspMin: r3(m.bspMin), sail: m.sail >= 0 ? D.L.sailNames[m.sail] : '-' })) };
+    mans: D.mans.map(m => ({ t: D.raw.t0 + m.i * 1000, type: m.type, to: m.to, tws: r3(m.tws), loss: r3(m.loss), lossGps: r3(m.lossGps), rate: r3(m.rate), angle: r3(m.angle), bspIn: r3(m.bspIn), bspMin: r3(m.bspMin), sail: m.sail >= 0 ? D.L.sailNames[m.sail] : '-' })) };
 }
 function seasonPool(S) { // expand to the same phase objects the day analysis uses
   const out = []; for (const d of S.days) { const lab = d.date + (d.desc ? ' ' + d.desc : ''); for (const q of d.phases) { const v = {}; d.keys.forEach((k, i) => { v[k] = q.v[i] == null ? NaN : q.v[i]; }); if (fin(v.AWA) && !fin(v.absAWA)) v.absAWA = Math.abs(v.AWA); out.push({ t: q.t, i: null, i1: null, dur: q.d, tack: q.k ? 'Stbd' : 'Port', mode: MODES[q.m], sails: q.s, race: q.r, leg: q.l, raceLeg: q.r ? 'R' + q.r + 'L' + q.l : '-', testing: q.x, v, day: d.date, dayLabel: lab, off: d.off, magVar: d.magVar }); } }
@@ -190,6 +190,17 @@ function seasonFromPhaseCsv(text, dayInfo) {
   for (const d of out) { const ks = new Set(); d.phases.forEach(p => Object.keys(p._v).forEach(k => ks.add(k))); d.keys = [...ks]; d.phases.forEach(p => { p.v = d.keys.map(k => r3(p._v[k])); delete p._v; }); d.phases.sort((a, b) => a.t - b.t); const tw = d.phases.map(p => p.v[d.keys.indexOf('TWS')]); d.sum = { tws: r3(mean(tw)), twsMin: r3(Math.min(...tw)), twsMax: r3(Math.max(...tw)), sails: [...new Set(d.phases.flatMap(p => p.s.replace(/ only$/, '').split('/')))].sort() }; }
   return out.sort((a, b) => a.date < b.date ? -1 : 1);
 }
+/* import a CSV export of RaceReplay's T_TackJibe table: tacks and gybes for days already in (or added to) the season */
+function seasonFromTackCsv(text) {
+  const rows = csvParse(text), hd = rows[0].map(s => s.trim()), ix = n => hd.indexOf(n); if (ix('DateTime') < 0 || ix('DistanceLost_m') < 0) throw new Error('This CSV does not look like a T_TackJibe export (needs DateTime and DistanceLost_m columns).');
+  const yes = v => /^(true|-1|1|yes)$/i.test(String(v).trim()), days = new Map();
+  for (const r of rows.slice(1)) { if (r.length < hd.length - 2) continue; const g = n => ix(n) >= 0 ? r[ix(n)] : '', t = SL.parseTime(g('DateTime')); if (!fin(t)) continue; const num = n => g(n) !== '' && fin(+g(n)) ? +g(n) : null, valid = ix('IsValidPerf') < 0 || yes(g('IsValidPerf'));
+    const id = (g('BoatName') || 'Boat') + '|' + g('DateTime').slice(0, 10), sail = [g('Spinnaker'), g('Headsail'), g('Staysail')].filter(Boolean).join('/') || '-';
+    if (!days.has(id)) days.set(id, []);
+    days.get(id).push({ t, type: yes(g('IsTack')) ? 'Tack' : 'Gybe', to: yes(g('IsPortToStbd')) ? 'Stbd' : 'Port', tws: num('TWS'), loss: valid ? num('DistanceLost_m') : null, lossGps: valid ? num('DistanceLostGPS_m') : null, rate: num('Rotation_Max') == null ? null : Math.abs(num('Rotation_Max')), angle: num('TJAngle'), bspIn: num('BSP_bfr'), bspMin: null, bspOut: num('BSP_aft'), sail }); }
+  return days;
+}
+function seasonMergeMans(S, days) { let n = 0, miss = 0; for (const [id, mans] of days) { const d = S.days.find(x => x.id === id) || S.days.find(x => x.date === id.split('|')[1]); if (!d) { miss += mans.length; continue; } d.mans = mans.sort((a, b) => a.t - b.t); n += mans.length; } return { n, miss }; }
 function seasonMerge(S, days) { let add = 0, rep = 0; for (const d of days) { const i = S.days.findIndex(x => x.id === d.id); if (i >= 0) { S.days[i] = d; rep++; } else { S.days.push(d); add++; } } S.days.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0); return { add, rep }; }
 const newSeason = () => ({ app: 'SailLens', version: 1, name: 'Season', days: [] });
 /* sail crossover: per mode, where one sail's trend of VMG% against TWS overtakes another's */
@@ -259,5 +270,5 @@ function chartFromData(phases, ch, overwrite) {
 }
 function chartFillGaps(ch) { const have = Object.keys(ch.cells).map(k => ({ w: +k.split('|')[0], a: +k.split('|')[1], s: ch.cells[k] })); let n = 0; if (!have.length) return 0; for (const w of CH_TWS) for (const a of CH_TWA) { const k = w + '|' + a; if (ch.cells[k]) continue; let b = null, bd = 9.01; for (const h of have) { const d = ((h.w - w) / 2) ** 2 + ((h.a - a) / 10) ** 2 * 2; if (d < bd) { bd = d; b = h; } } if (b) { ch.cells[k] = b.s; n++; } } return n; }
 Object.assign(SL, { outline, CH_TWS, CH_TWA, chKey, newChart, chartAt, chartSail, chartEmpty, sailOn, sailTokens, inPoly, parseSailChart, chartXml, chartStats, chartFromData, chartFillGaps });
-Object.assign(SL, { calCurrent, solve, calBsp, calWind, calAwa, calScore, eventsXml, parseSailList, suggestMarks, SVARS, dayRecord, seasonPool, seasonFromPhaseCsv, seasonMerge, newSeason, crossover, csvParse, BANDS });
+Object.assign(SL, { calCurrent, solve, calBsp, calWind, calAwa, calScore, eventsXml, parseSailList, suggestMarks, SVARS, dayRecord, seasonPool, seasonFromPhaseCsv, seasonFromTackCsv, seasonMergeMans, seasonMerge, newSeason, crossover, csvParse, BANDS });
 })();
