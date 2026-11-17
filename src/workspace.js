@@ -8,7 +8,7 @@
     return { id: uid(), name: String(name).trim(), revision: 1, formulas: [], channels: [], cfg: { ...SL.DEF, dispOff: 0 }, sails: [], polar: null, chart: null, calibrationHistory: [], baseline: '', updated: Date.now() };
   }
   function newSession(boat, name) {
-    return { id: uid(), boatId: boat.id, name: name || 'Nieuwe sessie', created: Date.now(), updated: Date.now(), profile: copy(boat), raw: null, sources: [], events: null, polar: copy(boat.polar), chart: copy(boat.chart), cfg: { ...copy(boat.cfg), boat: boat.name, tStart: null, tEnd: null }, calib: copy(SL.CAL0), draft: copy(SL.CAL0), calibrationHistory: [], reviews: {}, notes: [], files: {}, selections: { analysis: null, A: null, B: null }, view: { z: 1, x: 0, y: 0 }, tab: 'setup', cur: 0, baseline: boat.baseline || '', calibrationChanged: false };
+    return { id: uid(), boatId: boat.id, name: name || 'Nieuwe sessie', created: Date.now(), updated: Date.now(), profile: copy(boat), raw: null, sources: [], events: null, polar: copy(boat.polar), chart: copy(boat.chart), cfg: { ...copy(boat.cfg), boat: boat.name, tStart: null, tEnd: null }, calib: copy(SL.CAL0), draft: copy(SL.CAL0), calibrationHistory: [], reviews: {}, notes: [], files: {}, selections: { analysis: null, A: null, B: null }, view: { z: 1, x: 0, y: 0 }, phaseBuild: {generated:false}, manoeuvrePairs: {}, analysisVersions: [], reportItems: [], analysisFilter: {}, stage:'prepare', tab: 'setup', cur: 0, baseline: boat.baseline || '', calibrationChanged: false };
   }
   function sessionSummary(s) { return { id: s.id, boatId: s.boatId, name: s.name, updated: s.updated, created: s.created, start: s.raw?.t0 ?? null, duration: s.raw?.n || 0, tab: s.tab, demo: !!s.demo }; }
   function mergeLogs(logs) {
@@ -58,12 +58,13 @@
     const veto = Object.values(reviews).filter(r => r.invalid || (r.kind === 'interval' && r.calibration === false));
     return D.phases.filter(p => { const range = objectRange(D, p, 'phase'), review = reviewed(D, p, 'phase', reviews); if (veto.some(r => overlap(range, r)) || review?.calibration === false || review?.invalid) return false; return allowed(review, 'calibration') || ranges.some(r => range.start >= r.start && range.end <= r.end); });
   }
-  function slowStats(D, reviews = {}, range = null, threshold = 95) {
+  function slowStats(D, reviews = {}, range = null, threshold = 95, filter = null) {
     const out = { valid: 0, target: 0, unknown: 0, slow: 0, manoeuvre: 0, straight: 0, invalid: 0, excluded: 0, slowRanges: [] }, man = new Uint8Array(D.n);
     D.mans.forEach(m => man.fill(1, Math.max(0, m.i - D.cfg.manBefore), Math.min(D.n, m.i + D.cfg.manAfter)));
     const excluded = Object.values(reviews).filter(r => r.performance === false && !r.invalid); let span = null;
     for (let i = D.i0; i < D.i1; i++) {
       const t = D.raw.t0 + i * 1000; if (range && (t < range.start || t >= range.end)) continue;
+      if(filter && !SL.sampleMatches(D,i,filter)){span=null;continue;}
       if (excluded.some(r => t >= r.start && t < r.end)) { out.excluded++; span = null; continue; }
       if (!Number.isFinite(D.ch.BSP[i]) || D.invalid?.[i]) { out.invalid++; span = null; continue; }
       // Low-speed sailing belongs in the denominator. Activity is determined by wind/angle or a race event, not target percentage.

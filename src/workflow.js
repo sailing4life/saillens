@@ -3,7 +3,7 @@
 const WF = (() => {
   let library = SL.freshWorkspace(), session = null, timer, dirty = false, revision = 0, savedRevision = 0, loading = false;
   const db = SL.createStore(indexedDB), write = SL.serialWriter(entries => db.setMany(entries));
-  let saveMessage = 'Opslag wordt geopend…', analysisMode = 'Overzicht', reviewMode = 'Fases', mobileView = 'Grafieken', selectedKey = null;
+  let saveMessage = 'Opslag wordt geopend…', analysisMode = 'Overzicht', reviewMode = 'Fases', mobileView = 'Beide', selectedKey = null;
   const analysisTabs = new Set(['analysis', 'summary', 'perf', 'xy', 'man', 'wind', 'polar', 'sails', 'ml']);
   const boat = () => library.boats.find(b => b.id === session?.boatId) || library.boats[0];
   const btn = (label, fn, primary = false, attrs = {}) => h('button', { type: 'button', class: primary ? 'primary' : '', onclick: fn, ...attrs }, label);
@@ -39,7 +39,8 @@ const WF = (() => {
   function process(s, calib = s.calib, raw = s.raw, cfg = s.cfg) {
     if (!raw) return null;
     const mapped = SL.mappedRaw(raw, s.profile.channels || []);
-    return SL.analyse(mapped, { cfg, events: s.events, polar: s.polar ? SL.makePolar(s.polar.rows, s.polar.src || 'file') : null, calib,
+    cfg = {...cfg, ...(s.phaseBuild?.rules ? Object.fromEntries(SL.phaseKeys.map(k=>[k,s.phaseBuild.rules[k]])) : {})};
+    return SL.analyse(mapped, { cfg, skipPhases: s.phaseBuild && (!s.phaseBuild.generated || Array.isArray(s.phaseBuild.ranges)), phaseBuild:s.phaseBuild, phaseRules:s.phaseBuild?.rules, events: s.events, polar: s.polar ? SL.makePolar(s.polar.rows, s.polar.src || 'file') : null, calib,
       formulas: s.profile.formulas || [], originalChannels: raw.ch, invalidRanges: Object.values(s.reviews).filter(r => r.invalid) });
   }
   function recompute() {
@@ -57,7 +58,7 @@ const WF = (() => {
       calib: s.calib, files: s.files, cur: s.cur || 0, view: s.view || { z: 1, x: 0, y: 0 }, D: D || null, demo: !!s.demo, scope: 'day', ml: {}, evDirty: false,
       filt: { sails: '', leg: '', tack: '', day: '' }, cst: undefined, xst: undefined, st: undefined, fst: undefined, mnst: undefined, rst: undefined, est: undefined, pol: undefined });
     for (const k of ['filt', 'cst', 'xst', 'st', 'fst', 'mnst', 'rst', 'est', 'pol']) if (s.ui?.[k]) A[k] = s.ui[k];
-    analysisMode = s.ui?.analysisMode || 'Overzicht'; reviewMode = s.ui?.reviewMode || 'Fases'; mobileView = s.ui?.mobileView || 'Grafieken'; selectedKey = s.ui?.selectedKey || null;
+    analysisMode = s.ui?.analysisMode || 'Overzicht'; reviewMode = s.ui?.reviewMode || 'Fases'; mobileView = s.ui?.mobileView || 'Beide'; selectedKey = s.ui?.selectedKey || null;
   }
   async function open(id) {
     if (dirty) await persist();
@@ -73,19 +74,18 @@ const WF = (() => {
     loading = true; adopt(s, process(s)); loading = false; touch(); await persist(); show('setup');
   }
   function resolve(tab) {
-    if (tab === 'chart') { selectedKey = null; if (session && A.raw) { session.selections.analysis = { start: iT(Math.max(A.D.i0, A.cur - 60)), end: iT(Math.min(A.D.i1, A.cur + 90)) }; } return 'review'; }
-    if (tab === 'phases') return 'review';
-    if (tab === 'ml') return 'analysis';
-    return tab;
+    if(tab==='chart') { selectedKey=null; if(A.D) session.viewport=[Math.max(A.D.i0,A.cur-90),Math.min(A.D.i1,A.cur+120)]; tab=session?.stage==='analysis'?'daycharts':'events'; }
+    if(tab==='phases')tab='review';
+    return typeof STUDIO!=='undefined'?STUDIO.route(tab):tab;
   }
   function rangeIndices(range = session?.selections.analysis, D = A.D) {
     return range ? [Math.max(D.i0, Math.floor((range.start - D.raw.t0) / 1000)), Math.min(D.i1, Math.ceil((range.end - D.raw.t0) / 1000))] : [D.i0, D.i1];
   }
   function filteredPhases(ps, purpose = 'performance') {
     if (!session || season()) return ps;
-    if (purpose === 'calibration') return SL.calibrationPhases(A.D, session.reviews);
+    if (purpose === 'calibration') return SL.calibrationReferences(A.D,session).phases;
     const r = session.selections.analysis;
-    return ps.filter(p => SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
+    return ps.filter(p => SL.sampleMatches(A.D,p.i,session.analysisFilter||{}) && SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
   }
   function objects(D = A.D) {
     if (!D) return [];
@@ -159,22 +159,9 @@ const WF = (() => {
     await write([['workspace', next], ...entries]); library = next; if (restoredSeason) { A.S = restoredSeason; seasonChanged(false); } show('home'); banner('Project hersteld als aparte bootprofielen; je bestaande sessies blijven beschikbaar.');
   }
   function afterShow() {
-    if (session && !['home', 'boat', 'season'].includes(A.tab)) session.tab = A.tab;
-    document.querySelectorAll('#nav .nav').forEach(b => b.hidden = !['home', 'boat', 'season', 'report'].includes(b.dataset.tab));
-    document.querySelectorAll('#nav h6').forEach(e => e.hidden = true);
-    $('#scope').hidden = !['season', 'perf', 'xy', 'polar', 'sails'].includes(A.tab);
-    $('#status').textContent = session ? session.profile.name + ' · ' + session.name + (A.demo ? ' · voorbeeld' : '') : 'Bootwerkruimte';
-    let top = $('#wf-flow'); if (!top) { top = h('div', { id: 'wf-flow', class: 'wf-flow noprint' }); $('#panes').before(top); }
-    top.textContent = ''; top.hidden = !session || ['home', 'boat', 'season'].includes(A.tab);
-    if (!top.hidden) {
-      const current = ['setup', 'events'].includes(A.tab) ? 'setup' : A.tab === 'review' ? 'review' : A.tab === 'cal' ? 'cal' : 'analysis';
-      top.append(h('nav', { class: 'wf-steps', 'aria-label': 'Sessieworkflow' }, [['setup', '1', 'Gegevens'], ['review', '2', 'Beoordelen'], ['cal', '3', 'Kalibratie'], ['analysis', '4', 'Analyse']].map(([id, num, name]) => btn([h('span', {}, num), name], () => show(id), false, { 'aria-current': current === id ? 'step' : null }))));
-      if (analysisTabs.has(A.tab)) top.append(h('div', { class: 'bar wf-subnav' }, [['analysis', 'Overzicht'], ['perf', 'Snelheid & VMG'], ['xy', 'XY & vergelijken'], ['man', 'Manoeuvres'], ['wind', 'Wind'], ['summary', 'Tabellen'], ['polar', 'Polar'], ['sails', 'Zeilen']].map(([id, name]) => btn(name, () => show(id), A.tab === id))));
-    }
-    if (session && !['home', 'boat', 'season'].includes(A.tab) && A.D) {
-      const c = $('#t-' + A.tab); if (analysisTabs.has(A.tab) && A.tab !== 'analysis') c.prepend(selectionBar());
-    }
-    status(); if (!loading && session) touch();
+    if (session && !['home','boat','season'].includes(A.tab)) session.tab=A.tab;
+    $('#status').textContent=session?session.profile.name+' · '+session.name+(A.demo?' · voorbeeld':''):'Bootwerkruimte';
+    STUDIO.chrome(); status(); if(!loading&&session)touch();
   }
   function selectionBar() {
     const D = A.D, selected = session.selections.analysis, [i0, i1] = rangeIndices();
@@ -208,11 +195,12 @@ const WF = (() => {
         const a = D.ch[key], lo = Math.max(D.i0, vp[0]), hi = Math.min(D.i1, vp[1]), vals = a ? Array.from(a.subarray(lo, hi)).filter(fin) : [], min = SL.quant(vals, .01), max = SL.quant(vals, .99), pad = (max - min) * .12 || 1;
         p = plot(strip, { xr: [lo, hi], yr: fin(min) ? [min - pad, max + pad] : [0, 1], h: 330, yl: key, xfmt: i => tstr(iT(i)), xTickGap: 110, pb: 30 });
         for (const r of Object.values(session.reviews).filter(r => r.invalid)) { p.c.fillStyle = alpha(css('--bad'), .18); p.c.fillRect(p.X((r.start - A.raw.t0) / 1000), p.pt, (r.end - r.start) / 1000 * (p.W - p.pl - p.pr) / (hi - lo), p.H - p.pt - p.pb); }
+        if(A.tab==='pairreview' && session.activePairKey){const q=session.manoeuvrePairs?.[session.activePairKey];for(const [r,col]of [[q?.before,'--s1'],[q?.after,'--s3']])if(r){p.c.fillStyle=alpha(css(col),.15);p.c.fillRect(p.X((r.start-A.raw.t0)/1000),p.pt,(r.end-r.start)/1000*(p.W-p.pl-p.pr)/(hi-lo),p.H-p.pt-p.pb);}}
         if (session.selections.analysis) { const [a, b] = rangeIndices(); p.c.fillStyle = alpha(css('--accent'), .16); p.c.fillRect(p.X(a), p.pt, p.X(b) - p.X(a), p.H - p.pt - p.pb); }
         if (a) { const step = Math.max(1, Math.floor((hi - lo) / 1800)); const pts = []; for (let i = lo; i < hi; i += step) pts.push([i, a[i]]); p.line(pts, css('--s1')); }
         p.c.strokeStyle = css('--ink'); p.c.beginPath(); p.c.moveTo(p.X(A.cur), p.pt); p.c.lineTo(p.X(A.cur), p.H - p.pb); p.c.stroke();
       }
-      readout.textContent = tstr(iT(A.cur)) + ' · ' + key + ' ' + f1(D.ch[key]?.[A.cur], 2); cursor.value = A.cur;
+      readout.textContent = tstr(iT(A.cur)) + ' · ' + key + ' ' + f1(D.ch[key]?.[A.cur], 2); cursor.value = A.cur; if(typeof STUDIO!=='undefined')STUDIO.cursorMoved();
     }
     box.append(cursor, bar(readout, btn('Zoom op selectie', () => { session.viewport = rangeIndices(); show(A.tab); }), btn('Volledig beeld', () => { session.viewport = null; A.view = { z: 1, x: 0, y: 0 }; show(A.tab); }), btn('Kaart +', () => { A.view.z = Math.min(80, A.view.z * 1.4); draw(); touch(); }), btn('Kaart −', () => { A.view.z = Math.max(.5, A.view.z / 1.4); draw(); touch(); })), help('Klik voor de tijdcursor; sleep in de grafiek voor een selectie. Versleep de kaart om te pannen. De selectie is ook met de tijdvelden instelbaar.'));
     const at = e => Math.max(D.i0, Math.min(D.i1, Math.round(p.xr[0] + (e.offsetX - p.pl) / (p.W - p.pl - p.pr) * (p.xr[1] - p.xr[0]))));
@@ -251,13 +239,14 @@ const WF = (() => {
         A.D?.warn.length ? notice(A.D.warn.join(' ')) : help('Geen importwaarschuwingen.'), bar(btn('Events & zeilwissels', () => show('events')), btn('Kanaaltoewijzing', () => show('boat')))));
       c.append(selectionBar()); timePanel(c);
       c.append(bar(btn('Selectie als sessievenster', () => { if (!session.selections.analysis) return banner('Selecteer eerst een tijdvak.', true); const old = { ...A.cfg }; A.cfg.tStart = session.selections.analysis.start; A.cfg.tEnd = session.selections.analysis.end; if (!recompute()) A.cfg = old; show('setup'); }), btn('Volledig log verwerken', () => { A.cfg.tStart = A.cfg.tEnd = null; session.viewport = null; session.selections.analysis = null; recompute(); show('setup'); })));
-      c.append(bar(btn('Verder: fases & manoeuvres beoordelen', () => show('review'), true)));
+      c.append(bar(btn('Verder: events & sessie indelen', () => show('events'), true)));
     }
   }
   function review() {
     const c = pane('review'); if (!A.D) return;
+    reviewMode = 'Fases';
     const reviewVar = session.reviewVariable || 'VMG%', all = objects(), list = all.filter(x => x.kind === (reviewMode === 'Fases' ? 'phase' : 'manoeuvre'));
-    c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Eerst vertrouwen in de data.'), help('Kalibratiereferenties vragen stabiele omstandigheden. Een trage tack blijft waardevol voor je performanceanalyse.')), btn('Verder: kalibratie', () => show('cal'), true)), selectionBar());
+    c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Eerst vertrouwen in de data.'), help('Kalibratiereferenties vragen stabiele omstandigheden. Een trage tack blijft waardevol voor je performanceanalyse.')), btn('Verder: manoeuvreparen', () => show('pairreview'), true)), selectionBar());
     timePanel(c);
     if (session.staleReviews) c.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
     const detail = all.find(x => x.key === selectedKey);
@@ -275,15 +264,14 @@ const WF = (() => {
     const visible = range ? list.filter(x => x.range.start < range.end && x.range.end > range.start) : list;
     const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(visible.length / 40) - 1)), shown = visible.slice(page * 40, (page + 1) * 40);
     const approved = all.filter(x => SL.allowed(session.reviews[x.key], 'calibration')).length;
-    c.append(card('Fases & manoeuvres', bar(['Fases', 'Manoeuvres'].map(k => btn(k, () => { reviewMode = k; session.reviewPage = 0; show('review'); }, reviewMode === k)), h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
+    c.append(card('Fases & manoeuvres', bar(['Fases', 'Manoeuvres'].map(k => btn(k, () => { if(k==='Manoeuvres'){show('pairreview');return;} reviewMode = k; session.reviewPage = 0; show('review'); }, reviewMode === k)), h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
       btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
       table(['Tijd', 'Type / boeg', 'BSP', 'TWS', reviewVar, 'Kalibratie', 'Performance', ''], shown.map(x => { const r = session.reviews[x.key]; return [tstr(x.range.anchor || x.range.start), x.label, f1(x.obj.v?.BSP ?? x.obj.bspIn, 2), f1(x.obj.v?.TWS ?? x.obj.tws), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', r?.invalid || r?.performance === false ? 'Uitgesloten' : 'Meenemen', btn('Bekijk', () => { selectedKey = x.key; A.cur = x.obj.i; session.selections.analysis = { start: Math.max(iT(A.D.i0), x.range.start), end: Math.min(iT(A.D.i1), x.range.end) }; session.viewport = [Math.max(A.D.i0, x.obj.i - 90), Math.min(A.D.i1, (x.obj.i1 || x.obj.i) + 120)]; show('review'); })]; })),
       !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
       bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, `${Math.min(page * 40 + 1, visible.length)}–${Math.min((page + 1) * 40, visible.length)} van ${visible.length}`), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));
     if (exclusions.length) c.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
-    const advanced = h('details', {}, h('summary', {}, 'Detectie-instellingen'));
-    advanced.append(h('div', { class: 'form' }, [['phaseLen', 'Faseduur (s)'], ['phaseGap', 'Tussenruimte (s)'], ['sdTwa', 'Max. TWA standaardafwijking (°)'], ['sdBsp', 'Max. BSP standaardafwijking (kn)'], ['minBsp', 'Min. BSP voor fase (kn)'], ['polMin', 'Min. polar% voor fase'], ['polMax', 'Max. polar% voor fase'], ['manBefore', 'Vóór manoeuvre (s)'], ['manAfter', 'Herstel na manoeuvre (s)'], ['maxHold', 'Max. leeftijd meetwaarde (s)']].map(([k, label]) => field(label, h('input', { type: 'number', step: 'any', value: A.cfg[k], onchange: e => { const old = A.cfg[k]; A.cfg[k] = +e.target.value; if (!recompute()) A.cfg[k] = old; show('review'); } })))), help('Deze fasefilters veranderen niet de noemer van de langzaamanalyse. Die gebruikt alle geldige vaartijd.' )); c.append(advanced);
+
   }
   function validateCalib(value) {
     const c = { ...SL.copy(SL.CAL0), ...value };
@@ -293,11 +281,11 @@ const WF = (() => {
   }
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
-    const ps = SL.calibrationPhases(A.D, session.reviews), draft = session.draft ||= SL.copy(A.calib || SL.CAL0);
+    const refs=SL.calibrationReferences(A.D,session), ps = refs.phases, draft = session.draft ||= SL.copy(A.calib || SL.CAL0);
     const approvedMans = A.D.mans.filter(m => SL.allowed(SL.reviewed(A.D, m, 'manoeuvre', session.reviews), 'calibration'));
     const pairAllowed = (a, b) => approvedMans.some(m => iT(m.i) > a.t && iT(m.i) < b.t);
-    const model = { bsp: SL.calBsp(A.D, ps), wind: SL.calWind(ps), awa: SL.calAwa(ps), cur: SL.calCurrent(ps, A.D.magVar, pairAllowed) }; model.score = SL.calScore(model.bsp, model.wind, model.awa);
-    c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Controleer. Vergelijk. Pas toe.'), help(`${ps.length} goedgekeurde fases · ${approvedMans.length} goedgekeurde manoeuvres. Alle correcties zijn ten opzichte van het oorspronkelijke log.`)), btn('Naar analyse', () => show('analysis'), true)));
+    const model = { bsp: SL.calBsp(A.D, ps), wind: SL.calWind(ps), awa: SL.calAwa(ps), cur: SL.calCurrent(ps, A.D.magVar, pairAllowed, refs.pairs) }; model.score = SL.calScore(model.bsp, model.wind, model.awa);
+    c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Controleer. Vergelijk. Pas toe.'), help(`${ps.length} goedgekeurde fases · ${refs.pairs.length} goedgekeurde vensterparen. Alle correcties zijn ten opzichte van het oorspronkelijke log.`)), btn('Sessie opslaan & analyseren', safe(()=>STUDIO.publish()), true)));
     if (!ps.length) c.append(notice('Keur eerst stabiele fases goed bij Beoordelen. Je kunt al een handmatig voorstel bekijken; de modellen wachten op referenties.'), btn('Referenties beoordelen', () => show('review')));
     if (session.calibrationChanged) c.append(notice('De instrumentkalibratie is tijdens deze sessie gewijzigd. Eén correctie voor de hele sessie is dan niet betrouwbaar. Maak aparte sessies met een constant instrumentprofiel; toepassen is hier geblokkeerd.'));
     const form = h('div', { class: 'form' });
@@ -340,12 +328,12 @@ const WF = (() => {
   function applyCalibration(value, note = 'Handmatig toegepast') {
     if (session.calibrationChanged) throw new Error('Splits eerst de sessie op instrumentinstelling.');
     const cal = validateCalib(value), s = snapshot(), D = process(s, cal);
-    session.calibrationHistory.push({ at: Date.now(), value: SL.copy(cal), previous: SL.copy(A.calib), note, references: Object.values(session.reviews).filter(r => r.calibration).map(r => SL.copy(r)), profileRevision: session.profile.revision });
+    session.calibrationHistory.push({ at: Date.now(), value: SL.copy(cal), previous: SL.copy(A.calib), note, manoeuvrePairs:SL.copy(session.manoeuvrePairs||{}), references: Object.values(session.reviews).filter(r => r.calibration).map(r => SL.copy(r)), profileRevision: session.profile.revision });
     A.calib = cal; session.calib = cal; session.draft = SL.copy(cal); A.D = D; session.preview = false; recompute(); show('cal');
   }
   function analyse() {
     const c = pane('analysis'); if (!A.D) return;
-    const threshold = session.slowThreshold || 95, stats = SL.slowStats(A.D, session.reviews, session.selections.analysis, threshold);
+    const threshold = session.slowThreshold || 95, stats = SL.slowStats(A.D, session.reviews, session.selections.analysis, threshold, session.analysisFilter);
     c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Wat gebeurde er op het water?'), help('Bekijk snelheid, manoeuvres en omstandigheden op dezelfde tijdlijn.')), btn('Maak debrief', () => show('report'), true)), selectionBar(),
       h('div', { class: 'kpis' }, kpi('Geldige vaartijd', dur(stats.valid)), kpi('Onder ' + threshold + '% polar', dur(stats.slow), '', f1(stats.percent) + '% van tijd met target'), kpi('Tijdens manoeuvre / herstel', dur(stats.manoeuvre)), kpi('Rechtuit langzaam', dur(stats.straight)), kpi('Zonder target', dur(stats.unknown), '', 'targetdekking ' + f1(stats.coverage) + '%')),
       card('Hoe vaak voeren we langzaam?', bar(field('Drempel polar %', h('input', { type: 'number', min: 1, max: 150, value: threshold, onchange: e => { session.slowThreshold = Math.max(1, Math.min(150, +e.target.value || 95)); show('analysis'); } }))),
@@ -357,7 +345,7 @@ const WF = (() => {
   function comparison(c) {
     if (!session) return;
     const ranges = ['A', 'B'].map(k => session.selections[k]);
-    const avg = (r, key) => { if (!r) return NaN; const [lo, hi] = rangeIndices(r), values = []; for (let i = lo; i < hi; i++) if (SL.performanceAllowed({ start: iT(i), end: iT(i + 1) }, session.reviews)) values.push(A.D.ch[key]?.[i]); return (SL.ANG.test(key) ? SL.cmean : SL.mean)(values); };
+    const avg = (r, key) => { if (!r) return NaN; const [lo, hi] = rangeIndices(r), values = []; for (let i = lo; i < hi; i++) if (SL.sampleMatches(A.D,i,session.analysisFilter||{}) && SL.performanceAllowed({ start: iT(i), end: iT(i + 1) }, session.reviews)) values.push(A.D.ch[key]?.[i]); return (SL.ANG.test(key) ? SL.cmean : SL.mean)(values); };
     c.append(card('Vergelijk A / B', help('Bewaar twee tijdvakken met de knoppen boven de tijdlijn. Verschillen zijn aanwijzingen; controleer wind, boeg, zeilen en vaarmodus voordat je een oorzaak toeschrijft.'),
       table(['Variabele', ranges[0] ? 'A · ' + tstr(ranges[0].start) : 'A niet gekozen', ranges[1] ? 'B · ' + tstr(ranges[1].start) : 'B niet gekozen'], ['BSP', 'TWS', 'absTWA', 'VMG', 'VMG%', 'Heel', 'Rudder', ...session.profile.formulas.map(x => x.name)].filter(k => A.D.ch[k]).map(k => [k, f1(avg(ranges[0], k), 2), f1(avg(ranges[1], k), 2)])),
       bar(['A', 'B'].map((k, i) => btn('Bekijk ' + k, () => { session.selections.analysis = SL.copy(ranges[i]); show('analysis'); }, false, { disabled: !ranges[i] }))),
@@ -402,6 +390,7 @@ const WF = (() => {
     $('.topbar').append(h('span', { id: 'wf-save', class: 'chip', role: 'status', 'aria-live': 'polite' }));
     R.home = home; R.setup = setup; R.boat = boatSettings; R.review = review; R.cal = calibration; R.analysis = analyse;
     const oldReport = R.report; R.report = () => { oldReport(); if (!session) return; const c = $('#t-report .report') || $('#t-report'); c.prepend(h('section', { class: 'rsec' }, h('h2', {}, session.name + ' · debrief'), help('Boot: ' + session.profile.name + ' · profiel v' + session.profile.revision + ' · kalibratie v' + session.calibrationHistory.length), help(session.baseline || 'Geen instrumentcontext ingevuld.'), help('Samenvatting en track tonen de volledige sessie. Fasegrafieken en eigen variabelen volgen de actieve selectie en beoordelingen. ' + (session.selections.analysis ? dstr(session.selections.analysis.start) + ' – ' + dstr(session.selections.analysis.end) : 'Geen tijdselectie.')), session.notes.map(n => h('p', {}, (n.range ? tstr(n.range.start) + '–' + tstr(n.range.end) + ': ' : '') + n.text)))); if (session.profile.formulas.length) c.append(card('Eigen variabelen', table(['Naam', 'Formule', 'Eenheid', 'Versie', 'Fasegemiddelde'], session.profile.formulas.map(d => [d.name, d.expression, d.unit, d.version, f1((d.type === 'angle' ? SL.cmean : SL.mean)(filteredPhases(A.D.phases).map(p => p.v[d.name])), 3)])))); };
+    STUDIO.init();
     document.addEventListener('change', () => { if (session) touch(); });
     document.addEventListener('input', e => { if (session && e.target.matches('textarea.note,input,select')) touch(); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && dirty) persist().catch(() => {}); });
@@ -411,5 +400,5 @@ const WF = (() => {
     if (library.lastSession) { try { const s = SL.validateSession(await db.get('session:' + library.lastSession)); adopt(s, process(s)); } catch (e) { banner('Laatste sessie kon niet worden geopend: ' + e.message, true); } }
     show('home'); loading = false; status();
   }
-  return { init, resolve, afterShow, touch, persist, importFiles, filteredPhases, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
+  return { selectionBar, timePanel, notes, comparison, open, create, init, resolve, afterShow, touch, persist, importFiles, filteredPhases, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
 })();

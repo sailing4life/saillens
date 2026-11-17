@@ -12,6 +12,7 @@ async function app(indexedDB=new IDBFactory()){
   for(const k of ['Float64Array','Uint8Array','Uint32Array','Int8Array','Int16Array','Int32Array'])w[k]=global[k];
   Object.defineProperty(w,'crypto',{value:crypto});
   w.matchMedia=()=>({matches:false,addEventListener(){}});
+  w.HTMLCanvasElement.prototype.toDataURL=()=> 'data:image/png;base64,dGVzdA==';
   w.HTMLCanvasElement.prototype.getContext=()=>new Proxy({measureText:t=>({width:String(t).length*7})},{get:(x,k)=>x[k]||(()=>{}),set:(x,k,v)=>(x[k]=v,true)});
  }});
  const w=dom.window;await pause(50);const $=s=>w.document.querySelector(s);
@@ -21,7 +22,7 @@ async function app(indexedDB=new IDBFactory()){
 }
 test('complete demo workflow: review, draft/apply/revert, formulas, notes, reload and boat isolation',async()=>{
  const a=await app();try{
-  await a.click('Bekijk voorbeeld');assert.equal(a.run('A.tab'),'setup');assert.ok(a.run('A.D.phases.length')>100);
+  await a.click('Bekijk voorbeeld');assert.equal(a.run('A.tab'),'setup');assert.equal(a.run('A.D.phases.length'),0);a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');assert.ok(a.run('A.D.phases.length')>100);
   a.run("show('review')");await a.click('Getoonde selectie goedkeuren');assert.equal(a.run('SL.calibrationPhases(A.D,WF.session.reviews).length'),40);
   a.run("WF.session.selections.analysis={start:A.raw.t0+100000,end:A.raw.t0+500000};A.view={z:2,x:4,y:7};show('cal')");
   const before=a.run('A.D.ch.BSP[200]');a.fill('#draft-bspK','1.05');assert.equal(a.run('A.D.ch.BSP[200]'),before);
@@ -33,7 +34,7 @@ test('complete demo workflow: review, draft/apply/revert, formulas, notes, reloa
   await a.click('Voorbeeld berekenen');assert.match(a.$('#formula-preview').textContent,/geldige waarden/);
   await a.click('Formule opslaan bij boot');assert.equal(a.run('WF.session.profile.formulas.length'),0);
   await a.click('Profiel toepassen op deze sessie');assert.ok(a.run('A.D.ch.SignedVMG.length')>100);
-  a.run("show('analysis')");a.fill('#debrief-note','Controleer herstel na de tack');await a.click('Notitie bewaren bij selectie');
+  await a.run("STUDIO.publish()");a.fill('#debrief-note','Controleer herstel na de tack');await a.click('Notitie bewaren bij selectie');
   const id=a.run('WF.session.id');await a.run('WF.persist()');
   assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
   const b=await app(a.indexedDB);try{
@@ -47,8 +48,8 @@ test('complete demo workflow: review, draft/apply/revert, formulas, notes, reloa
 });
 test('all specialist views remain reachable and missing wind does not break navigation',async()=>{
  const a=await app();try{
-  await a.click('Bekijk voorbeeld');
-  for(const tab of ['setup','review','cal','analysis','perf','xy','man','wind','summary','polar','sails','report','events','boat','season']){a.run(`show('${tab}')`);assert.equal(a.run('A.tab'),tab);}
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');await a.run('STUDIO.publish()');
+  for(const tab of ['setup','review','cal','analysis','daycharts','dist','prestart','perf','xy','man','wind','summary','polar','sails','report','events','boat','season']){a.run(`show('${tab}')`);assert.equal(a.run('A.tab'),tab);}
   assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
   a.run('delete A.raw.ch.TWA;delete A.raw.ch.TWS;delete A.raw.ch.AWA;delete A.raw.ch.AWS;recompute()');
   for(const tab of ['setup','review','cal','analysis','perf','xy','man','summary','report'])a.run(`show('${tab}')`);
@@ -72,7 +73,7 @@ test('multi-file imports, duplicate detection, failed import rollback and projec
 });
 test('invalid measurement can be restored after its generated phase disappears',async()=>{
  const a=await app();try{
-  await a.click('Bekijk voorbeeld');a.run("show('review')");await a.click('Bekijk');a.fill('#review-reason','Sensor dropout');await a.click('Meting ongeldig');
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');a.run("show('review')");await a.click('Bekijk');a.fill('#review-reason','Sensor dropout');await a.click('Meting ongeldig');
   assert.ok(a.run('A.D.invalid.some(Boolean)'));assert.ok(a.$('#t-review').textContent.includes('Bewaarde uitsluitingen'));
   await a.click('Uitsluiting herstellen');assert.equal(a.run('A.D.invalid.some(Boolean)'),false);assert.equal(a.errors.length,0);
  }finally{a.close();}
@@ -94,5 +95,39 @@ test('unblurred edits survive saving, calibration comparison and reload',async()
    assert.equal(b.run('WF.session.draft.awaOff'),1.5);
    assert.equal(b.errors.length,0);
   }finally{b.close();}
+ }finally{a.close();}
+});
+test('explicit phases, pair review, immutable reports and new saved versions',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');assert.equal(a.run('A.D.phases.length'),0);
+  a.run("show('analysis')");assert.equal(a.run('A.tab'),'cal');
+  a.run("show('events')");assert.ok(a.$('#event-time'));a.fill('#event-kind','MiscEvent');a.fill('#event-note','Controle moment');await a.click('Event toevoegen');
+  assert.ok(a.run("A.events.events.some(e=>e.comments==='Controle moment')"));
+  a.run("STUDIO.generate({...SL.phaseDefaults(A.cfg),scope:'racing',race:'1'})");
+  assert.ok(a.run('A.D.phases.length')>0);assert.equal(a.run('A.D.phases.every(p=>p.race===1)'),true);
+  const ranges=a.run('JSON.stringify(WF.session.phaseBuild.ranges)');
+  a.run("show('pairreview')");assert.ok(a.$('#pair-before-start'));assert.ok(a.run('Object.keys(WF.session.manoeuvrePairs).length')>0);
+  a.run("show('cal')");a.fill('#draft-bspK','1.02');await a.click('Voorstel toepassen');assert.equal(a.run('JSON.stringify(WF.session.phaseBuild.ranges)'),ranges);
+  await a.run('STUDIO.publish()');assert.equal(a.run('A.tab'),'analysis');assert.equal(a.run('WF.session.analysisVersions.length'),1);
+  a.run("show('dist')");await a.click('Voeg toe aan report');const frozen=a.run('JSON.stringify(WF.session.reportItems[0])');
+  a.run("show('report')");a.fill('[aria-label="Toelichting 1"]','Snelheid verder onderzoeken');a.fill('[aria-label="Reporttitel"]','Debrief race 1');assert.equal(a.$('.studio-report h1').textContent,'Debrief race 1');
+  a.run("show('cal')");a.fill('#draft-bspK','1.04');await a.click('Voorstel toepassen');assert.equal(a.run('STUDIO.current()'),false);
+  assert.equal(a.run('JSON.stringify(WF.session.reportItems[0].blocks)'),JSON.stringify(JSON.parse(frozen).blocks));
+  await a.run('STUDIO.publish()');assert.equal(a.run('WF.session.analysisVersions.length'),2);
+  a.run("show('report')");await a.click('Vernieuwen met huidige sessieversie');assert.equal(a.run('WF.session.reportItems[0].version'),2);assert.equal(a.run('WF.session.reportItems[0].note'),'Snelheid verder onderzoeken');assert.equal(a.run('WF.session.reportItems[0].history.length'),1);
+  await a.run('WF.persist()');const b=await app(a.indexedDB);try{assert.equal(b.run('WF.session.analysisVersions.length'),2);assert.equal(b.run('WF.session.reportItems[0].version'),2);assert.equal(b.run('STUDIO.current()'),true);}finally{b.close();}
+  a.run("show('events')");a.fill('#event-kind','MiscEvent');a.fill('#event-note','Nieuwe indeling');await a.click('Event toevoegen');await assert.rejects(a.run('STUDIO.publish()'),/Maak de fases opnieuw/);
+  assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
+ }finally{a.close();}
+});
+test('pair windows use circular angles and explicit calibration exclusions',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  a.run(`STUDIO.generate({...SL.phaseDefaults(A.cfg),sdBsp:10,sdTwa:180,sdTws:20,sdHdg:180});
+    window.validPair=A.D.mans.map(m=>SL.defaultPair(A.D,m)).find(p=>SL.inspectPair(A.D,p,WF.session.phaseBuild.rules).valid);`);
+  assert.ok(a.w.validPair,a.run("JSON.stringify(A.D.mans.slice(0,5).map(m=>SL.inspectPair(A.D,SL.defaultPair(A.D,m),WF.session.phaseBuild.rules).errors))"));a.run('validPair.approved=true;WF.session.manoeuvrePairs[validPair.key]=validPair');assert.equal(a.run('SL.approvedPairs(A.D,WF.session).length'),1);
+  a.run("WF.session.reviews.veto={kind:'interval',...validPair.before,calibration:false}");assert.equal(a.run('SL.approvedPairs(A.D,WF.session).length'),0);
+  a.run("delete WF.session.reviews.veto;window.old=validPair.before.end;validPair.before.end=validPair.anchor");assert.equal(a.run('SL.inspectPair(A.D,validPair,WF.session.phaseBuild.rules).valid'),false);
+  a.run("validPair.before.end=old;const i=Math.round((validPair.before.start-A.raw.t0)/1000);A.D.ch.HDG.fill(359,i,i+25);A.D.ch.HDG.fill(1,i+25,i+50)");assert.ok(a.run('SL.windowPhase(A.D,validPair.before).spread.HDG')<2);
  }finally{a.close();}
 });

@@ -175,17 +175,17 @@ function validateConfig(cfg) {
 }
 
 function applyEvents(raw, ev, cfg) {
-  const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), sailNames: [], list: [], manual: {}, dayStart: null, dayStop: null };
+  const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), motor: new Uint8Array(n), sailNames: [], list: [], manual: {}, dayStart: null, dayStop: null };
   if (!ev || !cfg.useEvents) return L;
   const toI = tl => Math.round((tl - cfg.evOff * 36e5 + logOffset(raw, cfg) * 36e5 + (cfg.evShiftSec || 0) * 1000 - raw.t0) / 1000);
-  const E = ev.events.map(e => ({ ...e, i: toI(e.tl) }));
+  const E = ev.events.map(e => ({ ...e, i: toI(e.tl) })).sort((a,b)=>a.i-b.i);
   L.list = E;
   const fill = (arr, a, b, v) => { a = Math.max(0, a); b = Math.min(n, b); for (let i = a; i < b; i++) arr[i] = v; };
   const sails = E.filter(e => e.type === 'SailsUp');
   sails.forEach((e, k) => { const lab = sailLabel(e.attr); let id = L.sailNames.indexOf(lab); if (id < 0) id = L.sailNames.push(lab) - 1; e.label = lab; fill(L.sail, e.i, k + 1 < sails.length ? sails[k + 1].i : n, id); });
   let race = 0, leg = 0, rs = -1;
   for (const e of E) {
-    if (e.type === 'RaceStartGun') { race = +e.attr || race + 1; leg = 1; rs = e.i; e.label = 'Start R' + race; }
+    if (e.type === 'RaceStartGun') { if(rs>=0){fill(L.race,rs,e.i,race);fill(L.leg,rs,e.i,leg);} race = +e.attr || race + 1; leg = 1; rs = e.i; e.label = 'Start R' + race; }
     else if (e.type === 'RaceMark' && rs >= 0) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); leg++; rs = e.i; e.label = 'M' + (e.attr || leg - 1); }
     else if ((e.type === 'RaceFinish' || e.type === 'DayStop') && rs >= 0) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); rs = -1; e.label = e.type === 'RaceFinish' ? 'Finish R' + race : ''; }
     else if (e.type === 'DayStart') L.dayStart = e.i; if (e.type === 'DayStop') L.dayStop = e.i;
@@ -193,6 +193,7 @@ function applyEvents(raw, ev, cfg) {
   if (rs >= 0) { fill(L.race, rs, n, race); fill(L.leg, rs, n, leg); }
   let ts = -1; for (const e of E) { if (e.type === 'StartTesting') ts = e.i; else if (e.type === 'StopTesting' && ts >= 0) { fill(L.testing, ts, e.i, 1); ts = -1; } }
   if (ts >= 0) fill(L.testing, ts, n, 1);
+  let motorStart=-1; for(const e of E){if(e.type==='MotorStart')motorStart=e.i;else if(e.type==='MotorStop'&&motorStart>=0){fill(L.motor,motorStart,e.i,1);motorStart=-1;}} if(motorStart>=0)fill(L.motor,motorStart,n,1);
   const man = E.filter(e => e.type === 'ManualEntry');
   man.forEach(e => e.attr.split(';').forEach(kv => { const [k, v] = kv.split('='); if (!k || !fin(+v)) return; const key = k.trim(); if (!L.manual[key]) L.manual[key] = new Float64Array(n).fill(NaN); fill(L.manual[key], e.i, n, +v); }));
   return L;
@@ -333,18 +334,22 @@ function process(raw, opt) {
   for (const q of formulaDiagnostics) if (q.missing.length) warn.push(q.name + ': ontbrekende kanalen ' + q.missing.join(', '));
   const formulaAngles = new Set((opt.formulas || []).filter(d => d.type === 'angle').map(d => d.name));
   const names = Object.keys(ch), phases = [], PL = cfg.phaseLen;
-  for (let i = i0; i + PL <= i1;) {
-    if (cs[i + PL] - cs[i] > 0) { i += 3; continue; }
+  const phaseDiagnostics={masked:0,stability:0,target:0,accepted:0};
+  if(opt.phaseRules)for(let i=i0;i<i1;i++)if(!SL.sampleMatches({raw,i0,i1,L,mode,tack},i,opt.phaseRules))bad[i]=1;
+  for(let i=0;i<n;i++)cs[i+1]=cs[i]+bad[i];
+  for (let i = i0; !opt.skipPhases && i + PL <= i1;) {
+    if (cs[i + PL] - cs[i] > 0) { phaseDiagnostics.masked++; i += 3; continue; }
     const tw = TWA.subarray(i, i + PL);
-    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1]) { i += 5; continue; }
+    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1] || (fin(cfg.sdHdg) && ch.HDG && sd(Array.from(ch.HDG.subarray(i,i+PL),x=>w180(x-cmean(ch.HDG.subarray(i,i+PL)))))>cfg.sdHdg)) { phaseDiagnostics.stability++; i += 5; continue; }
     const v = {}; for (const k of names) v[k] = (ANG.test(k) || formulaAngles.has(k) ? cmean : mean)(ch[k].subarray(i, i + PL));
-    if ((fin(v['BSPpol%']) && (v['BSPpol%'] < cfg.polMin || v['BSPpol%'] > cfg.polMax)) || v.absTWA < 28) { i += 5; continue; }
+    if ((fin(v['BSPpol%']) && (v['BSPpol%'] < cfg.polMin || v['BSPpol%'] > cfg.polMax)) || v.absTWA < 28) { phaseDiagnostics.target++; i += 5; continue; }
     if (fin(v.Cur_E) && fin(v.Cur_N)) { v.CUR_RATE = Math.hypot(v.Cur_E, v.Cur_N); v.CUR_DIR = w360(Math.atan2(v.Cur_E, v.Cur_N) * R2D); }
     const md = mode[i + (PL >> 1)], rc = L.race[i], lg = L.leg[i];
     phases.push({ i, i1: i + PL, t: raw.t0 + i * 1000, tack: v.TWA >= 0 ? 'Stbd' : 'Port', mode: MODES[md], sails: L.sail[i] >= 0 ? L.sailNames[L.sail[i]] : '-', race: rc, leg: lg, raceLeg: rc ? 'R' + rc + 'L' + lg : '-', testing: L.testing[i], v });
-    i += PL + cfg.phaseGap;
+    phaseDiagnostics.accepted++; i += PL + cfg.phaseGap;
   }
-  const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases, magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics };
+  const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases, magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics, phaseDiagnostics, formulaAngles: [...formulaAngles] };
+  if(opt.phaseBuild)SL.phaseBuild(D,opt.phaseBuild);
   D.legs = buildLegs(D); D.sum = summary(D);
   return D;
 }
@@ -527,6 +532,6 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;
