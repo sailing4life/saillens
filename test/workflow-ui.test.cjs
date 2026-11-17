@@ -116,7 +116,7 @@ test('explicit phases, pair review, immutable reports and new saved versions',as
   await a.run('STUDIO.publish()');assert.equal(a.run('WF.session.analysisVersions.length'),2);
   a.run("show('report')");await a.click('Vernieuwen met huidige sessieversie');assert.equal(a.run('WF.session.reportItems[0].version'),2);assert.equal(a.run('WF.session.reportItems[0].note'),'Snelheid verder onderzoeken');assert.equal(a.run('WF.session.reportItems[0].history.length'),1);
   await a.run('WF.persist()');const b=await app(a.indexedDB);try{assert.equal(b.run('WF.session.analysisVersions.length'),2);assert.equal(b.run('WF.session.reportItems[0].version'),2);assert.equal(b.run('STUDIO.current()'),true);}finally{b.close();}
-  a.run("show('events')");a.fill('#event-kind','MiscEvent');a.fill('#event-note','Nieuwe indeling');await a.click('Event toevoegen');await assert.rejects(a.run('STUDIO.publish()'),/Maak de fases opnieuw/);
+  a.run("show('events')");a.fill('#event-kind','MiscEvent');a.fill('#event-note','Nieuwe notitie');await a.click('Event toevoegen');await a.run('STUDIO.publish()');assert.equal(a.run('A.tab'),'analysis');a.run("show('events')");a.fill('#event-kind','MotorStart');await a.click('Event toevoegen');await assert.rejects(a.run('STUDIO.publish()'),/Maak de fases opnieuw/);
   assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
  }finally{a.close();}
 });
@@ -152,5 +152,31 @@ test('report refresh restores analysis context, handles legacy settings and supp
   a.w.projectFile={name:'saved.json',text:async()=>a.run('backup')};await a.run('WF.importFiles([projectFile])');await a.run('WF.open(WF.library.sessions.at(-1).id)');assert.equal(a.run('STUDIO.current()'),true);
   assert.throws(()=>a.run("const bad=WF.snapshot();bad.reportItems={};SL.decodeProject(SL.encodeProject({app:'SailLens',type:'project',version:1,boats:WF.library.boats,sessions:[bad]}))"),/reportItems/);
   assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
+ }finally{a.close();}
+});
+test('race-day tools keep held-out samples independent and reopen a frozen version separately',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');
+  a.run("window.p=A.D.mans.map(m=>RaceTools.suggest(A.D,m,WF.session)).find(p=>p.suggested);WF.session.manoeuvrePairs[p.key]=Object.assign(p,{approved:true,validation:true});");
+  assert.ok(a.run('SL.approvedPairs(A.D,WF.session).length'));assert.equal(a.run('SL.calibrationReferences(A.D,WF.session).pairs.length'),0);
+  a.run("show('cal')");await a.click('Toets voorstel op aparte manoeuvres');assert.match(a.$('#t-cal').textContent,/Controlepaar/);
+  await a.run('STUDIO.publish()');const id=a.run('WF.session.id');
+  a.run("show('report')");await a.run('WF.openVersion(1)');assert.notEqual(a.run('WF.session.id'),id);assert.equal(a.run('A.tab'),'analysis');assert.equal(a.run('STUDIO.current()'),true);
+  a.run("show('events');A.cur=100");await a.click('Tack toevoegen');assert.ok(a.run('A.D.mans.some(m=>m.manual&&m.i===100)'));await a.click('Laatste draaipuntwijziging herstellen');assert.equal(a.run('A.D.mans.some(m=>m.manual&&m.i===100)'),false);
+  assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
+ }finally{a.close();}
+});
+test('native strip and prestart geometry retain fractional time and respect pin ends',async()=>{
+ const a=await app();try{
+  assert.equal(a.run("SL.parseLog('Time,BSP\\n2026-01-01T00:00:00.040Z,6\\n2026-01-01T00:00:00.080Z,7',{start:0,end:Infinity,channel:'BSP'}).map(x=>x[0]%1000).join(',')"),'40,80');
+  assert.ok(a.run("RaceTools.geometry([0,0,0,.01],-.001,.005,0,10).eta")>20);
+  assert.ok(Number.isNaN(a.run("RaceTools.geometry([0,0,0,.01],-.001,.02,0,10).eta")));
+ }finally{a.close();}
+});
+test('investigating a slow interval finds a faster comparable phase and opens its track',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');await a.run('STUDIO.publish()');
+  a.run("window.candidate=A.D.phases.find(p=>p.sails!=='-');window.src={start:candidate.t,end:A.raw.t0+candidate.i1*1000};A.D.ch.BSP.fill(2,candidate.i,candidate.i1);A.D.ch['BSPpol%'].fill(50,candidate.i,candidate.i1);RaceTools.compareSlow(src)");
+  assert.equal(a.run('WF.session.selections.A.start'),a.run('src.start'));assert.ok(a.run('WF.session.selections.B'));await a.click('Bekijk B');assert.equal(a.run('A.raw.t0+A.cur*1000'),a.run('WF.session.selections.B.start'));assert.equal(a.errors.length,0);
  }finally{a.close();}
 });

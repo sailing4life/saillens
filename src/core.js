@@ -50,7 +50,7 @@ function* csvRows(text, delimiter = csvDelimiter(text)) {
   if (value || row.length) { row.push(value); yield row; }
 }
 const csvNumber = s => { const v = String(s ?? '').trim(); return v ? Number(v.replace(',', '.')) : NaN; };
-function parseLog(text) {
+function parseLog(text, nativeWindow) {
   text = String(text).replace(/^\uFEFF/, '');
   const expedition = /^!boat/i.test(text), delimiter = expedition ? ',' : csvDelimiter(text), format = expedition ? 'Expedition log' : 'CSV table';
   function* records() {
@@ -67,6 +67,23 @@ function parseLog(text) {
       else stamp = di >= 0 && tmi >= 0 && di !== tmi ? p[di] + ' ' + p[tmi] : p[ti >= 0 ? ti : di];
       yield { p, stamp, t: parseTime(stamp), start, keys, ids, hasIds, ti, di, tmi };
     }
+  }
+  if(nativeWindow){
+    const points=[];
+    for(const row of records()){
+      if(!fin(row.t)||row.t<nativeWindow.start||row.t>=nativeWindow.end)continue;
+      const add=(key,value)=>{
+        if(key!==nativeWindow.channel||!String(value??'').trim())return;
+        const number=csvNumber(value);
+        if(fin(number))points.push([row.t,number]);
+      };
+      if(expedition){
+        for(let j=row.start;j<row.p.length-1;j+=2){
+          if(row.p[j]!=='0')add(row.hasIds?row.ids[row.p[j]]:row.keys[+row.p[j]+1],row.p[j+1]);
+        }
+      }else row.keys.forEach((key,j)=>add(key,row.p[j]));
+    }
+    return points.sort((a,b)=>a[0]-b[0]);
   }
   let lo = Infinity, hi = -Infinity, previous = -Infinity;
   const bases = new Set(), diagnostics = { rows: 0, invalidTimes: 0, outOfOrder: 0, aggregatedSamples: 0, invalidValues: 0, channels: {} };
@@ -298,16 +315,8 @@ function process(raw, opt) {
   // manoeuvres
   const sgn = new Int8Array(n); for (let i = i0; i < i1; i++) { let s = 0; for (let k = -2; k <= 2; k++) { const v = TWA[i + k]; if (fin(v)) s += v >= 0 ? 1 : -1; } sgn[i] = s >= 0 ? 1 : -1; }
   const win = (a, lo, hi, f) => { lo = Math.max(i0, lo); hi = Math.min(i1, hi); return hi > lo ? f(a.subarray(lo, hi)) : NaN; };
-  const mans = []; let cur = sgn[i0];
-  for (let i = i0 + 1; i < i1 - 10; i++) {
-    if (sgn[i] === cur) continue; let ok = true; for (let k = 1; k < 8; k++) if (sgn[i + k] !== sgn[i]) { ok = false; break; }
-    if (!ok) continue; cur = sgn[i];
-    for (let k = Math.max(i0, i - 30); k < Math.min(i1, i + 60); k++) if (!fin(BSP[k]) || !fin(TWA[k]) || !fin(TWS[k])) { ok = false; break; }
-    if (!ok) continue;
-    const bIn = win(BSP, i - 25, i - 5, mean); if (!(bIn > cfg.minBsp)) continue;
-    const a0 = win(aT, i - 25, i - 8, mean), a1 = win(aT, i + 12, i + 30, mean);
-    const type = a0 < 90 && a1 < 90 ? 'Tack' : a0 > 90 && a1 > 90 ? 'Gybe' : null; if (!type) continue;
-    const m = { i, type, to: cur > 0 ? 'Stbd' : 'Port', tws: win(TWS, i - 30, i + 30, mean), bspIn: bIn, bspMin: win(BSP, i - 5, i + 25, a => Math.min(...a)), bspOut: win(BSP, i + 30, i + 45, mean), sail: L.sail[i] };
+  function measureTurn(i,type,outgoing) {
+    const m = { i, type, to: outgoing > 0 ? 'Stbd' : 'Port', tws: win(TWS, i - 30, i + 30, mean), bspIn: win(BSP,i-25,i-5,mean), bspMin: win(BSP, i - 5, i + 25, a => Math.min(...a)), bspOut: win(BSP, i + 30, i + 45, mean), sail: L.sail[i] };
     /* distance lost, the way RaceReplay measures it: VMG along the wind axis (BSP and heading against the mean TWD of the reference
        window), compared with the steady 30 s before (ending 20 s ahead of the turn) up to the turn, and with the steady 30 s after
        (16 to 46 s past the turn) from the turn on. Not measured when another manoeuvre falls inside those windows. */
@@ -319,9 +328,32 @@ function process(raw, opt) {
       if (vb > 0.5 && va > 0.5) { let loss = 0; for (let k = i - TB; k < i; k++) if (fin(vw(k, tB))) loss += (vb - vw(k, tB)) * 0.5144; for (let k = i; k < wA - AV; k++) if (fin(vw(k, tA))) loss += (va - vw(k, tA)) * 0.5144; m.loss = loss; m.vb = vb; m.va = va; m.twB = tB; m.twA = tA; m.vmgRef = (vb + va) / 2;
         if (ch.COG && ch.SOG) { const vg = (k, tw) => s * ch.SOG[k] * Math.cos((ch.COG[k] - tw - magVar) * D2R), gb = avg(k => vg(k, tB), wB, i - TB), ga = avg(k => vg(k, tA), wA - AV, wA); if (fin(gb) && fin(ga)) { let lg = 0; for (let k = i - TB; k < i; k++) if (fin(vg(k, tB))) lg += (gb - vg(k, tB)) * 0.5144; for (let k = i; k < wA - AV; k++) if (fin(vg(k, tA))) lg += (ga - vg(k, tA)) * 0.5144; m.lossGps = lg; } } }
     }
-    if (ch.HDG) { let mx = 0; for (let k = Math.max(i0 + 3, i - 12); k < Math.min(i1, i + 15); k++) { const r = Math.abs(w180(ch.HDG[k] - ch.HDG[k - 3])) / 3; if (r > mx) mx = r; } m.rate = mx; m.angle = Math.abs(w180(win(ch.HDG, i + 20, i + 35, cmean) - win(ch.HDG, i - 30, i - 10, cmean))); if (m.angle < 30) continue; }
+    if (ch.HDG) { let mx = 0; for (let k = Math.max(i0 + 3, i - 12); k < Math.min(i1, i + 15); k++) { const r = Math.abs(w180(ch.HDG[k] - ch.HDG[k - 3])) / 3; if (r > mx) mx = r; } m.rate = mx; m.angle = Math.abs(w180(win(ch.HDG, i + 20, i + 35, cmean) - win(ch.HDG, i - 30, i - 10, cmean)));  }
+    return m;
+  }
+  const mans = []; let cur = sgn[i0];
+  for (let i = i0 + 1; i < i1 - 10; i++) {
+    if (sgn[i] === cur) continue; let ok = true; for (let k = 1; k < 8; k++) if (sgn[i + k] !== sgn[i]) { ok = false; break; }
+    if (!ok) continue; cur = sgn[i];
+    for (let k = Math.max(i0, i - 30); k < Math.min(i1, i + 60); k++) if (!fin(BSP[k]) || !fin(TWA[k]) || !fin(TWS[k])) { ok = false; break; }
+    if (!ok) continue;
+    const bIn = win(BSP, i - 25, i - 5, mean); if (!(bIn > cfg.minBsp)) continue;
+    const a0 = win(aT, i - 25, i - 8, mean), a1 = win(aT, i + 12, i + 30, mean);
+    const type = a0 < 90 && a1 < 90 ? 'Tack' : a0 > 90 && a1 > 90 ? 'Gybe' : null; if (!type) continue;
+    const m=measureTurn(i,type,cur);
+    if(m.angle<30)continue;
     mans.push(m);
   }
+  for(const edit of opt.turnEdits||[]){
+    const original=mans.findIndex(m=>m.type===edit.type && raw.t0+m.i*1000===edit.original);
+    if(original>=0)mans.splice(original,1);
+    const i=Math.round((edit.time-raw.t0)/1000);
+    if(i<i0||i>=i1||mans.some(m=>m.i===i))continue;
+    const turn=measureTurn(i,edit.type,tack[Math.min(i+10,i1-1)]);
+    turn.manual=true;
+    mans.push(turn);
+  }
+  mans.sort((a,b)=>a.i-b.i);
   for (const m of mans) if (mans.some(o => o !== m && o.i > m.i - 50 && o.i < m.i + 46)) { m.crowded = true; delete m.loss; delete m.lossGps; }
   // validity mask + phases
   const bad = new Uint8Array(n + 1);
