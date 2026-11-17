@@ -206,7 +206,7 @@ const WF = (() => {
       }
       if (!graphBox.hidden) {
         const a = D.ch[key], lo = Math.max(D.i0, vp[0]), hi = Math.min(D.i1, vp[1]), vals = a ? Array.from(a.subarray(lo, hi)).filter(fin) : [], min = SL.quant(vals, .01), max = SL.quant(vals, .99), pad = (max - min) * .12 || 1;
-        p = plot(strip, { xr: [lo, hi], yr: fin(min) ? [min - pad, max + pad] : [0, 1], h: 330, yl: key, xfmt: i => tstr(iT(i)), pb: 30 });
+        p = plot(strip, { xr: [lo, hi], yr: fin(min) ? [min - pad, max + pad] : [0, 1], h: 330, yl: key, xfmt: i => tstr(iT(i)), xTickGap: 110, pb: 30 });
         for (const r of Object.values(session.reviews).filter(r => r.invalid)) { p.c.fillStyle = alpha(css('--bad'), .18); p.c.fillRect(p.X((r.start - A.raw.t0) / 1000), p.pt, (r.end - r.start) / 1000 * (p.W - p.pl - p.pr) / (hi - lo), p.H - p.pt - p.pb); }
         if (session.selections.analysis) { const [a, b] = rangeIndices(); p.c.fillStyle = alpha(css('--accent'), .16); p.c.fillRect(p.X(a), p.pt, p.X(b) - p.X(a), p.H - p.pt - p.pb); }
         if (a) { const step = Math.max(1, Math.floor((hi - lo) / 1800)); const pts = []; for (let i = lo; i < hi; i += step) pts.push([i, a[i]]); p.line(pts, css('--s1')); }

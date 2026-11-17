@@ -21,7 +21,7 @@
 --seq0:#22364f;--seq1:#9ccbff;--div-lo:#d95926;--div-mid:#6c7889;--div-hi:#3987e5;--good:#3fbf7f;--warn:#e0a03a;--bad:#ef6b6b;--shadow:none}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
-body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--font);display:grid;grid-template-columns:212px minmax(0,1fr)}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--font);display:grid;grid-template-columns:212px minmax(0,1fr);height:auto;min-height:100%}
 [hidden]{display:none!important}
 /* sidebar */
 aside{background:var(--side);color:var(--side-ink);display:flex;flex-direction:column;gap:2px;padding:14px 10px;position:sticky;top:0;height:100vh;overflow-y:auto}
@@ -1370,7 +1370,7 @@ function plot(cv, o) {
   let [x0, x1] = o.xr, [y0, y1] = o.yr; if (x0 === x1) { x0 -= 1; x1 += 1; } if (y0 === y1) { y0 -= 1; y1 += 1; }
   const g = { c, W, H, pl, pr, pt, pb, X: v => pl + (v - x0) / (x1 - x0) * (W - pl - pr), Y: v => H - pb - (v - y0) / (y1 - y0) * (H - pt - pb), xr: [x0, x1], yr: [y0, y1] };
   cv._hits = []; c.font = '11px ' + css('--font'); c.lineWidth = 1;
-  const tx = ticks(x0, x1, Math.max(3, Math.floor((W - pl - pr) / 70))), ty = ticks(y0, y1, Math.max(2, Math.floor((H - pt - pb) / 34)));
+  const tx = ticks(x0, x1, Math.max(2, Math.floor((W - pl - pr) / (o.xTickGap || 70)))), ty = ticks(y0, y1, Math.max(2, Math.floor((H - pt - pb) / 34)));
   c.strokeStyle = css('--grid'); c.fillStyle = css('--muted'); c.beginPath();
   if (!o.noX) for (const v of tx.out) { c.moveTo(g.X(v), pt); c.lineTo(g.X(v), H - pb); } for (const v of ty.out) { c.moveTo(pl, g.Y(v)); c.lineTo(W - pr, g.Y(v)); } c.stroke();
   c.textAlign = 'center'; c.textBaseline = 'top'; if (!o.noX) for (const v of tx.out) c.fillText(o.xfmt ? o.xfmt(v) : v.toFixed(tx.dec), g.X(v), H - pb + 5);
@@ -2491,7 +2491,7 @@ const WF = (() => {
       }
       if (!graphBox.hidden) {
         const a = D.ch[key], lo = Math.max(D.i0, vp[0]), hi = Math.min(D.i1, vp[1]), vals = a ? Array.from(a.subarray(lo, hi)).filter(fin) : [], min = SL.quant(vals, .01), max = SL.quant(vals, .99), pad = (max - min) * .12 || 1;
-        p = plot(strip, { xr: [lo, hi], yr: fin(min) ? [min - pad, max + pad] : [0, 1], h: 330, yl: key, xfmt: i => tstr(iT(i)), pb: 30 });
+        p = plot(strip, { xr: [lo, hi], yr: fin(min) ? [min - pad, max + pad] : [0, 1], h: 330, yl: key, xfmt: i => tstr(iT(i)), xTickGap: 110, pb: 30 });
         for (const r of Object.values(session.reviews).filter(r => r.invalid)) { p.c.fillStyle = alpha(css('--bad'), .18); p.c.fillRect(p.X((r.start - A.raw.t0) / 1000), p.pt, (r.end - r.start) / 1000 * (p.W - p.pl - p.pr) / (hi - lo), p.H - p.pt - p.pb); }
         if (session.selections.analysis) { const [a, b] = rangeIndices(); p.c.fillStyle = alpha(css('--accent'), .16); p.c.fillRect(p.X(a), p.pt, p.X(b) - p.X(a), p.H - p.pt - p.pb); }
         if (a) { const step = Math.max(1, Math.floor((hi - lo) / 1800)); const pts = []; for (let i = lo; i < hi; i += step) pts.push([i, a[i]]); p.line(pts, css('--s1')); }

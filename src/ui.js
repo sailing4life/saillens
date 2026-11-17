@@ -48,7 +48,7 @@ function plot(cv, o) {
   let [x0, x1] = o.xr, [y0, y1] = o.yr; if (x0 === x1) { x0 -= 1; x1 += 1; } if (y0 === y1) { y0 -= 1; y1 += 1; }
   const g = { c, W, H, pl, pr, pt, pb, X: v => pl + (v - x0) / (x1 - x0) * (W - pl - pr), Y: v => H - pb - (v - y0) / (y1 - y0) * (H - pt - pb), xr: [x0, x1], yr: [y0, y1] };
   cv._hits = []; c.font = '11px ' + css('--font'); c.lineWidth = 1;
-  const tx = ticks(x0, x1, Math.max(3, Math.floor((W - pl - pr) / 70))), ty = ticks(y0, y1, Math.max(2, Math.floor((H - pt - pb) / 34)));
+  const tx = ticks(x0, x1, Math.max(2, Math.floor((W - pl - pr) / (o.xTickGap || 70)))), ty = ticks(y0, y1, Math.max(2, Math.floor((H - pt - pb) / 34)));
   c.strokeStyle = css('--grid'); c.fillStyle = css('--muted'); c.beginPath();
   if (!o.noX) for (const v of tx.out) { c.moveTo(g.X(v), pt); c.lineTo(g.X(v), H - pb); } for (const v of ty.out) { c.moveTo(pl, g.Y(v)); c.lineTo(W - pr, g.Y(v)); } c.stroke();
   c.textAlign = 'center'; c.textBaseline = 'top'; if (!o.noX) for (const v of tx.out) c.fillText(o.xfmt ? o.xfmt(v) : v.toFixed(tx.dec), g.X(v), H - pb + 5);
