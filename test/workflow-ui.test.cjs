@@ -77,3 +77,20 @@ test('invalid measurement can be restored after its generated phase disappears',
   await a.click('Uitsluiting herstellen');assert.equal(a.run('A.D.invalid.some(Boolean)'),false);assert.equal(a.errors.length,0);
  }finally{a.close();}
 });
+test('unblurred edits survive saving, calibration comparison and reload',async()=>{
+ const a=await app();try{
+  const type=(selector,value)=>{a.$(selector).value=value;a.$(selector).dispatchEvent(new a.w.Event('input',{bubbles:true}));};
+  await a.click('Bekijk voorbeeld');
+  type('#session-name','Invoer zonder blur');await a.run('WF.persist()');
+  a.run("show('cal')");type('#draft-awaOff','1.5');
+  await a.run('WF.persist()');await a.click('Voorstel vergelijken');
+  assert.equal(a.$('#draft-awaOff').value,'1.5');assert.equal(a.run('A.calib.awaOff'),0);
+  assert.equal(a.run('WF.session.draft.awaOff'),1.5);
+  await a.run('WF.persist()');
+  const b=await app(a.indexedDB);try{
+   assert.equal(b.run('WF.session.name'),'Invoer zonder blur');
+   assert.equal(b.run('WF.session.draft.awaOff'),1.5);
+   assert.equal(b.errors.length,0);
+  }finally{b.close();}
+ }finally{a.close();}
+});

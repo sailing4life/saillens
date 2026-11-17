@@ -83,7 +83,7 @@ ul.heads li.good .dot{background:var(--good)}ul.heads li.warn .dot{background:va
 .bar{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
 .field{display:flex;flex-direction:column;gap:3px;font-size:11px;font-weight:600;color:var(--ink2);min-width:0}
 .form{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:11px}
-select,input[type=text],input[type=number],input[type=datetime-local],textarea{font:inherit;font-weight:400;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0;max-width:100%}
+select,input:not([type]),input[type=text],input[type=number],input[type=datetime-local],textarea{font:inherit;font-weight:400;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 8px;min-width:0;max-width:100%}
 input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent)}
 button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:6px 12px;cursor:pointer}
 button:hover{border-color:var(--accent)}
