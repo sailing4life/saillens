@@ -41,7 +41,7 @@ const st = SL.chartStats(ch, D.phases); ok('sail chart: compares with sails used
 // season
 const S = SL.newSeason(); SL.seasonMerge(S, [SL.dayRecord(D, { boat: 'Demo' }, {})]); const pool = SL.seasonPool(S);
 ok('season: a day goes in and comes back as phases', S.days.length === 1 && pool.length === D.phases.length && near(pool[5].v.BSP, D.phases[5].v.BSP, 0.001));
-ok('season: same day replaces itself', SL.seasonMerge(S, [SL.dayRecord(D, { boat: 'Demo' }, {})]).rep === 1 && S.days.length === 1);
+ok('season: same session is idempotent', SL.seasonMerge(S, [SL.dayRecord(D, { boat: 'Demo' }, {})]).same === 1 && S.days.length === 1);
 const tk = SL.seasonFromTackCsv('BoatName,DateTime,IsTack,IsPortToStbd,IsValidPerf,TWS,BSP_bfr,BSP_aft,DistanceLost_m,DistanceLostGPS_m,Rotation_Max,TJAngle,Headsail,Spinnaker,Staysail\r\nDemo,' + S.days[0].date + ' 12:00:00,True,False,True,10,7,6.5,8.5,7,-9,95,J2,,\r\n');
 ok('season: RaceReplay tacks import', SL.seasonMergeMans(S, tk).n === 1 && S.days[0].mans[0].loss === 8.5 && S.days[0].mans[0].to === 'Port');
 

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="nl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -140,6 +140,35 @@ textarea.note{background:transparent;border:1px dashed var(--line);width:100%;re
 @media (max-width:900px){body{grid-template-columns:minmax(0,1fr)}aside{position:static;height:auto;flex-direction:row;align-items:center;overflow-x:auto;padding:8px 10px;gap:4px}aside h6,aside .foot span{display:none}#nav{display:flex;gap:4px}aside .foot{margin:0;padding:0;flex-direction:row}.brand{padding:0 8px 0 2px}aside button.nav{width:auto;white-space:nowrap}.chartgrid,.polgrid,.homegrid{grid-template-columns:minmax(0,1fr)}.topbar{position:static}}
 @media print{aside,.topbar,.noprint,#banner,.tabpane:not(#t-report),.tip{display:none!important}body{background:#fff;display:block}main{padding:0;max-width:none}.report{border:0;padding:0;width:auto!important}.rsec{break-inside:avoid}textarea.note{border:0}textarea.note:placeholder-shown{display:none}.scroll{overflow:visible}.card,.kpi{box-shadow:none}}
 @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+/* Boat workspace and the four-step session workflow. */
+.wf-hero,.wf-pagehead{display:flex;justify-content:space-between;gap:24px;align-items:center;padding:18px 0 10px}
+.wf-hero h1,.wf-pagehead h1{font:600 clamp(24px,3vw,38px)/1.12 var(--disp);letter-spacing:-.02em;margin:10px 0}
+.eyebrow{font:600 11px var(--font);letter-spacing:.12em;color:var(--accent)}
+.wf-boats{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:16px}
+.wf-boat{border:1px solid var(--line);border-radius:10px;padding:22px;background:var(--surface2)}
+.wf-boat h2{font:600 25px var(--disp);margin:12px 0}
+.wf-flow{display:flex;flex-direction:column;gap:10px;margin-bottom:20px}
+.wf-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.wf-steps button{display:flex;align-items:center;gap:10px;text-align:left;padding:13px 16px;border-radius:8px;background:var(--surface);min-height:48px}
+.wf-steps button span{display:grid;place-items:center;border:1px solid var(--line);border-radius:50%;width:24px;height:24px;flex:none}
+.wf-steps button[aria-current=step]{border-color:var(--accent);box-shadow:inset 0 -3px 0 var(--accent);font-weight:700}
+.wf-steps button[aria-current=step] span{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.wf-subnav{gap:6px}.wf-subnav button{font-size:12px}
+.wf-drop{border:1px dashed var(--accent);border-radius:9px;padding:28px;background:var(--surface2);display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+.wf-drop input{max-width:100%}
+.wf-selection{padding:14px 16px;background:var(--surface2);border:1px solid var(--line);border-radius:10px}
+.wf-selection .muted{margin-bottom:0;font-size:12px}
+.wf-notice{padding:14px 16px;border-left:3px solid var(--warn);border-radius:6px;background:var(--surface2);color:var(--ink2)}
+.wf-timeviews{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(380px,100%),1fr));gap:16px;min-width:0}
+.wf-timeviews>div{min-width:0}.wf-map,.wf-strip{display:block;width:100%;touch-action:none;border-radius:8px}
+.wf-models{display:flex;flex-direction:column;gap:16px}
+.wf-note{border-left:2px solid var(--accent);padding:10px 16px;background:var(--surface2);border-radius:4px;margin-top:12px}
+details{padding:12px 0}summary{cursor:pointer;font-weight:600;min-height:32px}details[open] summary{margin-bottom:12px}
+.topbar{flex-wrap:wrap}.topbar #wf-save{font-size:11px}.wf-models .kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+button,input,select{min-height:36px}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+@media(max-width:900px){.wf-hero,.wf-pagehead{align-items:flex-start}.wf-steps button{padding:10px 8px;gap:6px;font-size:13px}main{padding:16px}.wf-flow{margin-bottom:12px}.topbar{gap:6px}aside{max-width:100vw}#nav{min-width:max-content}aside .foot{margin-left:auto}}
+@media(max-width:540px){.wf-steps{gap:4px}.wf-steps button{flex-direction:column;gap:5px;text-align:center;font-size:11px}.wf-steps button span{width:20px;height:20px;font-size:10px}.wf-hero,.wf-pagehead{flex-direction:column;gap:8px}.wf-selection .bar{align-items:stretch}.wf-selection .field{flex:1 1 140px}.wf-selection input{width:100%;min-width:0}.form{grid-template-columns:minmax(0,1fr)}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.wf-drop{padding:18px}.wf-subnav{display:flex;flex-wrap:nowrap;overflow-x:auto;padding:3px 0}.wf-subnav button{white-space:nowrap;flex:none}.brand b{font-size:16px}.topbar #status{max-width:100%;white-space:normal}.wf-boats .bar button{flex:1}button{min-height:40px}main{padding:12px}.card{padding:16px}}
+@media print{.wf-flow{display:none!important}.report{max-width:100%}.wf-note{break-inside:avoid}}
 </style>
 </head>
 <body>

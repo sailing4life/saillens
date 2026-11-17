@@ -5,3 +5,5 @@
 *.ev.xml
 *.csv
 *.accdb
+node_modules/
+test-results/

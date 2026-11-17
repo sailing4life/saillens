@@ -11,7 +11,7 @@ const dstr = ms => { const p = tparts(ms); return p[0] + '-' + p[1] + '-' + p[2]
 const dur = s => pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor(s / 60) % 60) + ':' + pad2(Math.floor(s % 60));
 const iT = i => A.raw.t0 + i * 1000;
 const season = () => A.scope === 'season';
-const pool = () => season() ? A.SP : (A.D ? A.D.phases : []);
+const pool = () => season() ? A.SP : (A.D ? WF.filteredPhases(A.D.phases) : []);
 const hasVar = k => season() ? A.SK.has(k) : !!(A.D && A.D.ch[k]);
 const manualKeys = () => season() ? ['Mast_Base'].filter(hasVar) : Object.keys(A.D.L.manual);
 const ptime = p => p.i == null ? p.day + ' ' + new Date(p.t + (p.off || 0) * 36e5).toISOString().slice(11, 19) : tstr(p.t);
@@ -67,7 +67,7 @@ function plot(cv, o) {
 const tipEl = h('div', { class: 'tip', hidden: '' });
 function initTips() {
   document.body.append(tipEl);
-  document.addEventListener('mousemove', e => { const cv = e.target; if (!(cv instanceof HTMLCanvasElement) || !cv._hits || !cv._hits.length) { tipEl.hidden = true; return; } const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; let b = null, bd = 196; for (const p of cv._hits) { const d = (p[0] - x) ** 2 + (p[1] - y) ** 2; if (d < bd) { bd = d; b = p; } } if (!b) { tipEl.hidden = true; cv._hot = null; return; } cv._hot = b; tipEl.innerHTML = b[2]; tipEl.hidden = false; const tw = tipEl.offsetWidth; tipEl.style.left = Math.min(window.innerWidth - tw - 8, e.clientX + 14) + 'px'; tipEl.style.top = (e.clientY + 14) + 'px'; });
+  document.addEventListener('mousemove', e => { const cv = e.target; if (!(cv instanceof HTMLCanvasElement) || !cv._hits || !cv._hits.length) { tipEl.hidden = true; return; } const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; let b = null, bd = 196; for (const p of cv._hits) { const d = (p[0] - x) ** 2 + (p[1] - y) ** 2; if (d < bd) { bd = d; b = p; } } if (!b) { tipEl.hidden = true; cv._hot = null; return; } cv._hot = b; tipEl.textContent = String(b[2]).replace(/<br\s*\/?>/gi, " · ").replace(/<[^>]*>/g, ""); tipEl.hidden = false; const tw = tipEl.offsetWidth; tipEl.style.left = Math.min(window.innerWidth - tw - 8, e.clientX + 14) + 'px'; tipEl.style.top = (e.clientY + 14) + 'px'; });
   document.addEventListener('click', e => { const cv = e.target; if (cv instanceof HTMLCanvasElement && cv._hot && cv._hot[3] && cv._hot[3].i != null) { A.cur = cv._hot[3].i; show('chart'); } });
 }
 const ptip = (p, extra) => `<b>${ptime(p)}</b> ${p.mode} · ${p.tack} · ${p.sails}${p.race ? ' · ' + p.raceLeg : ''}<br>TWS ${f1(p.v.TWS)} · TWA ${f1(Math.abs(p.v.TWA))} · BSP ${f1(p.v.BSP, 2)} · pol ${f1(p.v['BSPpol%'])}%${extra ? '<br>' + extra : ''}`;
