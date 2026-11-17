@@ -192,7 +192,7 @@ const WF = (() => {
         if (geo && r) { const [lo, hi] = rangeIndices(r), c = map.getContext('2d'); c.strokeStyle = css('--ink'); c.lineWidth = 5; c.beginPath(); let on = false; for (let i = lo; i < hi; i++) { if (!fin(geo.X(i)) || !fin(geo.Y(i))) { on = false; continue; } on ? c.lineTo(geo.X(i), geo.Y(i)) : c.moveTo(geo.X(i), geo.Y(i)); on = true; } c.stroke(); }
       }
       if (!graphBox.hidden) {
-        const a = D.ch[key], lo = Math.max(D.i0, vp[0]), hi = Math.min(D.i1, vp[1]), vals = a ? Array.from(a.subarray(lo, hi)).filter(fin) : [], min = SL.quant(vals, .01), max = SL.quant(vals, .99), pad = (max - min) * .12 || 1;
+        const a = D.ch[key], lo = Math.max(D.i0, vp[0]), hi = Math.min(D.i1, vp[1]), vals = a ? Array.from(a.subarray(lo, hi)).filter(fin) : [], min = SL.quant(vals, A.tab==='pairreview'?0:.01), max = SL.quant(vals, A.tab==='pairreview'?1:.99), pad = (max - min) * .12 || 1;
         p = plot(strip, { xr: [lo, hi], yr: fin(min) ? [min - pad, max + pad] : [0, 1], h: 330, yl: key, xfmt: i => tstr(iT(i)), xTickGap: 110, pb: 30 });
         for (const r of Object.values(session.reviews).filter(r => r.invalid)) { p.c.fillStyle = alpha(css('--bad'), .18); p.c.fillRect(p.X((r.start - A.raw.t0) / 1000), p.pt, (r.end - r.start) / 1000 * (p.W - p.pl - p.pr) / (hi - lo), p.H - p.pt - p.pb); }
         if(A.tab==='pairreview' && session.activePairKey){const q=session.manoeuvrePairs?.[session.activePairKey];for(const [r,col]of [[q?.before,'--s1'],[q?.after,'--s3']])if(r){p.c.fillStyle=alpha(css(col),.15);p.c.fillRect(p.X((r.start-A.raw.t0)/1000),p.pt,(r.end-r.start)/1000*(p.W-p.pl-p.pr)/(hi-lo),p.H-p.pt-p.pb);}}
