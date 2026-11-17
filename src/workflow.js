@@ -13,7 +13,8 @@ const WF = (() => {
   function snapshot() {
     if (!session) return null;
     const s = { ...session, raw: A.raw, events: A.events, polar: A.polar ? { rows: A.polar.rows, src: A.polar.src } : null, chart: A.chart,
-      cfg: A.cfg, calib: A.calib || SL.CAL0, files: A.files, cur: A.cur, view: A.view, tab: A.tab, demo: A.demo,
+      cfg: A.cfg, calib: A.calib || SL.CAL0, files: A.files, cur: A.cur, view: A.view,
+      tab: ['home', 'boat', 'season'].includes(A.tab) ? (session.tab || 'setup') : A.tab, demo: A.demo,
       ui: { filt: A.filt, cst: A.cst, xst: A.xst, st: A.st, fst: A.fst, mnst: A.mnst, rst: A.rst, est: A.est, pol: A.pol, analysisMode, reviewMode, mobileView, selectedKey }, updated: Date.now() };
     return structuredClone(s);
   }
@@ -61,7 +62,8 @@ const WF = (() => {
   async function open(id) {
     if (dirty) await persist();
     const s = SL.validateSession(await db.get('session:' + id)), D = process(s);
-    loading = true; adopt(s, D); loading = false; show(s.tab || 'setup');
+    loading = true; adopt(s, D); loading = false;
+    show(!s.tab || ['home', 'boat', 'season'].includes(s.tab) ? 'setup' : s.tab);
   }
   async function create(boatId, demo = false) {
     if (dirty) await persist();
@@ -157,6 +159,7 @@ const WF = (() => {
     await write([['workspace', next], ...entries]); library = next; if (restoredSeason) { A.S = restoredSeason; seasonChanged(false); } show('home'); banner('Project hersteld als aparte bootprofielen; je bestaande sessies blijven beschikbaar.');
   }
   function afterShow() {
+    if (session && !['home', 'boat', 'season'].includes(A.tab)) session.tab = A.tab;
     document.querySelectorAll('#nav .nav').forEach(b => b.hidden = !['home', 'boat', 'season', 'report'].includes(b.dataset.tab));
     document.querySelectorAll('#nav h6').forEach(e => e.hidden = true);
     $('#scope').hidden = !['season', 'perf', 'xy', 'polar', 'sails'].includes(A.tab);

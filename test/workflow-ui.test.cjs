@@ -87,7 +87,9 @@ test('unblurred edits survive saving, calibration comparison and reload',async()
   assert.equal(a.$('#draft-awaOff').value,'1.5');assert.equal(a.run('A.calib.awaOff'),0);
   assert.equal(a.run('WF.session.draft.awaOff'),1.5);
   await a.run('WF.persist()');
+  await a.click('Boten & sessies');await a.run('WF.persist()');
   const b=await app(a.indexedDB);try{
+   await b.click('Open sessie');assert.equal(b.run('A.tab'),'cal');
    assert.equal(b.run('WF.session.name'),'Invoer zonder blur');
    assert.equal(b.run('WF.session.draft.awaOff'),1.5);
    assert.equal(b.errors.length,0);
