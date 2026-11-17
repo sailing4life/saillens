@@ -1,0 +1,14 @@
+{
+  "name": "saillens",
+  "private": true,
+  "scripts": {
+    "test": "node --test && node tests/smoke.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.4",
+    "jsdom": "^26.1.0"
+  }
+}
