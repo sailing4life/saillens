@@ -153,7 +153,10 @@ const WF = (() => {
     const next = SL.copy(library), entries = [], boatMap = new Map();
     // Restore as new boats/sessions so an old backup cannot silently overwrite newer work.
     for (const b of incoming.boats) { const id = SL.uid(); boatMap.set(b.id, id); next.boats.push({ ...b, id, name: b.name + ' (import)' }); }
-    for (const old of incoming.sessions) { const s = { ...old, id: SL.uid(), boatId: boatMap.get(old.boatId) }; s.profile.id = s.boatId; process(s); entries.push(['session:' + s.id, s]); next.sessions.push(SL.sessionSummary(s)); }
+    for (const old of incoming.sessions) { const s = { ...old, id: SL.uid(), boatId: boatMap.get(old.boatId) }; s.profile.id = s.boatId;
+      const signatures=new Map();for(const v of s.analysisVersions||[]){const previous=v.signature;v.input.id=s.id;v.input.boatId=s.boatId;v.input.profile.id=s.boatId;v.signature=SL.preparationKey(v.input);signatures.set(previous,v.signature);}
+      for(const item of [...(s.reportItems||[]),...(s.reportTrash||[])])for(const state of [item,...(item.history||[])])if(signatures.has(state.signature))state.signature=signatures.get(state.signature);
+      process(s); entries.push(['session:' + s.id, s]); next.sessions.push(SL.sessionSummary(s)); }
     let restoredSeason = null;
     if (incoming.season) { restoredSeason = SL.copy(A.S); SL.seasonMerge(restoredSeason, incoming.season.days); entries.push(['season', restoredSeason]); }
     await write([['workspace', next], ...entries]); library = next; if (restoredSeason) { A.S = restoredSeason; seasonChanged(false); } show('home'); banner('Project hersteld als aparte bootprofielen; je bestaande sessies blijven beschikbaar.');

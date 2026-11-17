@@ -15,8 +15,8 @@ async function app(indexedDB=new IDBFactory()){
   w.HTMLCanvasElement.prototype.toDataURL=()=> 'data:image/png;base64,dGVzdA==';
   w.HTMLCanvasElement.prototype.getContext=()=>new Proxy({measureText:t=>({width:String(t).length*7})},{get:(x,k)=>x[k]||(()=>{}),set:(x,k,v)=>(x[k]=v,true)});
  }});
- const w=dom.window;await pause(50);const $=s=>w.document.querySelector(s);
- const click=async name=>{const buttons=[...w.document.querySelectorAll('button')];const b=buttons.find(b=>b.textContent===name&&!b.closest('[hidden]'));assert.ok(b,'Button: '+name);b.click();await pause(30);};
+ const w=dom.window;const $=s=>w.document.querySelector(s);for(let n=0;n<200&&!$('#new-boat-name');n++)await pause(10);assert.ok($('#new-boat-name'),'workspace initialized');
+ const click=async name=>{const buttons=[...w.document.querySelectorAll('button')];const b=buttons.find(b=>b.textContent===name&&!b.closest('[hidden]'));assert.ok(b,'Button: '+name);b.click();await pause(30);if(name==='Bekijk voorbeeld')for(let n=0;n<200&&w.eval('A.tab')!=='setup';n++)await pause(10);};
  const fill=(s,value)=>{$(s).value=value;$(s).dispatchEvent(new w.Event('input',{bubbles:true}));$(s).dispatchEvent(new w.Event('change',{bubbles:true}));};
  return {dom,w,$,click,fill,errors,indexedDB,run:code=>w.eval(code),close:()=>w.close()};
 }
@@ -129,5 +129,28 @@ test('pair windows use circular angles and explicit calibration exclusions',asyn
   a.run("WF.session.reviews.veto={kind:'interval',...validPair.before,calibration:false}");assert.equal(a.run('SL.approvedPairs(A.D,WF.session).length'),0);
   a.run("delete WF.session.reviews.veto;window.old=validPair.before.end;validPair.before.end=validPair.anchor");assert.equal(a.run('SL.inspectPair(A.D,validPair,WF.session.phaseBuild.rules).valid'),false);
   a.run("validPair.before.end=old;const i=Math.round((validPair.before.start-A.raw.t0)/1000);A.D.ch.HDG.fill(359,i,i+25);A.D.ch.HDG.fill(1,i+25,i+50)");assert.ok(a.run('SL.windowPhase(A.D,validPair.before).spread.HDG')<2);
+ }finally{a.close();}
+});
+test('pending calibration cannot be silently published and a failed save does not add versions',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');a.run("show('cal')");a.fill('#draft-awaOff','1.5');
+  await assert.rejects(a.run('STUDIO.publish()'),/niet-toegepast/);assert.equal(a.run('WF.session.analysisVersions.length'),0);
+  a.run("show('cal')");await a.click('Actieve kalibratie overnemen');assert.equal(a.run('WF.session.draft.awaOff'),0);
+  a.run("window.persistOriginal=WF.persist;WF.persist=async()=>{throw new Error('disk unavailable')}");await assert.rejects(a.run('STUDIO.publish()'),/disk unavailable/);assert.equal(a.run('WF.session.analysisVersions.length'),0);assert.equal(a.run('WF.session.stage'),'prepare');
+  a.run('WF.persist=persistOriginal');await a.run('STUDIO.publish()');assert.equal(a.run('WF.session.analysisVersions.length'),1);
+  a.run("show('cal');WF.persist=async()=>{throw new Error('disk unavailable')}");await assert.rejects(a.run('STUDIO.publish()'),/disk unavailable/);assert.equal(a.run('WF.session.analysisVersions.length'),1);a.run('WF.persist=persistOriginal');
+ }finally{a.close();}
+});
+test('report refresh restores analysis context, handles legacy settings and supports undo',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');await a.run('STUDIO.publish()');a.run("show('dist')");await a.click('Voeg toe aan report');
+  a.run("window.item=WF.session.reportItems[0];delete item.settings.view;delete item.settings.cur;WF.session.analysisFilter={race:'2'};WF.session.slowThreshold=90;WF.session.distVariable='TWA';window.oldBlocks=JSON.stringify(item.blocks);STUDIO.refreshReport(item)");
+  assert.equal(a.run('WF.session.analysisFilter.race'),'2');assert.equal(a.run('WF.session.distVariable'),'TWA');assert.equal(a.run('WF.session.slowThreshold'),90);assert.ok(a.run('A.view.z')>0);assert.ok(Number.isFinite(a.run('A.cur')));
+  assert.equal(a.run('item.history.length'),1);await a.click('Vorige reportversie herstellen');assert.equal(a.run('JSON.stringify(item.blocks)'),a.run('oldBlocks'));assert.equal(a.run('item.history.length'),0);
+  a.run("item.title='No longer present'");assert.throws(()=>a.run('STUDIO.refreshReport(item)'),/veranderd/);assert.equal(a.run('A.tab'),'report');assert.equal(a.run('WF.session.analysisFilter.race'),'2');
+  a.run("window.backup=SL.encodeProject({app:'SailLens',type:'project',version:1,boats:WF.library.boats,sessions:[WF.snapshot()]})");assert.equal(a.run('SL.decodeProject(backup).sessions[0].analysisVersions.length'),1);
+  a.w.projectFile={name:'saved.json',text:async()=>a.run('backup')};await a.run('WF.importFiles([projectFile])');await a.run('WF.open(WF.library.sessions.at(-1).id)');assert.equal(a.run('STUDIO.current()'),true);
+  assert.throws(()=>a.run("const bad=WF.snapshot();bad.reportItems={};SL.decodeProject(SL.encodeProject({app:'SailLens',type:'project',version:1,boats:WF.library.boats,sessions:[bad]}))"),/reportItems/);
+  assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
  }finally{a.close();}
 });

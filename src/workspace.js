@@ -81,13 +81,16 @@
     out.coverage = out.valid ? out.target / out.valid * 100 : NaN;
     return out;
   }
-  function validateSession(s) {
+  function validateSession(s, nested = false) {
     if (!s || typeof s.id !== 'string' || typeof s.boatId !== 'string' || !s.profile || !s.cfg || !Array.isArray(s.sources) || !s.selections || !s.reviews) throw new Error('Ongeldige sessie in projectbestand.');
     SL.compileFormulas(s.profile.formulas || []);
     if (s.raw) {
       if (!Number.isFinite(s.raw.t0) || !Number.isInteger(s.raw.n) || s.raw.n < 1 || s.raw.n > 604800 || !s.raw.ch) throw new Error('Ongeldige log in projectbestand.');
       for (const a of Object.values(s.raw.ch)) if (!(a instanceof Float64Array) || a.length !== s.raw.n) throw new Error('Ongeldige meetreeks in projectbestand.');
     }
+    for(const key of ['analysisVersions','reportItems','reportTrash'])if(s[key]!==undefined&&!Array.isArray(s[key]))throw new Error('Ongeldige '+key+' in projectbestand.');
+    if(!nested)for(const v of s.analysisVersions||[]){if(!Number.isInteger(v.number)||v.number<1||typeof v.signature!=='string'||!v.input||v.input.analysisVersions)throw new Error('Ongeldige opgeslagen sessieversie.');validateSession(v.input,true);}
+    for(const item of [...(s.reportItems||[]),...(s.reportTrash||[])]){if(!item||typeof item.id!=='string'||typeof item.title!=='string'||!Array.isArray(item.blocks)||(item.history!==undefined&&!Array.isArray(item.history)))throw new Error('Ongeldig reportonderdeel.');for(const state of [item,...(item.history||[])]){if(!Array.isArray(state.blocks)||state.blocks.some(b=>!b||!['heading','text','image','table'].includes(b.type)||(b.type==='table'&&(!Array.isArray(b.rows)||b.rows.some(r=>!Array.isArray(r))))))throw new Error('Ongeldige reportinhoud.');}}
     return s;
   }
   function encodeProject(value) { return JSON.stringify(value, (k, v) => ArrayBuffer.isView(v) ? { $array: v.constructor.name, values: Array.from(v, x => Number.isFinite(x) ? x : null) } : v); }

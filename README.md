@@ -8,9 +8,9 @@ Boat-first sailing analysis. The standalone `SailLens.html` and the Railway serv
 2. **Events** — place starts, finishes, marks and sail changes at the map/time cursor. Mark selected intervals as races, training or motoring. Edit, undo deletion and export events.
 3. **Fases** — explicitly generate using race, sail, mode, tack, time selection and stability criteria. Saved boundaries remain fixed through calibration. Changed events/source settings require regeneration before publishing.
 4. **Manoeuvreparen** — review tacks/gybes one at a time, with independently adjustable before/after windows. Coverage, stability, opposite tacks, sail changes and invalid data govern eligibility. Approval or skipping for calibration does not remove poor performance from analysis.
-5. **Kalibratie** — compare logged, active and proposed values on identical references, then apply or revert. Save with **Sessie opslaan & analyseren** to create a frozen input version.
+5. **Kalibratie** — compare logged, active and proposed values on identical references, then apply or revert. The readiness summary shows phase freshness, approved pairs and instrument consistency. Unapplied drafts must be applied or explicitly replaced by the active calibration before **Sessie opslaan & analyseren** creates a frozen input version.
 6. **Analyse** — separate workspace with shared filters, overview, day charts, speed/VMG, XY/correlations, insights, manoeuvres, prestart, distributions, wind, tables, polar and sails. Prestart uses the selected gun and its surrounding context; it does not infer line distance or OCS without line data.
-7. **Report** — add chosen cards, annotate and reorder. Chart images and table results retain their filters, settings and session version. Recalibration never silently refreshes them; explicit refresh preserves the previous result in history. Export standalone HTML or print/PDF.
+7. **Report** — add chosen cards, annotate and reorder. Chart images and table results retain their filters, settings and session version. Recalibration never silently refreshes them; explicit refresh preserves the previous result in history, restores the working analysis filters afterwards, and offers an undo button. Export standalone HTML or print/PDF.
 
 Each boat owns channel mapping, units/sign conversion, phase defaults, polars, sails, calibration history and custom formulas. Every session snapshots a profile version. Updating a boat does not silently change its old sessions. New logs start with zero additional calibration, avoiding double correction after an instrument setting was already changed onboard.
 
@@ -18,7 +18,7 @@ Each boat owns channel mapping, units/sign conversion, phase defaults, polars, s
 
 IndexedDB stores the workspace index and complete sessions in atomic transactions. Save status changes only when a transaction commits. Session IDs are independent of boat name/date, so multiple sessions on one day remain separate. Autosave includes source text, processed-grid raw arrays, events, active/draft calibration, reviews, formulas, notes, selections and view state, plus saved analysis versions and report snapshots. The legacy season database remains separate and is restored without losing existing entries.
 
-**Projectbackup** exports all boats and sessions, plus the season database. **Project importeren** validates the whole file and restores boats/sessions as new copies. Existing projects are not overwritten. Keep an export for device changes or browser-data cleanup: there is no account or cross-device sync.
+**Projectbackup** exports all boats and sessions, plus the season database. **Project importeren** validates the whole file and restores boats/sessions as new copies. Existing projects are not overwritten. Restored analysis versions and report references are remapped together to the new boat/session IDs. Keep an export for device changes or browser-data cleanup: there is no account or cross-device sync.
 
 ## Custom variables
 
