@@ -274,3 +274,23 @@ test('paired MHU action recomputes the draft on fixed windows and leaves active 
   assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });
+test('Mercator map keeps the track continuous across the dateline and registers rotated tiles',async()=>{
+ const a=await app();try{
+  const result=JSON.parse(a.run(`(()=>{const g=TrackMap.geometry({ch:{Lat:Float64Array.of(0,0,NaN),Lon:Float64Array.of(179,-179,NaN)},i0:0,i1:3,n:3});
+  const transform={W:512,H:512,cx:0,cy:0,sc:1024/360,k:1,ox:256,oy:256};
+  const tile=(co,si,key)=>TrackMap.visibleTiles({...transform,co,si}).find(t=>t.key===key);
+  return JSON.stringify([Array.from(g.x),tile(1,0,'2/2/2'),tile(0,1,'2/3/2')]);})()`));
+  assert.deepEqual(result[0],[179,181,null]);assert.equal(result[1].left,256);assert.equal(result[1].top,256);assert.equal(result[2].left,256);assert.equal(result[2].top,0);
+ }finally{a.close();}
+});
+test('scrubbing moves the shared cursor without creating a time selection',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');assert.equal(a.$('#map-tiles').checked,false);
+  a.run('STUDIO.generate(SL.phaseDefaults(A.cfg));show("review")');
+  assert.equal(a.$('#map-phases').checked,true);assert.match(a.$('#t-review').textContent,/F1 · /);
+  const i=a.run('A.D.phases[0].i');a.fill('#desk-scrubber',String(i));assert.equal(a.run('A.cur'),i);
+  assert.match(a.$('.desk-phase-readout').textContent,/1/);assert.equal(a.run('WF.session.selections.analysis'),null);
+  a.$('#map-phases').click();assert.equal(a.run('WF.session.mapPhases'),false);
+  await a.click('Afspelen');await a.click('Pauze');assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});

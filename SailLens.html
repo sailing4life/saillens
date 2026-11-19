@@ -188,6 +188,14 @@ button,input,select{min-height:36px}button:focus-visible,input:focus-visible,sel
 @media(max-width:850px){.prep-desk,.prep-desk.desk-pair{grid-template-columns:minmax(0,1fr);grid-template-rows:42vh auto auto}.desk-time{grid-row:2;height:170px}.desk-pair .desk-time{height:245px}.desk-side{max-height:55vh}.desk-time .bar>span{display:none}.desk-time .bar{flex-wrap:wrap}}
 .desk-mobile-toggle{display:none}
 @media(max-width:850px){.desk-mode{height:100dvh;min-height:0;display:flex;flex-direction:column;overflow:hidden}.desk-mode aside{height:auto;max-height:58px;position:static;padding:3px 8px;overflow:auto}.desk-mode .work,.desk-mode main,.desk-mode #panes,.desk-mode .tabpane{display:flex;flex-direction:column;min-height:0;flex:1}.desk-mode main{padding:3px 5px 5px}.desk-mode .tabpane{gap:3px}.desk-mode .wf-flow{margin:0}.desk-mode .wf-flow>.bar{display:none}.desk-mode .wf-steps{margin:0;display:flex;overflow-x:auto;gap:3px}.desk-mode .wf-steps button{min-width:max-content;min-height:30px;flex-direction:row;padding:3px 6px}.desk-mode .wf-steps button span{display:none}.desk-mode .topbar{padding:3px 8px}.desk-mode .topbar h2{font-size:15px}.desk-mobile-toggle{display:inline-block;align-self:flex-start;min-height:28px;padding:2px 8px}.prep-desk,.prep-desk.desk-pair{grid-template-rows:minmax(0,1fr) minmax(112px,24%);gap:4px}.desk-pair .desk-time,.desk-time{height:auto}.desk-side{display:none;max-height:none}.desk-list-open .desk-spatial{display:none}.desk-list-open .desk-side{display:block}.desk-time>.bar{padding:2px 4px}.desk-read,.desk-time .field{font-size:11px}.desk-mode #banner{margin:0;padding:2px 4px}.desk-time .bar .field>span{display:none}}
+.desk-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.desk-replay{display:flex;align-items:center;gap:6px;padding:2px 9px;border-top:1px solid var(--line)}.desk-replay input[type=range]{flex:1;width:0;min-width:20px;accent-color:var(--accent);height:18px;cursor:ew-resize}.desk-replay button{min-width:68px}
+.desk-phase-legend,.desk-credits{position:absolute;background:var(--surface);color:var(--ink);font-size:11px;padding:2px 5px;border-radius:3px}
+.desk-phase-legend{left:5px;top:60px;display:grid;gap:2px;pointer-events:none}.desk-phase-legend span{display:flex;align-items:center;gap:4px}.desk-phase-legend i{width:12px;height:4px}
+.desk-credits{bottom:0;right:0;display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}.desk-credits a{color:var(--ink)}
+.desk-maptools{max-width:calc(100% - 16px);flex-wrap:wrap}.desk-maptools label{white-space:nowrap;cursor:pointer;font-size:12px}
+.prep-desk{grid-template-rows:minmax(0,1fr) clamp(170px,22vh,210px)}.prep-desk.desk-pair{grid-template-rows:minmax(0,1fr) clamp(200px,29vh,290px)}
+@media(max-width:850px){.prep-desk,.prep-desk.desk-pair{grid-template-rows:minmax(0,1fr) minmax(155px,30%)}.desk-phase-legend{font-size:10px}.desk-replay{padding:1px 4px}}
 </style>
 </head>
 <body>
@@ -1497,6 +1505,70 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
 })();
 
 'use strict';
+const TrackMap=(()=>{
+  const limit=85.05112878;
+  function geometry(D){
+    if(D._geo)return D._geo;
+    const lat=D.ch.Lat,lon=D.ch.Lon;if(!lat||!lon)return null;
+    const ref=SL.median(lat.subarray(D.i0,D.i1));
+    const k=Math.cos(Math.min(limit,Math.abs(ref))*SL.D2R),x=new Float64Array(D.n).fill(NaN),y=new Float64Array(D.n).fill(NaN);
+    const bx=[Infinity,-Infinity],by=[Infinity,-Infinity];let previous;
+    for(let i=D.i0;i<D.i1;i++){
+      if(!fin(lat[i])||!fin(lon[i])||Math.abs(lat[i])>=90)continue;
+      const longitude=previous==null?lon[i]:previous+SL.w180(lon[i]-previous);
+      previous=longitude;x[i]=longitude*k;y[i]=-k*Math.asinh(Math.tan(lat[i]*SL.D2R))/SL.D2R;
+      bx[0]=Math.min(bx[0],x[i]);bx[1]=Math.max(bx[1],x[i]);by[0]=Math.min(by[0],y[i]);by[1]=Math.max(by[1],y[i]);
+    }
+    return D._geo={x,y,bx,by,k};
+  }
+  // Tiles and track share a Mercator plane, locally scaled to nautical miles.
+  function visibleTiles({W,H,cx,cy,sc,k,co,si,ox,oy}){
+    if(!(sc>0&&k>0))return [];
+    const world=360*k,z=Math.max(0,Math.min(19,Math.round(Math.log2(sc*world/256)))),n=2**z,size=world/n;
+    const corners=[[0,0],[W,0],[0,H],[W,H]].map(([x,y])=>[(cx+((x-ox)*co-(y-oy)*si)/sc+world/2)/size,(cy+((x-ox)*si+(y-oy)*co)/sc+world/2)/size]);
+    const xs=corners.map(p=>p[0]),ys=corners.map(p=>p[1]),tiles=[],side=size*sc;
+    const dx=side*(Math.abs(co)+Math.abs(si))/2;
+    const x0=Math.floor(Math.min(...xs)),x1=Math.floor(Math.max(...xs));
+    // On a stationary or extremely wide track, avoid repeated copies of the world.
+    if(x1-x0>32)return tiles;
+    for(let y=Math.max(0,Math.floor(Math.min(...ys)));y<=Math.min(n-1,Math.floor(Math.max(...ys)));y++){
+      for(let x=x0;x<=x1;x++){
+        const u=(x*size-world/2-cx)*sc,v=(y*size-world/2-cy)*sc;
+        const left=ox+u*co+v*si,top=oy-u*si+v*co;
+        const mx=left+side*(co+si)/2,my=top+side*(co-si)/2;
+        if(mx+dx<0||mx-dx>W||my+dx<0||my-dx>H)continue;
+        tiles.push({key:[z,(x%n+n)%n,y].join('/'),left,top,side});
+      }
+    }
+    return tiles;
+  }
+  const cache=new Map();let repaint=null;
+  function release(){repaint=null;}
+  function paint(c,transform,onChange){
+    repaint=onChange;let ready=0,failed=0;
+    const tiles=visibleTiles(transform);
+    for(const tile of tiles){
+      let entry=cache.get(tile.key);
+      if(!entry||(entry.retry&&Date.now()>entry.retry)){
+        const img=new Image();entry={img,status:'loading'};cache.set(tile.key,entry);
+        img.onload=()=>{entry.status='ready';repaint?.();};
+        img.onerror=()=>{entry.status='error';entry.retry=Date.now()+60000;repaint?.();};
+        img.referrerPolicy='strict-origin-when-cross-origin';
+        img.src='https://tile.openstreetmap.org/'+tile.key+'.png';
+      }
+      cache.delete(tile.key);cache.set(tile.key,entry);
+      if(entry.status==='ready'){
+        ready++;c.save();c.translate(tile.left,tile.top);c.rotate(-Math.atan2(transform.si,transform.co));
+        c.drawImage(entry.img,0,0,tile.side+.25,tile.side+.25);c.restore();
+      }else if(entry.status==='error')failed++;
+    }
+    while(cache.size>180)cache.delete(cache.keys().next().value);
+    return !tiles.length?'Geen kaartdekking':failed?'Kaart deels of geheel niet beschikbaar':ready<tiles.length?'Kaart laden…':'';
+  }
+  return {geometry,visibleTiles,paint,release};
+})();
+
+'use strict';
 /* SailLens UI infrastructure: DOM helpers, canvas plotting, colour scales, reusable blocks. */
 const $ = (s, r = document) => r.querySelector(s);
 function h(tag, attrs, ...kids) { const e = document.createElement(tag); for (const k in attrs || {}) { const v = attrs[k]; if (k === 'class') e.className = v; else if (k.startsWith('on')) e.addEventListener(k.slice(2), v); else if (k === 'html') e.innerHTML = v; else if (k === 'style') e.style.cssText = v; else if (v !== false && v != null) e.setAttribute(k, v); } for (const c of kids.flat(Infinity)) if (c != null && c !== false) e.append(c); return e; }
@@ -1674,19 +1746,21 @@ function blkPerf(c, mode, by) {
     blkXY(c, { ps, x: 'TWS', y, by, zero: 0, notes: n, h: 190, xl: y === 'ΔVMG%' ? 'TWS (kn)' : '', ysuf: y === 'ΔTWA' ? '°' : y === 'ΔVMG%' ? '%' : '' });
 }
 /* track map */
-function mapGeom(D) { if (D._geo) return D._geo; const la = D.ch.Lat, lo = D.ch.Lon; if (!la || !lo) return null; const la0 = SL.median(la.subarray(D.i0, D.i1)), k = Math.cos(la0 * SL.D2R), x = new Float64Array(D.n), y = new Float64Array(D.n); let a = Infinity, b = -Infinity, cc = Infinity, d = -Infinity; for (let i = D.i0; i < D.i1; i++) { x[i] = lo[i] * k; y[i] = -la[i]; if (fin(x[i]) && fin(y[i])) { if (x[i] < a) a = x[i]; if (x[i] > b) b = x[i]; if (y[i] < cc) cc = y[i]; if (y[i] > d) d = y[i]; } } return D._geo = { x, y, bx: [a, b], by: [cc, d], k }; }
+function mapGeom(D){return TrackMap.geometry(D);}
 function drawMap(cv, o) {
   const D = A.D, G = mapGeom(D), W = o.w || cv.parentElement.clientWidth || 700, H = o.h || 520, dp = window.devicePixelRatio || 1;
   cv.width = W * dp; cv.height = H * dp; cv.style.height = H + 'px'; const c = cv.getContext('2d'); c.setTransform(dp, 0, 0, dp, 0, 0); c.fillStyle = css('--water'); c.fillRect(0, 0, W, H);
   if (!G || !fin(G.bx[0])) { c.fillStyle = css('--muted'); c.font = '13px ' + css('--font'); c.fillText('Geen geldige GPS-posities in dit log.', 20, 30); return null; }
   const v = o.view, rot=(o.bearing||0)*SL.D2R, co=Math.cos(rot), si=Math.sin(rot);
   const bx=o.bounds?.bx||G.bx, by=o.bounds?.by||G.by, dx=bx[1]-bx[0], dy=by[1]-by[0];
-  const s0=Math.min((W-60)/Math.max(1e-6,Math.abs(dx*co)+Math.abs(dy*si)),(H-60)/Math.max(1e-6,Math.abs(dx*si)+Math.abs(dy*co))), sc=s0*(v?.z||1);
+  const s0=Math.min(Math.max(1,W-60)/Math.max(1e-6,Math.abs(dx*co)+Math.abs(dy*si)),Math.max(1,H-60)/Math.max(1e-6,Math.abs(dx*si)+Math.abs(dy*co))), sc=s0*(v?.z||1);
   const cx=(bx[0]+bx[1])/2, cy=(by[0]+by[1])/2;
   const X=i=>W/2+((G.x[i]-cx)*co+(G.y[i]-cy)*si)*sc-(v?.x||0)*(v?.z||1);
   const Y=i=>H/2+((G.y[i]-cy)*co-(G.x[i]-cx)*si)*sc-(v?.y||0)*(v?.z||1);
+  let tileStatus='';
+  if(o.tiles)tileStatus=TrackMap.paint(c,{W,H,cx,cy,sc,k:G.k,co,si,ox:W/2-(v?.x||0)*(v?.z||1),oy:H/2-(v?.y||0)*(v?.z||1)},o.tiles);
   // graticule: 1 nm squares
-  const nm = sc / 60, stepNm = nm > 200 ? 0.25 : nm > 60 ? 1 : nm > 12 ? 5 : 20; c.strokeStyle = css('--grid'); c.lineWidth = 1; c.beginPath(); for (let gx = (W / 2) % (nm * stepNm); gx < W; gx += nm * stepNm) { c.moveTo(gx, 0); c.lineTo(gx, H); } for (let gy = (H / 2) % (nm * stepNm); gy < H; gy += nm * stepNm) { c.moveTo(0, gy); c.lineTo(W, gy); } c.stroke();
+  const nm = sc / 60, stepNm = nm > 200 ? 0.25 : nm > 60 ? 1 : nm > 12 ? 5 : 20; c.strokeStyle = o.tiles?alpha(css('--grid'),.35):css('--grid'); c.lineWidth = 1; c.beginPath(); for (let gx = (W / 2) % (nm * stepNm); gx < W; gx += nm * stepNm) { c.moveTo(gx, 0); c.lineTo(gx, H); } for (let gy = (H / 2) % (nm * stepNm); gy < H; gy += nm * stepNm) { c.moveTo(0, gy); c.lineTo(W, gy); } c.stroke();
   c.fillStyle = css('--muted'); c.font = '10px ' + css('--font'); c.textAlign = 'left'; c.fillText('grid ' + stepNm + ' nm · ' + (o.bearing==null?'North up':'Wind up '+Math.round(o.bearing)+'°'), 8, H - 8);
   const [lo,hi]=o.range||[D.i0,D.i1];
   const a = D.ch[o.v], vals = []; for (let i = lo; i < hi; i += 7) if (a && fin(a[i]) && D.ch.BSP[i] > 1) vals.push(a[i]); const S = a ? scale(o.v, vals) : null;
@@ -1694,6 +1768,24 @@ function drawMap(cv, o) {
   for (let i = lo + 1; i < hi; i++) { if (!fin(G.x[i]) || !fin(G.x[i - 1])) continue; buckets[S ? bk(a[i]) : 0].push(i); }
   c.lineWidth = 3; c.lineCap = 'round';
   buckets.forEach((b, k) => { if (!b.length) return; c.strokeStyle = !S ? css('--s1') : k === NB ? css('--muted') : S.col(S.lo + (k + 0.5) / NB * (S.hi - S.lo)); c.beginPath(); for (const i of b) { c.moveTo(X(i - 1), Y(i - 1)); c.lineTo(X(i), Y(i)); } c.stroke(); });
+  const phaseLabels=new Set();
+  for(const phase of o.phases||[]){
+    const start=Math.max(lo,phase.i),end=Math.min(hi,phase.i1);if(start>=end)continue;
+    c.beginPath();let active=false;
+    for(let i=start;i<end;i++){
+      if(!fin(X(i))||!fin(Y(i))){active=false;continue;}
+      if(active)c.lineTo(X(i),Y(i));else c.moveTo(X(i),Y(i));active=true;
+    }
+    c.strokeStyle=css('--surface');c.lineWidth=8;c.stroke();
+    c.strokeStyle=phase.color;c.lineWidth=5;c.stroke();
+    const mid=Math.floor((start+end-1)/2),x=X(mid)+5,y=Y(mid)-6;
+    const cell=Math.floor(x/64)+','+Math.floor(y/25);
+    if(x>=5&&x<=W-42&&y>=58&&y<=H-36&&!phaseLabels.has(cell)){
+      phaseLabels.add(cell);c.font='bold 11px '+css('--font');c.textAlign='left';
+      c.lineWidth=3;c.strokeStyle=css('--surface');c.strokeText('F'+phase.index,x,y);
+      c.fillStyle=css('--ink');c.fillText('F'+phase.index,x,y);
+    }
+  }
   if (o.barbs && D.ch.TWD) { const st = Math.max(60, Math.round((D.i1 - D.i0) / 45)); c.strokeStyle = css('--ink2'); c.fillStyle = css('--ink2'); c.lineWidth = 1; c.font = '10px ' + css('--font'); c.textAlign = 'center'; c.textBaseline = 'middle'; for (let i = D.i0 + st; i < D.i1; i += st) { if (!fin(G.x[i]) || !fin(D.ch.TWD[i]) || !(D.ch.BSP[i] > 1)) continue; const t = (D.ch.TWD[i] + D.magVar) * SL.D2R, x = X(i), y = Y(i), ux = Math.sin(t), uy = -Math.cos(t); c.beginPath(); c.moveTo(x, y); c.lineTo(x + ux * 20, y + uy * 20); c.moveTo(x + ux * 20, y + uy * 20); c.lineTo(x + ux * 20 + uy * 6 - ux * 3, y + uy * 20 - ux * 6 - uy * 3); c.stroke(); c.fillText(f1(D.ch.TWS[i], 0), x + ux * 30, y + uy * 30); } }
   c.font = '600 10px ' + css('--font'); c.textAlign = 'left'; c.textBaseline = 'middle';
   for (const m of D.mans) { if(m.i<lo||m.i>=hi)continue; c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
@@ -1709,8 +1801,10 @@ function drawMap(cv, o) {
     }
     c.stroke();
   }
-  if (o.cur != null && fin(G.x[o.cur])) { const x = X(o.cur), y = Y(o.cur), hd = ((D.ch.HDG ? D.ch.HDG[o.cur] + D.magVar : D.ch.COG ? D.ch.COG[o.cur] : 0) || 0) * SL.D2R; c.save(); c.translate(x, y); c.rotate(hd-rot); c.fillStyle = css('--accent'); c.strokeStyle = css('--surface'); c.lineWidth = 2; c.beginPath(); c.moveTo(0, -13); c.lineTo(7, 9); c.lineTo(0, 5); c.lineTo(-7, 9); c.closePath(); c.fill(); c.stroke(); c.restore(); }
-  return { X, Y, s0 };
+  const boat=(i,ctx=c)=>{
+  if (i != null && fin(G.x[i])) { const x = X(i), y = Y(i), hd = ((D.ch.HDG ? D.ch.HDG[i] + D.magVar : D.ch.COG ? D.ch.COG[i] : 0) || 0) * SL.D2R; ctx.save(); ctx.translate(x, y); ctx.rotate(hd-rot); ctx.fillStyle = css('--accent'); ctx.strokeStyle = css('--surface'); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(7, 9); ctx.lineTo(0, 5); ctx.lineTo(-7, 9); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); }
+  };
+  boat(o.cur);return {X,Y,s0,boat,tileStatus};
 }
 function blkCal(c, off) {
   const D = A.D, ct = SL.calTable(D), keys = ['TWS', 'TWA', 'Heel', 'BSP', 'SOG', 'BSP-SOG', 'BSP/SOG%', 'HDG', 'COG', 'HDG-COG', 'CUR_DIR', 'CUR_RATE'];
@@ -2773,7 +2867,7 @@ const WF = (() => {
       session.deskMap={...session.deskMap,z:1,x:0,y:0};session.reviewPage=Math.floor(list.indexOf(x)/40);
       session.viewport=[Math.max(A.D.i0,x.obj.i-90),Math.min(A.D.i1,x.obj.i1+120)];
     }
-    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range});
+    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range,selectPhase:p=>{const x=list.find(x=>x.obj===p);if(x){focusPhase(x);show('review');}}});
     toolbar.append(btn('Manoeuvres →',()=>show('pairreview')));
     if (session.staleReviews) side.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
     const range = session.selections.analysis;
@@ -2793,7 +2887,7 @@ const WF = (() => {
     const approved = all.filter(x => SL.allowed(session.reviews[x.key], 'calibration')).length;
     side.append(card('Fasetabel', bar(h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
       btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
-      table(['Tijd', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return [tstr(x.range.anchor || x.range.start), x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
+      table(['Fase · tijd', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return ['F'+(A.D.phases.indexOf(x.obj)+1)+' · '+tstr(x.range.anchor || x.range.start), x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
       !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
       bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, `${Math.min(page * 40 + 1, visible.length)}–${Math.min((page + 1) * 40, visible.length)} van ${visible.length}`), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));
@@ -3358,7 +3452,7 @@ const RaceTools = (() => {
 const PrepDesk = (() => {
   const button=(label,on,attrs={})=>h('button',{type:'button',onclick:on,...attrs},label);
   let observer,frame,activeDialog,cleanup;
-  function leave(){cleanup?.();cleanup=null;observer?.disconnect();cancelAnimationFrame(frame);activeDialog?.remove();activeDialog=null;}
+  function leave(){TrackMap.release();cleanup?.();cleanup=null;observer?.disconnect();cancelAnimationFrame(frame);activeDialog?.remove();activeDialog=null;}
   function dialog(title,body){
     activeDialog?.remove();
     const d=h('dialog',{class:'desk-dialog','aria-label':title},bar(h('h3',{},title),button('Sluiten',()=>d.remove())),body);
@@ -3426,14 +3520,52 @@ const PrepDesk = (() => {
     orient.setAttribute('aria-label','Kaartoriëntatie');
     function fit(){view.z=1;view.x=view.y=0;draw();WF.touch();}
     function zoom(mult){view.z=clip(view.z*mult,.5,80);draw();WF.touch();}
-    const mapBar=bar(orient,button('−',()=>zoom(1/1.4),{'aria-label':'Kaart uitzoomen'}),button('+',()=>zoom(1.4),{'aria-label':'Kaart inzoomen'}),button('Pas track in',fit));
+    const mapCursor=h('canvas',{class:'desk-overlay','aria-hidden':'true'}),stripCursor=h('canvas',{class:'desk-overlay','aria-hidden':'true'});
+    mapBox.append(mapCursor);stripBox.append(stripCursor);
+    const phaseStyles={pending:['Te beoordelen','--s1'],approved:['Goedgekeurd','--s3'],excluded:['Uitgesloten','--s2']};
+    const phases=D.phases.map((p,index)=>{
+      const review=s.reviews[SL.reviewKey(SL.objectRange(D,p,'phase'))];
+      const state=review?.invalid?'excluded':review?.calibration?'approved':review?.reason||review?.performance===false?'excluded':'pending';
+      return {i:p.i,i1:p.i1,index:index+1,obj:p,state,color:css(phaseStyles[state][1])};
+    }).filter(p=>p.i<hi&&p.i1>lo);
+    function phaseAt(i){
+      let l=0,r=phases.length;
+      while(l<r){const m=(l+r)>>1;if(phases[m].i<=i)l=m+1;else r=m;}
+      const phase=phases[l-1];return phase&&i<phase.i1?phase:null;
+    }
+    const showPhases=h('input',{id:'map-phases',type:'checkbox',checked:s.mapPhases!==false,disabled:!phases.length,onchange:e=>{s.mapPhases=e.target.checked;draw();WF.touch();}});
+    const mapOnline=/^https?:$/.test(location.protocol);
+    const showTiles=h('input',{id:'map-tiles',type:'checkbox',checked:mapOnline&&!!s.mapTiles,disabled:!mapOnline||!g,onchange:e=>{s.mapTiles=e.target.checked;draw();WF.touch();}});
+    const credits=h('div',{class:'desk-credits'},h('span',{}),h('a',{href:'https://www.openstreetmap.org/copyright',target:'_blank',rel:'noopener'},'© OpenStreetMap contributors'));
+    const legend=h('div',{class:'desk-phase-legend'},Object.values(phaseStyles).map(([name,color])=>h('span',{},h('i',{style:'background:'+css(color)}),name)));
+    mapBox.append(legend,credits);
+    const mapBar=bar(orient,button('−',()=>zoom(1/1.4),{'aria-label':'Kaart uitzoomen'}),button('+',()=>zoom(1.4),{'aria-label':'Kaart inzoomen'}),button('Pas track in',fit),
+      h('label',{},showPhases,' Fases'),h('label',{title:mapOnline?'Laadt kaarttegels voor het zichtbare gebied bij OpenStreetMap.':'Open de online versie voor de achtergrondkaart.'},showTiles,' Achtergrondkaart'));
     mapBar.classList.add('desk-maptools');mapBox.append(mapBar);
-    const nudge=step=>{A.cur=clip(A.cur+step,lo,hi-1);draw();WF.touch();};
+    let timer=null;
+    const slider=h('input',{type:'range',id:'desk-scrubber',min:lo,max:hi-1,step:1,value:clip(A.cur,lo,hi-1),'aria-label':'Tijdcursor'});
+    const speed=sel('desk-play-speed',['1','5','20','60'],String(s.playSpeed||20),v=>{s.playSpeed=Number(v);stop();WF.touch();});
+    speed.setAttribute('aria-label','Afspeelsnelheid');for(const option of speed.options)option.textContent=option.value+'×';
+    const play=button('Afspelen',toggle,{'aria-pressed':'false'});
+    function stop(){if(timer!==null){clearInterval(timer);timer=null;play.textContent='Afspelen';play.setAttribute('aria-pressed','false');WF.touch();}}
+    function toggle(){
+      if(timer!==null){stop();return;}
+      if(A.cur<lo||A.cur>=hi-1)A.cur=lo;
+      const from=A.cur,t=performance.now();play.textContent='Pauze';play.setAttribute('aria-pressed','true');draw();
+      timer=setInterval(()=>{
+        if(!desk.isConnected||document.hidden||document.querySelector('dialog[open]')){stop();return;}
+        const next=Math.min(hi-1,from+Math.floor((performance.now()-t)*Number(speed.value)/1000));
+        if(next!==A.cur){A.cur=next;draw();}if(next===hi-1)stop();
+      },50);
+    }
+    slider.oninput=()=>{stop();A.cur=Number(slider.value);schedule();};slider.onchange=()=>{A.cur=Number(slider.value);draw();WF.touch();};
+    const replay=h('div',{class:'desk-replay'},play,speed,slider);
+    const nudge=step=>{stop();A.cur=clip(A.cur+step,lo,hi-1);draw();WF.touch();};
     const timeControls=bar(button('−1 s',()=>nudge(-1)),button('+1 s',()=>nudge(1)),field('Kanaal',sel('desk-channel',varList(),key,v=>{s.plotVariable=v;show(A.tab);})),rangeLabel,
       button('Tijdvak',()=>dialog('Tijdvak instellen',WF.selectionBar())),
       button('Zoom op selectie',()=>{if(!s.selections.analysis)return banner('Sleep eerst een tijdvak in de tijdgrafiek.');s.viewport=WF.rangeIndices();view.x=view.y=0;view.z=1;show(A.tab);}),
       button('Hele log',()=>{s.viewport=pair?[D.i0,D.i1]:null;s.selections.analysis=null;view.x=view.y=0;view.z=1;show(A.tab);}));
-    const desk=h('div',{class:'prep-desk'+(pair?' desk-pair':'')},h('section',{class:'desk-spatial'},status,mapBox),side,h('section',{class:'desk-time'},timeControls,stripBox));
+    const desk=h('div',{class:'prep-desk'+(pair?' desk-pair':'')},h('section',{class:'desk-spatial'},status,mapBox),side,h('section',{class:'desk-time'},timeControls,stripBox,replay));
     const mobileToggle=button('',()=>{s.deskList=!s.deskList;mobile();schedule();},{class:'desk-mobile-toggle'});
     function mobile(){desk.classList.toggle('desk-list-open',!!s.deskList);mobileToggle.textContent=s.deskList?'Kaart tonen':title+' tonen';}
     mobile();container.append(mobileToggle,desk);
@@ -3464,19 +3596,32 @@ const PrepDesk = (() => {
         if(runs.length)lanes.push({label,color,runs});
       }
     }
+    const phaseReadout=h('span',{class:'desk-phase-readout'});status.append(phaseReadout);
+    let baseKey=null;
+    function invalidate(){baseKey=null;schedule();}
+    function overlay(cv,w,h,dp){
+      const width=Math.round(w*dp),height=Math.round(h*dp);
+      if(cv.width!==width||cv.height!==height){cv.width=width;cv.height=height;}
+      const c=cv.getContext('2d');c.setTransform(dp,0,0,dp,0,0);c.clearRect(0,0,w,h);return c;
+    }
     function ranges(){
       const ranges=[];
-      for(const [r,k] of [[pair?.before,'--s1'],[pair?.after,'--s3'],[options.phase,'--s3'],[s.selections.analysis,'--accent']])if(r)ranges.push([idx(r.start),idx(r.end),css(k)]);
+      for(const [r,k] of [[pair?.before,'--s1'],[pair?.after,'--s3'],[showPhases.checked&&options.phase,'--s4'],[s.selections.analysis,'--accent']])if(r)ranges.push([idx(r.start),idx(r.end),css(k)]);
       return ranges;
     }
     const left=70,right=18;
     function draw(){
       if(!desk.isConnected)return;
       const marks=ranges();
-      geo=drawMap(map,{v:key,view,bearing:view.bearing,bounds,range:[lo,hi],cur:A.cur,h:Math.max(95,mapBox.clientHeight||320),highlights:marks});
-      const W=chartWidth=stripBox.clientWidth||700,H=stripBox.clientHeight||(pair?170:98),dp=window.devicePixelRatio||1,c=strip.getContext('2d');
-      strip.width=W*dp;strip.height=H*dp;c.setTransform(dp,0,0,dp,0,0);c.fillStyle=css('--surface');c.fillRect(0,0,W,H);
+      const W=chartWidth=stripBox.clientWidth||700,H=stripBox.clientHeight||(pair?170:98),dp=window.devicePixelRatio||1;
+      const mw=mapBox.clientWidth||700,mh=Math.max(95,mapBox.clientHeight||320),tiles=showTiles.checked&&!!g&&fin(g.bx[0])&&!!mapBox.getClientRects().length,visiblePhases=showPhases.checked&&phases.length;
       const X=i=>left+(i-lo)/dt*(W-left-right);
+      const signature=JSON.stringify([W,H,mw,mh,dp,tiles,visiblePhases,view.x,view.y,view.z,view.bearing,marks]);
+      if(baseKey!==signature){
+      baseKey=signature;
+      geo=drawMap(map,{v:key,view,bearing:view.bearing,bounds,range:[lo,hi],w:mw,h:mh,highlights:marks,phases:visiblePhases?phases:[],tiles:tiles?invalidate:null});
+      credits.hidden=!tiles;credits.firstChild.textContent=geo?.tileStatus||'';legend.hidden=!visiblePhases;
+      const c=strip.getContext('2d');strip.width=W*dp;strip.height=H*dp;c.setTransform(dp,0,0,dp,0,0);c.fillStyle=css('--surface');c.fillRect(0,0,W,H);
       c.font='11px system-ui';c.textBaseline='middle';
       for(const [a,b,color] of marks){c.fillStyle=alpha(color,.19);c.fillRect(Math.max(left,X(a)),3,Math.max(0,Math.min(W-right,X(b))-Math.max(left,X(a))),H-25);}
       const laneHeight=Math.min(13,(H-32)/Math.max(3,lanes.length+2)),row=(H-26-lanes.length*laneHeight)/Math.max(1,series.length);
@@ -3496,17 +3641,24 @@ const PrepDesk = (() => {
       if(pair)for(const r of [pair.before,pair.after])for(const t of [r.start,r.end]){c.fillStyle=css('--ink2');c.fillRect(X(idx(t)),3,1,H-26);}
       const ticks=Math.max(2,Math.floor((W-left-right)/125));
       for(let j=0;j<=ticks;j++){const i=lo+dt*j/ticks;c.fillStyle=css('--ink2');c.textAlign=j===ticks?'right':j===0?'left':'center';c.fillText(tstr(iT(Math.round(i))),X(i),H-10);}c.textAlign='left';
-      c.fillStyle=css('--ink');if(A.cur>=lo&&A.cur<hi)c.fillRect(X(A.cur),0,2,H-22);
+      }
+      const mc=overlay(mapCursor,mw,mh,dp);geo?.boat(A.cur,mc);
+      const cursor=overlay(stripCursor,W,H,dp);cursor.fillStyle=css('--ink');
+      if(A.cur>=lo&&A.cur<hi)cursor.fillRect(X(A.cur),0,2,H-22);
+      slider.value=clip(A.cur,lo,hi-1);slider.setAttribute('aria-valuetext',tstr(iT(A.cur)));
+      const p=phaseAt(A.cur);phaseReadout.textContent=p&&showPhases.checked?'Fase '+p.index+' · '+phaseStyles[p.state][0]:'';
       clock.textContent=tstr(iT(A.cur));telemetry.textContent=['BSP','TWS','AWA','TWA','TWD','Heel'].filter(k=>D.ch[k]).map(k=>k+' '+f1(D.ch[k][A.cur],1)+(['BSP','TWS'].includes(k)?' kn':'°')).join('   ·   ');
       rangeLabel.textContent=s.selections.analysis?tstr(s.selections.analysis.start)+' – '+tstr(s.selections.analysis.end):'Klik voor cursor · sleep voor tijdvak';
     }
     function schedule(){cancelAnimationFrame(frame);frame=requestAnimationFrame(draw);}
     function timeAt(e){return clip(Math.round(lo+(e.offsetX-left)*dt/(chartWidth-left-right)),lo,hi);}
-    map.onpointerdown=e=>{pan={x:e.offsetX,y:e.offsetY,vx:view.x,vy:view.y};map.setPointerCapture?.(e.pointerId);};
+    map.onpointerdown=e=>{stop();pan={x:e.offsetX,y:e.offsetY,vx:view.x,vy:view.y};map.setPointerCapture?.(e.pointerId);};
     map.onpointermove=e=>{if(!pan)return;const dx=e.offsetX-pan.x,dy=e.offsetY-pan.y;if(Math.abs(dx)+Math.abs(dy)>4||pan.moved){pan.moved=true;view.x=pan.vx-dx/view.z;view.y=pan.vy-dy/view.z;schedule();}};
-    map.onpointerup=e=>{if(pan&&!pan.moved&&geo){let dist=25**2,best=A.cur;for(let i=lo;i<hi;i++){const d=(geo.X(i)-e.offsetX)**2+(geo.Y(i)-e.offsetY)**2;if(d<dist){dist=d;best=i;}}A.cur=best;}pan=null;draw();WF.touch();};
+    map.onpointerup=e=>{if(pan&&!pan.moved&&geo){let dist=25**2,best=A.cur;for(let i=lo;i<hi;i++){const d=(geo.X(i)-e.offsetX)**2+(geo.Y(i)-e.offsetY)**2;if(d<dist){dist=d;best=i;}}A.cur=best;
+      const phase=phaseAt(best);if(dist<25**2&&phase&&showPhases.checked&&options.selectPhase){pan=null;options.selectPhase(phase.obj);return;}
+    }pan=null;draw();WF.touch();};
     map.onpointercancel=()=>pan=null;
-    strip.onpointerdown=e=>{const i=timeAt(e);drag={i,x:e.offsetX};strip.setPointerCapture?.(e.pointerId);
+    strip.onpointerdown=e=>{stop();const i=timeAt(e);drag={i,x:e.offsetX};strip.setPointerCapture?.(e.pointerId);
       if(pair)for(const side of ['before','after'])for(const edge of ['start','end'])if(Math.abs(i-idx(pair[side][edge]))*(chartWidth-left-right)/dt<7)Object.assign(drag,{side,edge});};
     strip.onpointermove=e=>{if(!drag)return;A.cur=Math.min(D.i1-1,timeAt(e));if(!drag.side&&Math.abs(e.offsetX-drag.x)>3)s.selections.analysis={start:iT(Math.min(A.cur,drag.i)),end:iT(Math.max(A.cur,drag.i))};schedule();};
     strip.onpointerup=e=>{if(!drag)return;const {i,x,side,edge}=drag,end=timeAt(e);drag=null;A.cur=Math.min(D.i1-1,end);
@@ -3516,10 +3668,11 @@ const PrepDesk = (() => {
     strip.onpointercancel=()=>drag=null;
     const keyboard=e=>{
       if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||document.querySelector('dialog[open]')||e.target.closest?.('input,select,textarea,[contenteditable]'))return;
+      if(e.code==='Space'&&!e.target.closest?.('button,a,summary')){e.preventDefault();toggle();return;}
       if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();nudge((e.shiftKey?10:1)*(e.key==='ArrowLeft'?-1:1));}
       if(e.key.toLowerCase()==='e'&&options.addEvent){e.preventDefault();options.addEvent();}
     };
-    document.addEventListener('keydown',keyboard);cleanup=()=>document.removeEventListener('keydown',keyboard);
+    document.addEventListener('keydown',keyboard);cleanup=()=>{stop();document.removeEventListener('keydown',keyboard);};
     if(options.addEvent){map.ondblclick=strip.ondblclick=options.addEvent;}
     draw();if(window.ResizeObserver){observer=new ResizeObserver(schedule);observer.observe(mapBox);observer.observe(stripBox);}
     return {side,toolbar,draw};

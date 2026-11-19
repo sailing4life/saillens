@@ -176,19 +176,21 @@ function blkPerf(c, mode, by) {
     blkXY(c, { ps, x: 'TWS', y, by, zero: 0, notes: n, h: 190, xl: y === 'ΔVMG%' ? 'TWS (kn)' : '', ysuf: y === 'ΔTWA' ? '°' : y === 'ΔVMG%' ? '%' : '' });
 }
 /* track map */
-function mapGeom(D) { if (D._geo) return D._geo; const la = D.ch.Lat, lo = D.ch.Lon; if (!la || !lo) return null; const la0 = SL.median(la.subarray(D.i0, D.i1)), k = Math.cos(la0 * SL.D2R), x = new Float64Array(D.n), y = new Float64Array(D.n); let a = Infinity, b = -Infinity, cc = Infinity, d = -Infinity; for (let i = D.i0; i < D.i1; i++) { x[i] = lo[i] * k; y[i] = -la[i]; if (fin(x[i]) && fin(y[i])) { if (x[i] < a) a = x[i]; if (x[i] > b) b = x[i]; if (y[i] < cc) cc = y[i]; if (y[i] > d) d = y[i]; } } return D._geo = { x, y, bx: [a, b], by: [cc, d], k }; }
+function mapGeom(D){return TrackMap.geometry(D);}
 function drawMap(cv, o) {
   const D = A.D, G = mapGeom(D), W = o.w || cv.parentElement.clientWidth || 700, H = o.h || 520, dp = window.devicePixelRatio || 1;
   cv.width = W * dp; cv.height = H * dp; cv.style.height = H + 'px'; const c = cv.getContext('2d'); c.setTransform(dp, 0, 0, dp, 0, 0); c.fillStyle = css('--water'); c.fillRect(0, 0, W, H);
   if (!G || !fin(G.bx[0])) { c.fillStyle = css('--muted'); c.font = '13px ' + css('--font'); c.fillText('Geen geldige GPS-posities in dit log.', 20, 30); return null; }
   const v = o.view, rot=(o.bearing||0)*SL.D2R, co=Math.cos(rot), si=Math.sin(rot);
   const bx=o.bounds?.bx||G.bx, by=o.bounds?.by||G.by, dx=bx[1]-bx[0], dy=by[1]-by[0];
-  const s0=Math.min((W-60)/Math.max(1e-6,Math.abs(dx*co)+Math.abs(dy*si)),(H-60)/Math.max(1e-6,Math.abs(dx*si)+Math.abs(dy*co))), sc=s0*(v?.z||1);
+  const s0=Math.min(Math.max(1,W-60)/Math.max(1e-6,Math.abs(dx*co)+Math.abs(dy*si)),Math.max(1,H-60)/Math.max(1e-6,Math.abs(dx*si)+Math.abs(dy*co))), sc=s0*(v?.z||1);
   const cx=(bx[0]+bx[1])/2, cy=(by[0]+by[1])/2;
   const X=i=>W/2+((G.x[i]-cx)*co+(G.y[i]-cy)*si)*sc-(v?.x||0)*(v?.z||1);
   const Y=i=>H/2+((G.y[i]-cy)*co-(G.x[i]-cx)*si)*sc-(v?.y||0)*(v?.z||1);
+  let tileStatus='';
+  if(o.tiles)tileStatus=TrackMap.paint(c,{W,H,cx,cy,sc,k:G.k,co,si,ox:W/2-(v?.x||0)*(v?.z||1),oy:H/2-(v?.y||0)*(v?.z||1)},o.tiles);
   // graticule: 1 nm squares
-  const nm = sc / 60, stepNm = nm > 200 ? 0.25 : nm > 60 ? 1 : nm > 12 ? 5 : 20; c.strokeStyle = css('--grid'); c.lineWidth = 1; c.beginPath(); for (let gx = (W / 2) % (nm * stepNm); gx < W; gx += nm * stepNm) { c.moveTo(gx, 0); c.lineTo(gx, H); } for (let gy = (H / 2) % (nm * stepNm); gy < H; gy += nm * stepNm) { c.moveTo(0, gy); c.lineTo(W, gy); } c.stroke();
+  const nm = sc / 60, stepNm = nm > 200 ? 0.25 : nm > 60 ? 1 : nm > 12 ? 5 : 20; c.strokeStyle = o.tiles?alpha(css('--grid'),.35):css('--grid'); c.lineWidth = 1; c.beginPath(); for (let gx = (W / 2) % (nm * stepNm); gx < W; gx += nm * stepNm) { c.moveTo(gx, 0); c.lineTo(gx, H); } for (let gy = (H / 2) % (nm * stepNm); gy < H; gy += nm * stepNm) { c.moveTo(0, gy); c.lineTo(W, gy); } c.stroke();
   c.fillStyle = css('--muted'); c.font = '10px ' + css('--font'); c.textAlign = 'left'; c.fillText('grid ' + stepNm + ' nm · ' + (o.bearing==null?'North up':'Wind up '+Math.round(o.bearing)+'°'), 8, H - 8);
   const [lo,hi]=o.range||[D.i0,D.i1];
   const a = D.ch[o.v], vals = []; for (let i = lo; i < hi; i += 7) if (a && fin(a[i]) && D.ch.BSP[i] > 1) vals.push(a[i]); const S = a ? scale(o.v, vals) : null;
@@ -196,6 +198,24 @@ function drawMap(cv, o) {
   for (let i = lo + 1; i < hi; i++) { if (!fin(G.x[i]) || !fin(G.x[i - 1])) continue; buckets[S ? bk(a[i]) : 0].push(i); }
   c.lineWidth = 3; c.lineCap = 'round';
   buckets.forEach((b, k) => { if (!b.length) return; c.strokeStyle = !S ? css('--s1') : k === NB ? css('--muted') : S.col(S.lo + (k + 0.5) / NB * (S.hi - S.lo)); c.beginPath(); for (const i of b) { c.moveTo(X(i - 1), Y(i - 1)); c.lineTo(X(i), Y(i)); } c.stroke(); });
+  const phaseLabels=new Set();
+  for(const phase of o.phases||[]){
+    const start=Math.max(lo,phase.i),end=Math.min(hi,phase.i1);if(start>=end)continue;
+    c.beginPath();let active=false;
+    for(let i=start;i<end;i++){
+      if(!fin(X(i))||!fin(Y(i))){active=false;continue;}
+      if(active)c.lineTo(X(i),Y(i));else c.moveTo(X(i),Y(i));active=true;
+    }
+    c.strokeStyle=css('--surface');c.lineWidth=8;c.stroke();
+    c.strokeStyle=phase.color;c.lineWidth=5;c.stroke();
+    const mid=Math.floor((start+end-1)/2),x=X(mid)+5,y=Y(mid)-6;
+    const cell=Math.floor(x/64)+','+Math.floor(y/25);
+    if(x>=5&&x<=W-42&&y>=58&&y<=H-36&&!phaseLabels.has(cell)){
+      phaseLabels.add(cell);c.font='bold 11px '+css('--font');c.textAlign='left';
+      c.lineWidth=3;c.strokeStyle=css('--surface');c.strokeText('F'+phase.index,x,y);
+      c.fillStyle=css('--ink');c.fillText('F'+phase.index,x,y);
+    }
+  }
   if (o.barbs && D.ch.TWD) { const st = Math.max(60, Math.round((D.i1 - D.i0) / 45)); c.strokeStyle = css('--ink2'); c.fillStyle = css('--ink2'); c.lineWidth = 1; c.font = '10px ' + css('--font'); c.textAlign = 'center'; c.textBaseline = 'middle'; for (let i = D.i0 + st; i < D.i1; i += st) { if (!fin(G.x[i]) || !fin(D.ch.TWD[i]) || !(D.ch.BSP[i] > 1)) continue; const t = (D.ch.TWD[i] + D.magVar) * SL.D2R, x = X(i), y = Y(i), ux = Math.sin(t), uy = -Math.cos(t); c.beginPath(); c.moveTo(x, y); c.lineTo(x + ux * 20, y + uy * 20); c.moveTo(x + ux * 20, y + uy * 20); c.lineTo(x + ux * 20 + uy * 6 - ux * 3, y + uy * 20 - ux * 6 - uy * 3); c.stroke(); c.fillText(f1(D.ch.TWS[i], 0), x + ux * 30, y + uy * 30); } }
   c.font = '600 10px ' + css('--font'); c.textAlign = 'left'; c.textBaseline = 'middle';
   for (const m of D.mans) { if(m.i<lo||m.i>=hi)continue; c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
@@ -211,8 +231,10 @@ function drawMap(cv, o) {
     }
     c.stroke();
   }
-  if (o.cur != null && fin(G.x[o.cur])) { const x = X(o.cur), y = Y(o.cur), hd = ((D.ch.HDG ? D.ch.HDG[o.cur] + D.magVar : D.ch.COG ? D.ch.COG[o.cur] : 0) || 0) * SL.D2R; c.save(); c.translate(x, y); c.rotate(hd-rot); c.fillStyle = css('--accent'); c.strokeStyle = css('--surface'); c.lineWidth = 2; c.beginPath(); c.moveTo(0, -13); c.lineTo(7, 9); c.lineTo(0, 5); c.lineTo(-7, 9); c.closePath(); c.fill(); c.stroke(); c.restore(); }
-  return { X, Y, s0 };
+  const boat=(i,ctx=c)=>{
+  if (i != null && fin(G.x[i])) { const x = X(i), y = Y(i), hd = ((D.ch.HDG ? D.ch.HDG[i] + D.magVar : D.ch.COG ? D.ch.COG[i] : 0) || 0) * SL.D2R; ctx.save(); ctx.translate(x, y); ctx.rotate(hd-rot); ctx.fillStyle = css('--accent'); ctx.strokeStyle = css('--surface'); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, -13); ctx.lineTo(7, 9); ctx.lineTo(0, 5); ctx.lineTo(-7, 9); ctx.closePath(); ctx.fill(); ctx.stroke(); ctx.restore(); }
+  };
+  boat(o.cur);return {X,Y,s0,boat,tileStatus};
 }
 function blkCal(c, off) {
   const D = A.D, ct = SL.calTable(D), keys = ['TWS', 'TWA', 'Heel', 'BSP', 'SOG', 'BSP-SOG', 'BSP/SOG%', 'HDG', 'COG', 'HDG-COG', 'CUR_DIR', 'CUR_RATE'];

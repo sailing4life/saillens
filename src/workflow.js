@@ -297,7 +297,7 @@ const WF = (() => {
       session.deskMap={...session.deskMap,z:1,x:0,y:0};session.reviewPage=Math.floor(list.indexOf(x)/40);
       session.viewport=[Math.max(A.D.i0,x.obj.i-90),Math.min(A.D.i1,x.obj.i1+120)];
     }
-    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range});
+    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range,selectPhase:p=>{const x=list.find(x=>x.obj===p);if(x){focusPhase(x);show('review');}}});
     toolbar.append(btn('Manoeuvres →',()=>show('pairreview')));
     if (session.staleReviews) side.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
     const range = session.selections.analysis;
@@ -317,7 +317,7 @@ const WF = (() => {
     const approved = all.filter(x => SL.allowed(session.reviews[x.key], 'calibration')).length;
     side.append(card('Fasetabel', bar(h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
       btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
-      table(['Tijd', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return [tstr(x.range.anchor || x.range.start), x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
+      table(['Fase · tijd', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return ['F'+(A.D.phases.indexOf(x.obj)+1)+' · '+tstr(x.range.anchor || x.range.start), x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
       !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
       bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, `${Math.min(page * 40 + 1, visible.length)}–${Math.min((page + 1) * 40, visible.length)} van ${visible.length}`), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));

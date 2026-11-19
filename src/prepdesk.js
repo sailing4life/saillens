@@ -2,7 +2,7 @@
 const PrepDesk = (() => {
   const button=(label,on,attrs={})=>h('button',{type:'button',onclick:on,...attrs},label);
   let observer,frame,activeDialog,cleanup;
-  function leave(){cleanup?.();cleanup=null;observer?.disconnect();cancelAnimationFrame(frame);activeDialog?.remove();activeDialog=null;}
+  function leave(){TrackMap.release();cleanup?.();cleanup=null;observer?.disconnect();cancelAnimationFrame(frame);activeDialog?.remove();activeDialog=null;}
   function dialog(title,body){
     activeDialog?.remove();
     const d=h('dialog',{class:'desk-dialog','aria-label':title},bar(h('h3',{},title),button('Sluiten',()=>d.remove())),body);
@@ -70,14 +70,52 @@ const PrepDesk = (() => {
     orient.setAttribute('aria-label','Kaartoriëntatie');
     function fit(){view.z=1;view.x=view.y=0;draw();WF.touch();}
     function zoom(mult){view.z=clip(view.z*mult,.5,80);draw();WF.touch();}
-    const mapBar=bar(orient,button('−',()=>zoom(1/1.4),{'aria-label':'Kaart uitzoomen'}),button('+',()=>zoom(1.4),{'aria-label':'Kaart inzoomen'}),button('Pas track in',fit));
+    const mapCursor=h('canvas',{class:'desk-overlay','aria-hidden':'true'}),stripCursor=h('canvas',{class:'desk-overlay','aria-hidden':'true'});
+    mapBox.append(mapCursor);stripBox.append(stripCursor);
+    const phaseStyles={pending:['Te beoordelen','--s1'],approved:['Goedgekeurd','--s3'],excluded:['Uitgesloten','--s2']};
+    const phases=D.phases.map((p,index)=>{
+      const review=s.reviews[SL.reviewKey(SL.objectRange(D,p,'phase'))];
+      const state=review?.invalid?'excluded':review?.calibration?'approved':review?.reason||review?.performance===false?'excluded':'pending';
+      return {i:p.i,i1:p.i1,index:index+1,obj:p,state,color:css(phaseStyles[state][1])};
+    }).filter(p=>p.i<hi&&p.i1>lo);
+    function phaseAt(i){
+      let l=0,r=phases.length;
+      while(l<r){const m=(l+r)>>1;if(phases[m].i<=i)l=m+1;else r=m;}
+      const phase=phases[l-1];return phase&&i<phase.i1?phase:null;
+    }
+    const showPhases=h('input',{id:'map-phases',type:'checkbox',checked:s.mapPhases!==false,disabled:!phases.length,onchange:e=>{s.mapPhases=e.target.checked;draw();WF.touch();}});
+    const mapOnline=/^https?:$/.test(location.protocol);
+    const showTiles=h('input',{id:'map-tiles',type:'checkbox',checked:mapOnline&&!!s.mapTiles,disabled:!mapOnline||!g,onchange:e=>{s.mapTiles=e.target.checked;draw();WF.touch();}});
+    const credits=h('div',{class:'desk-credits'},h('span',{}),h('a',{href:'https://www.openstreetmap.org/copyright',target:'_blank',rel:'noopener'},'© OpenStreetMap contributors'));
+    const legend=h('div',{class:'desk-phase-legend'},Object.values(phaseStyles).map(([name,color])=>h('span',{},h('i',{style:'background:'+css(color)}),name)));
+    mapBox.append(legend,credits);
+    const mapBar=bar(orient,button('−',()=>zoom(1/1.4),{'aria-label':'Kaart uitzoomen'}),button('+',()=>zoom(1.4),{'aria-label':'Kaart inzoomen'}),button('Pas track in',fit),
+      h('label',{},showPhases,' Fases'),h('label',{title:mapOnline?'Laadt kaarttegels voor het zichtbare gebied bij OpenStreetMap.':'Open de online versie voor de achtergrondkaart.'},showTiles,' Achtergrondkaart'));
     mapBar.classList.add('desk-maptools');mapBox.append(mapBar);
-    const nudge=step=>{A.cur=clip(A.cur+step,lo,hi-1);draw();WF.touch();};
+    let timer=null;
+    const slider=h('input',{type:'range',id:'desk-scrubber',min:lo,max:hi-1,step:1,value:clip(A.cur,lo,hi-1),'aria-label':'Tijdcursor'});
+    const speed=sel('desk-play-speed',['1','5','20','60'],String(s.playSpeed||20),v=>{s.playSpeed=Number(v);stop();WF.touch();});
+    speed.setAttribute('aria-label','Afspeelsnelheid');for(const option of speed.options)option.textContent=option.value+'×';
+    const play=button('Afspelen',toggle,{'aria-pressed':'false'});
+    function stop(){if(timer!==null){clearInterval(timer);timer=null;play.textContent='Afspelen';play.setAttribute('aria-pressed','false');WF.touch();}}
+    function toggle(){
+      if(timer!==null){stop();return;}
+      if(A.cur<lo||A.cur>=hi-1)A.cur=lo;
+      const from=A.cur,t=performance.now();play.textContent='Pauze';play.setAttribute('aria-pressed','true');draw();
+      timer=setInterval(()=>{
+        if(!desk.isConnected||document.hidden||document.querySelector('dialog[open]')){stop();return;}
+        const next=Math.min(hi-1,from+Math.floor((performance.now()-t)*Number(speed.value)/1000));
+        if(next!==A.cur){A.cur=next;draw();}if(next===hi-1)stop();
+      },50);
+    }
+    slider.oninput=()=>{stop();A.cur=Number(slider.value);schedule();};slider.onchange=()=>{A.cur=Number(slider.value);draw();WF.touch();};
+    const replay=h('div',{class:'desk-replay'},play,speed,slider);
+    const nudge=step=>{stop();A.cur=clip(A.cur+step,lo,hi-1);draw();WF.touch();};
     const timeControls=bar(button('−1 s',()=>nudge(-1)),button('+1 s',()=>nudge(1)),field('Kanaal',sel('desk-channel',varList(),key,v=>{s.plotVariable=v;show(A.tab);})),rangeLabel,
       button('Tijdvak',()=>dialog('Tijdvak instellen',WF.selectionBar())),
       button('Zoom op selectie',()=>{if(!s.selections.analysis)return banner('Sleep eerst een tijdvak in de tijdgrafiek.');s.viewport=WF.rangeIndices();view.x=view.y=0;view.z=1;show(A.tab);}),
       button('Hele log',()=>{s.viewport=pair?[D.i0,D.i1]:null;s.selections.analysis=null;view.x=view.y=0;view.z=1;show(A.tab);}));
-    const desk=h('div',{class:'prep-desk'+(pair?' desk-pair':'')},h('section',{class:'desk-spatial'},status,mapBox),side,h('section',{class:'desk-time'},timeControls,stripBox));
+    const desk=h('div',{class:'prep-desk'+(pair?' desk-pair':'')},h('section',{class:'desk-spatial'},status,mapBox),side,h('section',{class:'desk-time'},timeControls,stripBox,replay));
     const mobileToggle=button('',()=>{s.deskList=!s.deskList;mobile();schedule();},{class:'desk-mobile-toggle'});
     function mobile(){desk.classList.toggle('desk-list-open',!!s.deskList);mobileToggle.textContent=s.deskList?'Kaart tonen':title+' tonen';}
     mobile();container.append(mobileToggle,desk);
@@ -108,19 +146,32 @@ const PrepDesk = (() => {
         if(runs.length)lanes.push({label,color,runs});
       }
     }
+    const phaseReadout=h('span',{class:'desk-phase-readout'});status.append(phaseReadout);
+    let baseKey=null;
+    function invalidate(){baseKey=null;schedule();}
+    function overlay(cv,w,h,dp){
+      const width=Math.round(w*dp),height=Math.round(h*dp);
+      if(cv.width!==width||cv.height!==height){cv.width=width;cv.height=height;}
+      const c=cv.getContext('2d');c.setTransform(dp,0,0,dp,0,0);c.clearRect(0,0,w,h);return c;
+    }
     function ranges(){
       const ranges=[];
-      for(const [r,k] of [[pair?.before,'--s1'],[pair?.after,'--s3'],[options.phase,'--s3'],[s.selections.analysis,'--accent']])if(r)ranges.push([idx(r.start),idx(r.end),css(k)]);
+      for(const [r,k] of [[pair?.before,'--s1'],[pair?.after,'--s3'],[showPhases.checked&&options.phase,'--s4'],[s.selections.analysis,'--accent']])if(r)ranges.push([idx(r.start),idx(r.end),css(k)]);
       return ranges;
     }
     const left=70,right=18;
     function draw(){
       if(!desk.isConnected)return;
       const marks=ranges();
-      geo=drawMap(map,{v:key,view,bearing:view.bearing,bounds,range:[lo,hi],cur:A.cur,h:Math.max(95,mapBox.clientHeight||320),highlights:marks});
-      const W=chartWidth=stripBox.clientWidth||700,H=stripBox.clientHeight||(pair?170:98),dp=window.devicePixelRatio||1,c=strip.getContext('2d');
-      strip.width=W*dp;strip.height=H*dp;c.setTransform(dp,0,0,dp,0,0);c.fillStyle=css('--surface');c.fillRect(0,0,W,H);
+      const W=chartWidth=stripBox.clientWidth||700,H=stripBox.clientHeight||(pair?170:98),dp=window.devicePixelRatio||1;
+      const mw=mapBox.clientWidth||700,mh=Math.max(95,mapBox.clientHeight||320),tiles=showTiles.checked&&!!g&&fin(g.bx[0])&&!!mapBox.getClientRects().length,visiblePhases=showPhases.checked&&phases.length;
       const X=i=>left+(i-lo)/dt*(W-left-right);
+      const signature=JSON.stringify([W,H,mw,mh,dp,tiles,visiblePhases,view.x,view.y,view.z,view.bearing,marks]);
+      if(baseKey!==signature){
+      baseKey=signature;
+      geo=drawMap(map,{v:key,view,bearing:view.bearing,bounds,range:[lo,hi],w:mw,h:mh,highlights:marks,phases:visiblePhases?phases:[],tiles:tiles?invalidate:null});
+      credits.hidden=!tiles;credits.firstChild.textContent=geo?.tileStatus||'';legend.hidden=!visiblePhases;
+      const c=strip.getContext('2d');strip.width=W*dp;strip.height=H*dp;c.setTransform(dp,0,0,dp,0,0);c.fillStyle=css('--surface');c.fillRect(0,0,W,H);
       c.font='11px system-ui';c.textBaseline='middle';
       for(const [a,b,color] of marks){c.fillStyle=alpha(color,.19);c.fillRect(Math.max(left,X(a)),3,Math.max(0,Math.min(W-right,X(b))-Math.max(left,X(a))),H-25);}
       const laneHeight=Math.min(13,(H-32)/Math.max(3,lanes.length+2)),row=(H-26-lanes.length*laneHeight)/Math.max(1,series.length);
@@ -140,17 +191,24 @@ const PrepDesk = (() => {
       if(pair)for(const r of [pair.before,pair.after])for(const t of [r.start,r.end]){c.fillStyle=css('--ink2');c.fillRect(X(idx(t)),3,1,H-26);}
       const ticks=Math.max(2,Math.floor((W-left-right)/125));
       for(let j=0;j<=ticks;j++){const i=lo+dt*j/ticks;c.fillStyle=css('--ink2');c.textAlign=j===ticks?'right':j===0?'left':'center';c.fillText(tstr(iT(Math.round(i))),X(i),H-10);}c.textAlign='left';
-      c.fillStyle=css('--ink');if(A.cur>=lo&&A.cur<hi)c.fillRect(X(A.cur),0,2,H-22);
+      }
+      const mc=overlay(mapCursor,mw,mh,dp);geo?.boat(A.cur,mc);
+      const cursor=overlay(stripCursor,W,H,dp);cursor.fillStyle=css('--ink');
+      if(A.cur>=lo&&A.cur<hi)cursor.fillRect(X(A.cur),0,2,H-22);
+      slider.value=clip(A.cur,lo,hi-1);slider.setAttribute('aria-valuetext',tstr(iT(A.cur)));
+      const p=phaseAt(A.cur);phaseReadout.textContent=p&&showPhases.checked?'Fase '+p.index+' · '+phaseStyles[p.state][0]:'';
       clock.textContent=tstr(iT(A.cur));telemetry.textContent=['BSP','TWS','AWA','TWA','TWD','Heel'].filter(k=>D.ch[k]).map(k=>k+' '+f1(D.ch[k][A.cur],1)+(['BSP','TWS'].includes(k)?' kn':'°')).join('   ·   ');
       rangeLabel.textContent=s.selections.analysis?tstr(s.selections.analysis.start)+' – '+tstr(s.selections.analysis.end):'Klik voor cursor · sleep voor tijdvak';
     }
     function schedule(){cancelAnimationFrame(frame);frame=requestAnimationFrame(draw);}
     function timeAt(e){return clip(Math.round(lo+(e.offsetX-left)*dt/(chartWidth-left-right)),lo,hi);}
-    map.onpointerdown=e=>{pan={x:e.offsetX,y:e.offsetY,vx:view.x,vy:view.y};map.setPointerCapture?.(e.pointerId);};
+    map.onpointerdown=e=>{stop();pan={x:e.offsetX,y:e.offsetY,vx:view.x,vy:view.y};map.setPointerCapture?.(e.pointerId);};
     map.onpointermove=e=>{if(!pan)return;const dx=e.offsetX-pan.x,dy=e.offsetY-pan.y;if(Math.abs(dx)+Math.abs(dy)>4||pan.moved){pan.moved=true;view.x=pan.vx-dx/view.z;view.y=pan.vy-dy/view.z;schedule();}};
-    map.onpointerup=e=>{if(pan&&!pan.moved&&geo){let dist=25**2,best=A.cur;for(let i=lo;i<hi;i++){const d=(geo.X(i)-e.offsetX)**2+(geo.Y(i)-e.offsetY)**2;if(d<dist){dist=d;best=i;}}A.cur=best;}pan=null;draw();WF.touch();};
+    map.onpointerup=e=>{if(pan&&!pan.moved&&geo){let dist=25**2,best=A.cur;for(let i=lo;i<hi;i++){const d=(geo.X(i)-e.offsetX)**2+(geo.Y(i)-e.offsetY)**2;if(d<dist){dist=d;best=i;}}A.cur=best;
+      const phase=phaseAt(best);if(dist<25**2&&phase&&showPhases.checked&&options.selectPhase){pan=null;options.selectPhase(phase.obj);return;}
+    }pan=null;draw();WF.touch();};
     map.onpointercancel=()=>pan=null;
-    strip.onpointerdown=e=>{const i=timeAt(e);drag={i,x:e.offsetX};strip.setPointerCapture?.(e.pointerId);
+    strip.onpointerdown=e=>{stop();const i=timeAt(e);drag={i,x:e.offsetX};strip.setPointerCapture?.(e.pointerId);
       if(pair)for(const side of ['before','after'])for(const edge of ['start','end'])if(Math.abs(i-idx(pair[side][edge]))*(chartWidth-left-right)/dt<7)Object.assign(drag,{side,edge});};
     strip.onpointermove=e=>{if(!drag)return;A.cur=Math.min(D.i1-1,timeAt(e));if(!drag.side&&Math.abs(e.offsetX-drag.x)>3)s.selections.analysis={start:iT(Math.min(A.cur,drag.i)),end:iT(Math.max(A.cur,drag.i))};schedule();};
     strip.onpointerup=e=>{if(!drag)return;const {i,x,side,edge}=drag,end=timeAt(e);drag=null;A.cur=Math.min(D.i1-1,end);
@@ -160,10 +218,11 @@ const PrepDesk = (() => {
     strip.onpointercancel=()=>drag=null;
     const keyboard=e=>{
       if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||document.querySelector('dialog[open]')||e.target.closest?.('input,select,textarea,[contenteditable]'))return;
+      if(e.code==='Space'&&!e.target.closest?.('button,a,summary')){e.preventDefault();toggle();return;}
       if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();nudge((e.shiftKey?10:1)*(e.key==='ArrowLeft'?-1:1));}
       if(e.key.toLowerCase()==='e'&&options.addEvent){e.preventDefault();options.addEvent();}
     };
-    document.addEventListener('keydown',keyboard);cleanup=()=>document.removeEventListener('keydown',keyboard);
+    document.addEventListener('keydown',keyboard);cleanup=()=>{stop();document.removeEventListener('keydown',keyboard);};
     if(options.addEvent){map.ondblclick=strip.ondblclick=options.addEvent;}
     draw();if(window.ResizeObserver){observer=new ResizeObserver(schedule);observer.observe(mapBox);observer.observe(stripBox);}
     return {side,toolbar,draw};
