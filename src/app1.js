@@ -15,6 +15,8 @@ const kpi = (lab, val, unit, sub, cls) => h('div', { class: 'kpi ' + (cls || '')
 function dl(name, text) { const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: name }); document.body.append(a); a.click(); a.remove(); }
 function show(tab) {
   if (typeof WF !== 'undefined') tab = WF.resolve(tab);
+  if(typeof PrepDesk!=='undefined') PrepDesk.leave();
+  document.body.classList.toggle('desk-mode',!!A.D && ['events','review','pairreview'].includes(tab));
   A.tab = tab; A.playing = false; _css = null;
   if ((A.bannerAge = (A.bannerAge || 0) + 1) > 2 && !(A.D && A.D.warn.length && $('#banner').textContent === A.D.warn.join(' '))) banner('');
   document.querySelectorAll('button.nav').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab));

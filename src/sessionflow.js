@@ -6,7 +6,7 @@
   function phaseDefaults(cfg) { return { ...Object.fromEntries(phaseKeys.map(k => [k, cfg[k] ?? (k === 'sdHdg' ? 10 : SL.DEF[k])])), scope:'all', race:'', sail:'', mode:'', tack:'', range:null }; }
   const eventKey = s => JSON.stringify({sources:s.sources.map(x=>x.hash), raw:s.raw && [s.raw.t0,s.raw.n], events:(s.events?.events||[]).filter(e=>e.type!=='MiscEvent').map(({type,tl,attr})=>[type,tl,attr]), turns:s.turnEdits?.length?s.turnEdits:undefined, clocks:[s.cfg.logOff,s.cfg.evOff,s.cfg.evShiftSec,s.cfg.tStart,s.cfg.tEnd,s.cfg.maxHold,s.cfg.useEvents], channels:s.profile.channels});
   const preparationKey = s => JSON.stringify({source:eventKey(s), annotations:(s.events?.events||[]).map(e=>[e.type,e.tl,e.comments]),cfg:s.cfg, profile:s.profile, polar:s.polar, chart:s.chart, calib:s.calib, baseline:s.baseline, changed:s.calibrationChanged, reviews:s.reviews, phases:s.phaseBuild, pairs:s.manoeuvrePairs});
-  function sampleMatches(D,i,f={}) { const t=D.raw.t0+i*1000; return i>=D.i0&&i<D.i1 && (!f.range || (t>=f.range.start&&t<f.range.end)) && (!f.race || String(D.L.race[i])===String(f.race)) && (!f.sail || D.L.sailNames[D.L.sail[i]]===f.sail) && (!f.mode || SL.MODES[D.mode[i]]===f.mode) && (!f.tack || (D.tack[i]>0?'Stbd':'Port')===f.tack) && (f.scope!=='racing'||D.L.race[i]>0) && (f.scope!=='training'||D.L.testing[i]>0) && !D.L.motor?.[i]; }
+  function sampleMatches(D,i,f={}) { const t=D.raw.t0+i*1000; return i>=D.i0&&i<D.i1 && (!f.range || (t>=f.range.start&&t<f.range.end)) && (!f.race || String(D.L.race[i])===String(f.race)) && (!f.sail || D.L.sailNames[D.L.sail[i]]===f.sail||D.L.sailSlots?.[D.L.sailState?.[i]]?.includes(f.sail)) && (!f.mode || SL.MODES[D.mode[i]]===f.mode) && (!f.tack || (D.tack[i]>0?'Stbd':'Port')===f.tack) && (f.scope!=='racing'||D.L.race[i]>0) && (f.scope!=='training'||D.L.testing[i]>0) && !D.L.motor?.[i]; }
   const angle = (D,k) => SL.ANG.test(k) || ['TWA','AWA'].includes(k) || D.formulaAngles?.includes(k);
   function windowPhase(D,r) {
     if (!r || !finite(r.start)||!finite(r.end)||r.end<=r.start) return null;
@@ -35,10 +35,10 @@
       if(Array.from(D.invalid.subarray(w.i,w.i1)).some(Boolean))errors.push(label+': bevat ongeldig verklaarde data.');
       if(w.v.BSP<(cfg.minBsp||2))errors.push(label+': te weinig bootsnelheid.');
       for(const [k,limit]of [['BSP',cfg.sdBsp],['TWA',cfg.sdTwa],['TWS',cfg.sdTws],['HDG',cfg.sdHdg??10]])if(finite(w.spread[k])&&w.spread[k]>limit)errors.push(label+': '+k+' is niet stabiel genoeg.');
-      for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sail[i]!==D.L.sail[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
+      for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sailState?.[i]!==D.L.sailState?.[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
       if(D.mans.some(m=>m.i>=w.i&&m.i<w.i1))errors.push(label+': bevat nog een manoeuvre.');
     }
-    if(before&&after){if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails)errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
+    if(before&&after){if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
     return {before,after,errors,valid:!errors.length};
   }
   function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}

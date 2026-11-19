@@ -100,7 +100,7 @@ const WF = (() => {
     const b = library.boats.find(x => x.id === boatId); if (!b) throw new Error('Kies eerst een boot.');
     const s = SL.newSession(b, demo ? 'Voorbeeldtraining' : 'Training ' + new Date().toLocaleDateString('nl-NL'));
     if (demo) { const d = SL.demo(); Object.assign(s, { raw: d.raw, events: d.events, polar: { rows: d.polar.rows, src: 'file' }, demo: true }); s.cfg.evOff = 2; s.cfg.dispOff = 2; s.files.log = 'Synthetische voorbeelddata'; }
-    loading = true; adopt(s, process(s)); loading = false; touch(); await persist(); show('setup');
+    loading = true; adopt(s, process(s)); loading = false; touch(); await persist(); show(demo?'events':'setup');
   }
   function resolve(tab) {
     if(tab==='chart') { selectedKey=null; if(A.D) session.viewport=[Math.max(A.D.i0,A.cur-90),Math.min(A.D.i1,A.cur+120)]; tab=session?.stage==='analysis'?'daycharts':'events'; }
@@ -154,9 +154,18 @@ const WF = (() => {
         const source = { ...item, size: new TextEncoder().encode(item.text).length };
         if (item.kind === 'log') { const r = SL.parseLog(item.text); logParts.push(r); source.start = r.t0; source.end = r.t0 + r.n * 1000; source.channels = Object.keys(r.ch); }
         else if (item.kind === 'ev') { const ev = SL.parseEvents(item.text); ev.sails = SL.parseSailList(item.text); ev.xml = item.text;
-          if (staged.events && (staged.events.evOff !== ev.evOff || staged.events.logOff !== ev.logOff)) throw new Error('Eventbestanden hebben verschillende klokinstellingen. Importeer ze als aparte sessies.');
-          if (staged.events) { const all = [...staged.events.events, ...ev.events]; ev.events = [...new Map(all.map(e => [JSON.stringify(e), e])).values()].sort((a, b) => a.tl - b.tl); }
-          staged.events = ev; staged.cfg.evOff = ev.evOff; staged.cfg.logOff = ev.logOff;
+          if (staged.sources.some(x=>x.kind==='ev') && staged.events && (staged.events.evOff !== ev.evOff || staged.events.logOff !== ev.logOff)) throw new Error('Eventbestanden hebben verschillende klokinstellingen. Importeer ze als aparte sessies.');
+          if (staged.events) {
+            // Manually placed events may precede the first import with a declared UTC offset.
+            const old=staged.events;
+            const prior=staged.raw?SL.logOffset(staged.raw,staged.cfg):(old.logOff||0);
+            const next=staged.raw?SL.logOffset(staged.raw,{...staged.cfg,logOff:ev.logOff}):ev.logOff;
+            const shift=(ev.evOff-(old.evOff||0)+prior-next)*36e5;
+            const existing=old.events.map(e=>({...e,tl:e.tl+shift})), key=e=>JSON.stringify([e.tl,e.type,e.attr,e.comments]), counts=new Map();
+            for(const e of existing)counts.set(key(e),(counts.get(key(e))||0)+1);
+            for(const e of ev.events){const k=key(e);if(counts.get(k))counts.set(k,counts.get(k)-1);else existing.push(e);}
+            ev.events=existing.sort((a,b)=>a.tl-b.tl);ev.sails=[...new Map([...staged.events.sails||[],...ev.sails].map(s=>[s.name,s])).values()]; }
+          staged.eventUndo=[];staged.events = ev; staged.cfg.evOff = ev.evOff; staged.cfg.logOff = ev.logOff;
         } else if (item.kind === 'polar') staged.polar = { rows: SL.parsePolar(item.text), src: 'file' };
         else if (item.kind === 'chart') staged.chart = SL.parseSailChart(item.text, item.name);
         else if (item.kind === 'calib') { staged.draft = validateCalib(JSON.parse(item.text)); }
@@ -166,8 +175,12 @@ const WF = (() => {
       if (staged.raw) { staged.cfg.logOff = SL.logOffset(staged.raw, staged.cfg); staged.cfg.dispOff = (staged.cfg.evOff || 0) - staged.cfg.logOff; }
       const D = process(staged);
       if (staged.polar) { const b = library.boats.find(x => x.id === staged.boatId); b.polar = SL.copy(staged.polar); }
-      if (staged.events?.sails?.length) library.boats.find(x => x.id === staged.boatId).sails = SL.copy(staged.events.sails);
-      adopt(staged, D); touch(); await persist(); show('setup');
+      if (staged.events?.sails?.length) {
+        const b=library.boats.find(x=>x.id===staged.boatId);
+        b.sails=[...new Map([...(b.sails||[]),...staged.events.sails].map(v=>[v.name,v])).values()];
+        staged.profile.sails=SL.copy(b.sails);
+      }
+      adopt(staged, D); touch(); await persist(); show(D && items.some(x=>x.kind==='log'||x.kind==='ev')?'events':'setup');
       banner(`${items.length - duplicates} bestand(en) toegevoegd${duplicates ? '; ' + duplicates + ' duplicaten overgeslagen' : ''}.`);
     } catch (e) { banner(e.message, true); }
   }
@@ -232,7 +245,7 @@ const WF = (() => {
         if (a) { const step = Math.max(1, Math.floor((hi - lo) / 1800)); const pts = []; for (let i = lo; i < hi; i += step) pts.push([i, a[i]]); p.line(pts, css('--s1')); }
         p.c.strokeStyle = css('--ink'); p.c.beginPath(); p.c.moveTo(p.X(A.cur), p.pt); p.c.lineTo(p.X(A.cur), p.H - p.pb); p.c.stroke();
       }
-      readout.textContent = tstr(iT(A.cur)) + ' · ' + key + ' ' + f1(D.ch[key]?.[A.cur], 2); cursor.value = A.cur; if(typeof STUDIO!=='undefined')STUDIO.cursorMoved();
+      readout.textContent = tstr(iT(A.cur)) + ' · ' + key + ' ' + f1(D.ch[key]?.[A.cur], 2); cursor.value = A.cur;
     }
     box.append(cursor, bar(readout, btn('Zoom op selectie', () => { session.viewport = rangeIndices(); show(A.tab); }), btn('Volledig beeld', () => { session.viewport = null; A.view = { z: 1, x: 0, y: 0 }; show(A.tab); }), btn('Kaart +', () => { A.view.z = Math.min(80, A.view.z * 1.4); draw(); touch(); }), btn('Kaart −', () => { A.view.z = Math.max(.5, A.view.z / 1.4); draw(); touch(); })), help('Klik voor de tijdcursor; sleep in de grafiek voor een selectie. Versleep de kaart om te pannen. De selectie is ook met de tijdvelden instelbaar.'));
     const at = e => Math.max(D.i0, Math.min(D.i1, Math.round(p.xr[0] + (e.offsetX - p.pl) / (p.W - p.pl - p.pr) * (p.xr[1] - p.xr[0]))));
@@ -278,31 +291,37 @@ const WF = (() => {
     const c = pane('review'); if (!A.D) return;
     reviewMode = 'Fases';
     const reviewVar = session.reviewVariable || 'VMG%', all = objects(), list = all.filter(x => x.kind === (reviewMode === 'Fases' ? 'phase' : 'manoeuvre'));
-    c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Eerst vertrouwen in de data.'), help('Kalibratiereferenties vragen stabiele omstandigheden. Een trage tack blijft waardevol voor je performanceanalyse.')), btn('Verder: manoeuvreparen', () => show('pairreview'), true)), selectionBar());
-    timePanel(c);
-    if (session.staleReviews) c.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
-    const detail = all.find(x => x.key === selectedKey);
+    const detail = !session.selections.analysis&&list.find(x => x.key === selectedKey);
+    function focusPhase(x){
+      selectedKey=x.key;A.cur=x.obj.i;session.selections.analysis=null;
+      session.deskMap={...session.deskMap,z:1,x:0,y:0};session.reviewPage=Math.floor(list.indexOf(x)/40);
+      session.viewport=[Math.max(A.D.i0,x.obj.i-90),Math.min(A.D.i1,x.obj.i1+120)];
+    }
+    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range});
+    toolbar.append(btn('Manoeuvres →',()=>show('pairreview')));
+    if (session.staleReviews) side.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
     const range = session.selections.analysis;
     if (detail || range) {
       const item = detail || { key: SL.reviewKey({ kind: 'interval', ...range }), range: { kind: 'interval', ...range }, label: 'Geselecteerd tijdvak' };
       const r = session.reviews[item.key] || {}, reason = h('input', { id: 'review-reason', value: r.reason || '', placeholder: 'Bijv. windshift, vuile sensor of slechte uitvoering' });
-      c.append(card(item.label, help(dstr(item.range.start) + ' – ' + tstr(item.range.end)), field('Reden / notitie', reason),
+      side.append(card(item.label, help([dstr(item.range.start)+' – '+tstr(item.range.end),detail?.obj.raceLeg,detail?.obj.sails].filter(Boolean).join(' · ')), field('Reden / notitie', reason),
         bar(btn(r.calibration ? 'Kalibratie: goedgekeurd ✓' : 'Goedkeuren voor kalibratie', () => setReview(item, { calibration: !r.calibration, reason: reason.value }), !!r.calibration),
+          detail&&list.indexOf(detail)<list.length-1?btn('Goedkeuren & volgende',()=>{focusPhase(list[list.indexOf(detail)+1]);setReview(item,{calibration:true,reason:reason.value});},true,{disabled:!!r.invalid}):null,
           btn('Buiten kalibratie houden', () => { if (!reason.value.trim()) return banner('Vul een reden in, zodat je deze keuze later kunt volgen.', true); setReview(item, { calibration: false, reason: reason.value }); }),
           btn(r.performance === false ? 'Weer in performance' : 'Buiten performance houden', () => { if (!reason.value.trim()) return banner('Vul een reden in.', true); setReview(item, { performance: r.performance === false, reason: reason.value }); }),
           btn(r.invalid ? 'Meting weer geldig' : 'Meting ongeldig', () => { if (!reason.value.trim()) return banner('Geef aan waarom de meting ongeldig is.', true); setReview(item, { invalid: !r.invalid, calibration: false, reason: reason.value }); })),
         help('“Meting ongeldig” sluit dit tijdvak uit voor alle berekeningen. Alleen een slechte manoeuvre? Houd die in performance en sluit hem uit voor kalibratie.')));
     }
-    const visible = range ? list.filter(x => x.range.start < range.end && x.range.end > range.start) : list;
+    const visible = list;
     const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(visible.length / 40) - 1)), shown = visible.slice(page * 40, (page + 1) * 40);
     const approved = all.filter(x => SL.allowed(session.reviews[x.key], 'calibration')).length;
-    c.append(card('Fases & manoeuvres', bar(['Fases', 'Manoeuvres'].map(k => btn(k, () => { if(k==='Manoeuvres'){show('pairreview');return;} reviewMode = k; session.reviewPage = 0; show('review'); }, reviewMode === k)), h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
+    side.append(card('Fasetabel', bar(h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
       btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
-      table(['Tijd', 'Type / boeg', 'BSP', 'TWS', reviewVar, 'Kalibratie', 'Performance', ''], shown.map(x => { const r = session.reviews[x.key]; return [tstr(x.range.anchor || x.range.start), x.label, f1(x.obj.v?.BSP ?? x.obj.bspIn, 2), f1(x.obj.v?.TWS ?? x.obj.tws), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', r?.invalid || r?.performance === false ? 'Uitgesloten' : 'Meenemen', btn('Bekijk', () => { selectedKey = x.key; A.cur = x.obj.i; session.selections.analysis = { start: Math.max(iT(A.D.i0), x.range.start), end: Math.min(iT(A.D.i1), x.range.end) }; session.viewport = [Math.max(A.D.i0, x.obj.i - 90), Math.min(A.D.i1, (x.obj.i1 || x.obj.i) + 120)]; show('review'); })]; })),
+      table(['Tijd', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return [tstr(x.range.anchor || x.range.start), x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
       !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
       bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, `${Math.min(page * 40 + 1, visible.length)}–${Math.min((page + 1) * 40, visible.length)} van ${visible.length}`), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));
-    if (exclusions.length) c.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
+    if (exclusions.length) side.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
 
   }
   function validateCalib(value) {

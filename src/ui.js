@@ -180,25 +180,38 @@ function mapGeom(D) { if (D._geo) return D._geo; const la = D.ch.Lat, lo = D.ch.
 function drawMap(cv, o) {
   const D = A.D, G = mapGeom(D), W = o.w || cv.parentElement.clientWidth || 700, H = o.h || 520, dp = window.devicePixelRatio || 1;
   cv.width = W * dp; cv.height = H * dp; cv.style.height = H + 'px'; const c = cv.getContext('2d'); c.setTransform(dp, 0, 0, dp, 0, 0); c.fillStyle = css('--water'); c.fillRect(0, 0, W, H);
-  if (!G) { c.fillStyle = css('--muted'); c.font = '13px ' + css('--font'); c.fillText('No Lat/Lon in this log.', 20, 30); return null; }
-  const v = o.view, s0 = Math.min((W - 60) / ((G.bx[1] - G.bx[0]) || 1e-6), (H - 60) / ((G.by[1] - G.by[0]) || 1e-6)), sc = s0 * (v ? v.z : 1), cx = (G.bx[0] + G.bx[1]) / 2 + (v ? v.x : 0) / s0, cy = (G.by[0] + G.by[1]) / 2 + (v ? v.y : 0) / s0;
-  const X = i => W / 2 + (G.x[i] - cx) * sc, Y = i => H / 2 + (G.y[i] - cy) * sc;
+  if (!G || !fin(G.bx[0])) { c.fillStyle = css('--muted'); c.font = '13px ' + css('--font'); c.fillText('Geen geldige GPS-posities in dit log.', 20, 30); return null; }
+  const v = o.view, rot=(o.bearing||0)*SL.D2R, co=Math.cos(rot), si=Math.sin(rot);
+  const bx=o.bounds?.bx||G.bx, by=o.bounds?.by||G.by, dx=bx[1]-bx[0], dy=by[1]-by[0];
+  const s0=Math.min((W-60)/Math.max(1e-6,Math.abs(dx*co)+Math.abs(dy*si)),(H-60)/Math.max(1e-6,Math.abs(dx*si)+Math.abs(dy*co))), sc=s0*(v?.z||1);
+  const cx=(bx[0]+bx[1])/2, cy=(by[0]+by[1])/2;
+  const X=i=>W/2+((G.x[i]-cx)*co+(G.y[i]-cy)*si)*sc-(v?.x||0)*(v?.z||1);
+  const Y=i=>H/2+((G.y[i]-cy)*co-(G.x[i]-cx)*si)*sc-(v?.y||0)*(v?.z||1);
   // graticule: 1 nm squares
   const nm = sc / 60, stepNm = nm > 200 ? 0.25 : nm > 60 ? 1 : nm > 12 ? 5 : 20; c.strokeStyle = css('--grid'); c.lineWidth = 1; c.beginPath(); for (let gx = (W / 2) % (nm * stepNm); gx < W; gx += nm * stepNm) { c.moveTo(gx, 0); c.lineTo(gx, H); } for (let gy = (H / 2) % (nm * stepNm); gy < H; gy += nm * stepNm) { c.moveTo(0, gy); c.lineTo(W, gy); } c.stroke();
-  c.fillStyle = css('--muted'); c.font = '10px ' + css('--font'); c.textAlign = 'left'; c.fillText('grid ' + stepNm + ' nm · north up', 8, H - 8);
-  const a = D.ch[o.v], vals = []; for (let i = D.i0; i < D.i1; i += 7) if (a && fin(a[i]) && D.ch.BSP[i] > 1) vals.push(a[i]); const S = a ? scale(o.v, vals) : null;
+  c.fillStyle = css('--muted'); c.font = '10px ' + css('--font'); c.textAlign = 'left'; c.fillText('grid ' + stepNm + ' nm · ' + (o.bearing==null?'North up':'Wind up '+Math.round(o.bearing)+'°'), 8, H - 8);
+  const [lo,hi]=o.range||[D.i0,D.i1];
+  const a = D.ch[o.v], vals = []; for (let i = lo; i < hi; i += 7) if (a && fin(a[i]) && D.ch.BSP[i] > 1) vals.push(a[i]); const S = a ? scale(o.v, vals) : null;
   const NB = 24, buckets = Array.from({ length: NB + 1 }, () => []), bk = val => !fin(val) ? NB : Math.max(0, Math.min(NB - 1, Math.floor((val - S.lo) / ((S.hi - S.lo) || 1) * NB)));
-  for (let i = D.i0 + 1; i < D.i1; i++) { if (!fin(G.x[i]) || !fin(G.x[i - 1])) continue; buckets[S ? bk(a[i]) : 0].push(i); }
+  for (let i = lo + 1; i < hi; i++) { if (!fin(G.x[i]) || !fin(G.x[i - 1])) continue; buckets[S ? bk(a[i]) : 0].push(i); }
   c.lineWidth = 3; c.lineCap = 'round';
   buckets.forEach((b, k) => { if (!b.length) return; c.strokeStyle = !S ? css('--s1') : k === NB ? css('--muted') : S.col(S.lo + (k + 0.5) / NB * (S.hi - S.lo)); c.beginPath(); for (const i of b) { c.moveTo(X(i - 1), Y(i - 1)); c.lineTo(X(i), Y(i)); } c.stroke(); });
   if (o.barbs && D.ch.TWD) { const st = Math.max(60, Math.round((D.i1 - D.i0) / 45)); c.strokeStyle = css('--ink2'); c.fillStyle = css('--ink2'); c.lineWidth = 1; c.font = '10px ' + css('--font'); c.textAlign = 'center'; c.textBaseline = 'middle'; for (let i = D.i0 + st; i < D.i1; i += st) { if (!fin(G.x[i]) || !fin(D.ch.TWD[i]) || !(D.ch.BSP[i] > 1)) continue; const t = (D.ch.TWD[i] + D.magVar) * SL.D2R, x = X(i), y = Y(i), ux = Math.sin(t), uy = -Math.cos(t); c.beginPath(); c.moveTo(x, y); c.lineTo(x + ux * 20, y + uy * 20); c.moveTo(x + ux * 20, y + uy * 20); c.lineTo(x + ux * 20 + uy * 6 - ux * 3, y + uy * 20 - ux * 6 - uy * 3); c.stroke(); c.fillText(f1(D.ch.TWS[i], 0), x + ux * 30, y + uy * 30); } }
   c.font = '600 10px ' + css('--font'); c.textAlign = 'left'; c.textBaseline = 'middle';
-  for (const m of D.mans) { c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
-  let ly = -99, lx = -99; for (const e of D.L.list) { if (!e.label || e.i < D.i0 || e.i >= D.i1 || !fin(G.x[e.i])) continue; const x = X(e.i), y = Y(e.i), race = e.type !== 'SailsUp'; c.fillStyle = race ? css('--ink') : css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.rect(x - 4, y - 4, 8, 8); c.fill(); c.stroke(); if (Math.abs(y - ly) < 12 && Math.abs(x - lx) < 80) continue; ly = y; lx = x; const t = e.label; c.lineWidth = 3; c.strokeStyle = css('--surface'); c.strokeText(t, x + 8, y); c.fillStyle = css('--ink'); c.fillText(t, x + 8, y); }
+  for (const m of D.mans) { if(m.i<lo||m.i>=hi)continue; c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
+  let ly = -99, lx = -99; for (const e of D.L.list) { if (!e.label || e.i < lo || e.i >= hi || !fin(G.x[e.i])) continue; const x = X(e.i), y = Y(e.i), race = e.type !== 'SailsUp'; c.fillStyle = race ? css('--ink') : css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.rect(x - 4, y - 4, 8, 8); c.fill(); c.stroke(); if (Math.abs(y - ly) < 12 && Math.abs(x - lx) < 80) continue; ly = y; lx = x; const t = e.label; c.lineWidth = 3; c.strokeStyle = css('--surface'); c.strokeText(t, x + 8, y); c.fillStyle = css('--ink'); c.fillText(t, x + 8, y); }
   // wind arrow (mean TWD, arrow points downwind)
-  if (D.sum.TWD) { const t = (D.sum.TWD.avg + D.magVar) * SL.D2R, ax = W - 46, ay = 48, dx = -Math.sin(t), dy = Math.cos(t); c.strokeStyle = c.fillStyle = css('--ink2'); c.lineWidth = 2.5; c.beginPath(); c.moveTo(ax - dx * 24, ay - dy * 24); c.lineTo(ax + dx * 20, ay + dy * 20); c.stroke(); c.beginPath(); c.moveTo(ax + dx * 28, ay + dy * 28); c.lineTo(ax + dx * 14 - dy * 7, ay + dy * 14 + dx * 7); c.lineTo(ax + dx * 14 + dy * 7, ay + dy * 14 - dx * 7); c.fill(); c.font = '600 11px ' + css('--font'); c.textAlign = 'center'; c.fillText('TWD ' + D.sum.TWD.avg.toFixed(0) + '°', ax, ay + 42); }
+  if (D.sum.TWD) { const t = (D.sum.TWD.avg + D.magVar) * SL.D2R - rot, ax = W - 46, ay = 48, dx = -Math.sin(t), dy = Math.cos(t); c.strokeStyle = c.fillStyle = css('--ink2'); c.lineWidth = 2.5; c.beginPath(); c.moveTo(ax - dx * 24, ay - dy * 24); c.lineTo(ax + dx * 20, ay + dy * 20); c.stroke(); c.beginPath(); c.moveTo(ax + dx * 28, ay + dy * 28); c.lineTo(ax + dx * 14 - dy * 7, ay + dy * 14 + dx * 7); c.lineTo(ax + dx * 14 + dy * 7, ay + dy * 14 - dx * 7); c.fill(); c.font = '600 11px ' + css('--font'); c.textAlign = 'center'; c.fillText('TWD ' + D.sum.TWD.avg.toFixed(0) + '°', ax, ay + 42); }
   if (S) { const lw = 150, lx0 = 12, ly0 = 26; c.fillStyle = alpha(css('--surface'), 0.85); c.fillRect(4, 4, lw + 16, 50); for (let k = 0; k < lw; k++) { c.fillStyle = S.col(S.lo + k / lw * (S.hi - S.lo)); c.fillRect(lx0 + k, ly0, 1.5, 9); } c.fillStyle = css('--ink'); c.font = '600 11px ' + css('--font'); c.textAlign = 'left'; c.textBaseline = 'top'; c.fillText(o.v, lx0, 9); c.font = '10px ' + css('--font'); c.fillStyle = css('--ink2'); c.fillText(f1(S.lo), lx0, ly0 + 12); c.textAlign = 'right'; c.fillText(f1(S.hi), lx0 + lw, ly0 + 12); }
-  if (o.cur != null && fin(G.x[o.cur])) { const x = X(o.cur), y = Y(o.cur), hd = ((D.ch.HDG ? D.ch.HDG[o.cur] + D.magVar : D.ch.COG ? D.ch.COG[o.cur] : 0) || 0) * SL.D2R; c.save(); c.translate(x, y); c.rotate(hd); c.fillStyle = css('--accent'); c.strokeStyle = css('--surface'); c.lineWidth = 2; c.beginPath(); c.moveTo(0, -13); c.lineTo(7, 9); c.lineTo(0, 5); c.lineTo(-7, 9); c.closePath(); c.fill(); c.stroke(); c.restore(); }
+  for(const [lo,hi,color] of o.highlights||[]) {
+    c.beginPath(); c.lineWidth=5; c.strokeStyle=color; let active=false;
+    for(let i=Math.max(D.i0,lo);i<Math.min(D.i1,hi);i++){
+      if(!fin(X(i))||!fin(Y(i))){active=false;continue;}
+      if(active)c.lineTo(X(i),Y(i));else c.moveTo(X(i),Y(i));active=true;
+    }
+    c.stroke();
+  }
+  if (o.cur != null && fin(G.x[o.cur])) { const x = X(o.cur), y = Y(o.cur), hd = ((D.ch.HDG ? D.ch.HDG[o.cur] + D.magVar : D.ch.COG ? D.ch.COG[o.cur] : 0) || 0) * SL.D2R; c.save(); c.translate(x, y); c.rotate(hd-rot); c.fillStyle = css('--accent'); c.strokeStyle = css('--surface'); c.lineWidth = 2; c.beginPath(); c.moveTo(0, -13); c.lineTo(7, 9); c.lineTo(0, 5); c.lineTo(-7, 9); c.closePath(); c.fill(); c.stroke(); c.restore(); }
   return { X, Y, s0 };
 }
 function blkCal(c, off) {

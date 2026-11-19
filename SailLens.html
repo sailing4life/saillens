@@ -171,6 +171,23 @@ button,input,select{min-height:36px}button:focus-visible,input:focus-visible,sel
 @media print{.wf-flow{display:none!important}.report{max-width:100%}.wf-note{break-inside:avoid}}
 
 .prep-steps{grid-template-columns:repeat(5,minmax(0,1fr))}.report-add{align-self:flex-start;border-color:var(--accent);color:var(--accent);margin-top:10px}.report-image{display:block;width:100%;height:auto;object-fit:contain}.event-strip{width:100%;display:block;touch-action:none}.studio-report{width:100%}.studio-report-item{border-top:1px solid var(--line);padding-top:18px}.studio-report-item .note{min-height:72px}.studio-report-item .bar{flex-wrap:wrap}.wf-flow>.bar{justify-content:flex-start;align-items:center}.wf-flow>.bar .eyebrow{margin-right:auto}.prep-steps button{padding:10px 8px;font-size:13px}.prep-steps button span{flex:none}@media(max-width:650px){.prep-steps{display:flex;overflow-x:auto}.prep-steps button{min-width:120px;flex:1}.wf-timeviews{grid-template-columns:minmax(0,1fr)}.studio-report{padding:16px}.wf-selection input{max-width:100%}}@media print{.report-add,.studio-report-item .noprint{display:none!important}.report-image{max-height:80vh;object-fit:contain}.studio-report{padding:0;border:0}}
+/* The track, working list and time chart share the available laptop viewport. */
+.prep-desk{display:grid;grid-template-columns:minmax(0,1fr) clamp(340px,34%,540px);grid-template-rows:minmax(0,1fr) clamp(132px,19vh,190px);gap:8px;min-width:0;min-height:0;flex:1}
+.prep-desk.desk-pair{grid-template-rows:minmax(0,1fr) clamp(175px,26vh,250px)}
+.desk-spatial,.desk-side,.desk-time{background:var(--surface);border:1px solid var(--line);border-radius:8px;min-height:0;min-width:0}
+.desk-spatial,.desk-time{display:flex;flex-direction:column;overflow:hidden}
+.desk-read,.desk-time>.bar{flex:none;padding:5px 10px;gap:10px;border-bottom:1px solid var(--line);margin:0}
+.desk-read{display:flex;align-items:center;flex-wrap:wrap;font-variant-numeric:tabular-nums}.desk-read strong{color:var(--accent)}.desk-read span{font-size:12px;color:var(--ink2)}
+.desk-time{grid-column:1/-1}.desk-time .field{flex-direction:row;align-items:center;gap:6px}.desk-time .bar>span{margin-right:auto;font-size:12px}
+.desk-mapbox,.desk-stripbox{position:relative;min-height:0;flex:1}.desk-map,.desk-strip{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}.desk-map{cursor:grab}.desk-map:active{cursor:grabbing}.desk-strip{cursor:crosshair}
+.desk-maptools{position:absolute;left:8px;bottom:22px;background:var(--surface);padding:3px;border:1px solid var(--line);border-radius:6px;margin:0;gap:3px}
+.desk-side{overflow:auto;padding:0 10px 10px;scrollbar-gutter:stable}.desk-side>.bar:first-child{position:sticky;top:0;z-index:1;background:var(--surface);padding:8px 0;margin:0;border-bottom:1px solid var(--line)}.desk-side h3{margin:0 auto 0 0}.desk-side>.bar,.desk-side>details{margin:8px 0}.desk-side .card{padding:8px 0;box-shadow:none;border:0;border-bottom:1px solid var(--line);border-radius:0}.desk-side .tbl th,.desk-side .tbl td{padding:5px 3px;font-size:12px;white-space:normal}.desk-side .tbl tr[aria-selected=true]{background:var(--hl)}.desk-side .tbl tr[aria-selected]{cursor:pointer}.desk-side .field input{max-width:100%}
+.prep-desk button,.prep-desk select{padding:4px 7px;min-height:28px;font-size:12px}.prep-desk .bar{gap:5px}.prep-desk summary{cursor:pointer;color:var(--accent);padding:4px 0}
+.desk-dialog{width:min(640px,95vw);max-height:85dvh;overflow:auto;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;box-shadow:0 14px 48px #0003}.desk-dialog::backdrop{background:#10253675}.desk-dialog>.bar{justify-content:space-between}.desk-dialog h3{margin:0}.desk-dialog .card{padding:0;border:0;box-shadow:none}.desk-form{display:grid;gap:9px}.event-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}.event-error{color:var(--bad);margin:0}.event-error:empty{display:none}
+@media(min-width:851px){body.desk-mode{display:flex;flex-direction:column;height:100dvh;overflow:hidden;min-height:0}.desk-mode aside{position:static;height:auto;flex:none;display:flex;flex-direction:row;align-items:center;padding:3px 12px}.desk-mode aside .brand{padding:3px 12px 3px 0}.desk-mode aside #nav,.desk-mode aside .foot{display:flex;flex-direction:row;align-items:center;gap:6px}.desk-mode aside .foot{margin:0 0 0 auto;padding:0}.desk-mode aside .foot span{display:none}.desk-mode aside button.nav{width:auto;padding:3px 8px}.desk-mode .work,.desk-mode main,.desk-mode #panes,.desk-mode .tabpane{flex:1;min-height:0;display:flex;flex-direction:column}.desk-mode .topbar{padding:3px 12px}.desk-mode .topbar h2{font-size:16px}.desk-mode main{padding:5px 10px 8px;max-width:none}.desk-mode .wf-flow{display:flex;flex-direction:row;align-items:center;gap:8px;margin:0 0 5px}.desk-mode .wf-flow>.bar{order:2;margin:0 0 0 auto}.desk-mode .wf-flow .eyebrow{display:none}.desk-mode .wf-steps{flex:1;max-width:840px}.desk-mode .wf-steps button{padding:4px 6px}.desk-mode #banner{margin:0 0 4px;padding:3px 7px;font-size:12px}}
+@media(max-width:850px){.prep-desk,.prep-desk.desk-pair{grid-template-columns:minmax(0,1fr);grid-template-rows:42vh auto auto}.desk-time{grid-row:2;height:170px}.desk-pair .desk-time{height:245px}.desk-side{max-height:55vh}.desk-time .bar>span{display:none}.desk-time .bar{flex-wrap:wrap}}
+.desk-mobile-toggle{display:none}
+@media(max-width:850px){.desk-mode{height:100dvh;min-height:0;display:flex;flex-direction:column;overflow:hidden}.desk-mode aside{height:auto;max-height:58px;position:static;padding:3px 8px;overflow:auto}.desk-mode .work,.desk-mode main,.desk-mode #panes,.desk-mode .tabpane{display:flex;flex-direction:column;min-height:0;flex:1}.desk-mode main{padding:3px 5px 5px}.desk-mode .tabpane{gap:3px}.desk-mode .wf-flow{margin:0}.desk-mode .wf-flow>.bar{display:none}.desk-mode .wf-steps{margin:0;display:flex;overflow-x:auto;gap:3px}.desk-mode .wf-steps button{min-width:max-content;min-height:30px;flex-direction:row;padding:3px 6px}.desk-mode .wf-steps button span{display:none}.desk-mode .topbar{padding:3px 8px}.desk-mode .topbar h2{font-size:15px}.desk-mobile-toggle{display:inline-block;align-self:flex-start;min-height:28px;padding:2px 8px}.prep-desk,.prep-desk.desk-pair{grid-template-rows:minmax(0,1fr) minmax(112px,24%);gap:4px}.desk-pair .desk-time,.desk-time{height:auto}.desk-side{display:none;max-height:none}.desk-list-open .desk-spatial{display:none}.desk-list-open .desk-side{display:block}.desk-time>.bar{padding:2px 4px}.desk-read,.desk-time .field{font-size:11px}.desk-mode #banner{margin:0;padding:2px 4px}.desk-time .bar .field>span{display:none}}
 </style>
 </head>
 <body>
@@ -310,8 +327,8 @@ function parseLog(text, nativeWindow) {
 }
 
 /* ---------- event file ---------- */
-const xdec = s => s.replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCharCode(parseInt(h, 16))).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
-function attrs(s) { const o = {}; s.replace(/([\w:]+)\s*=\s*"([^"]*)"/g, (m, k, v) => { o[k] = xdec(v); }); return o; }
+const xdec = s => s.replace(/&#(\d+);/g, (m, d) => String.fromCharCode(+d)).replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCharCode(parseInt(h, 16))).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+function attrs(s) { const o = Object.create(null); s.replace(/([\w.:-]+)\s*=\s*"([^"]*)"/g, (m, k, v) => { o[k] = xdec(v); }); return o; }
 function parseEvents(text) {
   const out = { meta: {}, evOff: 0, logOff: 0, events: [] };
   if (/<\w+/.test(text.slice(0, 2000))) {
@@ -320,14 +337,14 @@ function parseEvents(text) {
     let m = text.match(/<event_file\s+hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; else { m = text.match(/<events\s+utc_offset_hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; }
     m = text.match(/<log_file\s+hours="(-?[\d.]+)"/); if (m) out.logOff = +m[1];
     const blk = (text.match(/<events[\s\S]*?<\/events>/) || [text])[0];
-    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t + (utcTime(ts) ? out.evOff * 36e5 : 0), type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '' }); });
+    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t + (utcTime(ts) ? out.evOff * 36e5 : 0), type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '', xmlAttrs: Object.fromEntries(Object.entries(o).filter(([k])=>!['date','time','datetime','type','attribute','attr','comments'].includes(k))) }); });
   } else {
     for (const p of csvRows(text)) { if (p.length < 2) continue; const t = parseTime(p[0]); if (fin(t)) out.events.push({ tl: t, type: p[1].trim(), attr: (p[2] || '').trim(), comments: (p[3] || '').trim() }); }
   }
   out.events.sort((a, b) => a.tl - b.tl);
   return out;
 }
-function sailLabel(attr) { const p = attr.split(';').map(s => s.trim()); const hs = [p[3], p[1], p[2]].filter(Boolean); return hs.length ? hs.join('/') : (p[0] ? p[0] + ' only' : 'None'); }
+function sailLabel(attr) { const p = attr.split(';').map(s => s.trim()); const hs = [p[3], p[1], p[2]].filter(Boolean); return hs.length ? (/\(\d+\)$/.test(p[0]) ? p[0]+'/' : '') + hs.join('/') : (p[0] ? p[0] + ' only' : 'None'); }
 
 /* ---------- polar ---------- */
 function parsePolar(text) {
@@ -382,27 +399,31 @@ function validateConfig(cfg) {
 }
 
 function applyEvents(raw, ev, cfg) {
-  const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), motor: new Uint8Array(n), sailNames: [], list: [], manual: {}, dayStart: null, dayStop: null };
+  const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), motor: new Uint8Array(n), sailNames: [], list: [], manual: Object.create(null), dayStart: null, dayStop: null };
   if (!ev || !cfg.useEvents) return L;
   const toI = tl => Math.round((tl - cfg.evOff * 36e5 + logOffset(raw, cfg) * 36e5 + (cfg.evShiftSec || 0) * 1000 - raw.t0) / 1000);
   const E = ev.events.map(e => ({ ...e, i: toI(e.tl) })).sort((a,b)=>a.i-b.i);
   L.list = E;
   const fill = (arr, a, b, v) => { a = Math.max(0, a); b = Math.min(n, b); for (let i = a; i < b; i++) arr[i] = v; };
+  L.sailState = new Int32Array(n).fill(-1); L.sailConfigs = []; L.sailSlots = [];
   const sails = E.filter(e => e.type === 'SailsUp');
-  sails.forEach((e, k) => { const lab = sailLabel(e.attr); let id = L.sailNames.indexOf(lab); if (id < 0) id = L.sailNames.push(lab) - 1; e.label = lab; fill(L.sail, e.i, k + 1 < sails.length ? sails[k + 1].i : n, id); });
-  let race = 0, leg = 0, rs = -1;
+  sails.forEach((e, k) => { let state=L.sailConfigs.indexOf(e.attr);
+    if(state<0){state=L.sailConfigs.push(e.attr)-1;L.sailSlots.push(e.attr.split(';').map(x=>x.trim()).filter(Boolean));}
+    fill(L.sailState,e.i,sails[k+1]?.i??n,state);
+    const lab = sailLabel(e.attr); let id = L.sailNames.indexOf(lab); if (id < 0) id = L.sailNames.push(lab) - 1; e.label = lab; fill(L.sail, e.i, k + 1 < sails.length ? sails[k + 1].i : n, id); });
+  let race = 0, leg = 0, rs = null;
   for (const e of E) {
-    if (e.type === 'RaceStartGun') { if(rs>=0){fill(L.race,rs,e.i,race);fill(L.leg,rs,e.i,leg);} race = +e.attr || race + 1; leg = 1; rs = e.i; e.label = 'Start R' + race; }
-    else if (e.type === 'RaceMark' && rs >= 0) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); leg++; rs = e.i; e.label = 'M' + (e.attr || leg - 1); }
-    else if ((e.type === 'RaceFinish' || e.type === 'DayStop') && rs >= 0) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); rs = -1; e.label = e.type === 'RaceFinish' ? 'Finish R' + race : ''; }
+    if (e.type === 'RaceStartGun') { if(rs!==null){fill(L.race,rs,e.i,race);fill(L.leg,rs,e.i,leg);} race = +e.attr || race + 1; leg = 1; rs = e.i; e.label = 'Start R' + race; }
+    else if (e.type === 'RaceMark' && rs !== null) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); leg++; rs = e.i; e.label = 'M' + (e.attr || leg - 1); }
+    else if ((e.type === 'RaceFinish' || e.type === 'DayStop') && rs !== null) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); rs = null; e.label = e.type === 'RaceFinish' ? 'Finish R' + race : ''; }
     else if (e.type === 'DayStart') L.dayStart = e.i; if (e.type === 'DayStop') L.dayStop = e.i;
   }
-  if (rs >= 0) { fill(L.race, rs, n, race); fill(L.leg, rs, n, leg); }
-  let ts = -1; for (const e of E) { if (e.type === 'StartTesting') ts = e.i; else if (e.type === 'StopTesting' && ts >= 0) { fill(L.testing, ts, e.i, 1); ts = -1; } }
-  if (ts >= 0) fill(L.testing, ts, n, 1);
-  let motorStart=-1; for(const e of E){if(e.type==='MotorStart')motorStart=e.i;else if(e.type==='MotorStop'&&motorStart>=0){fill(L.motor,motorStart,e.i,1);motorStart=-1;}} if(motorStart>=0)fill(L.motor,motorStart,n,1);
+  if (rs !== null) { fill(L.race, rs, n, race); fill(L.leg, rs, n, leg); }
+  let ts = null; for (const e of E) { if (e.type === 'StartTesting') ts = e.i; else if (e.type === 'StopTesting' && ts !== null) { fill(L.testing, ts, e.i, 1); ts = null; } }
+  if (ts !== null) fill(L.testing, ts, n, 1);
+  let motorStart=null; for(const e of E){if(e.type==='MotorStart')motorStart=e.i;else if(e.type==='MotorStop'&&motorStart!==null){fill(L.motor,motorStart,e.i,1);motorStart=null;}} if(motorStart!==null)fill(L.motor,motorStart,n,1);
   const man = E.filter(e => e.type === 'ManualEntry');
-  man.forEach(e => e.attr.split(';').forEach(kv => { const [k, v] = kv.split('='); if (!k || !fin(+v)) return; const key = k.trim(); if (!L.manual[key]) L.manual[key] = new Float64Array(n).fill(NaN); fill(L.manual[key], e.i, n, +v); }));
+  man.forEach(e => e.attr.split(';').forEach(kv => { const [k, v] = kv.split('='); if (!k || !v?.trim() || !fin(+v)) return; const key = k.trim(); if (!L.manual[key]) L.manual[key] = new Float64Array(n).fill(NaN); fill(L.manual[key], e.i, n, +v); }));
   return L;
 }
 
@@ -549,9 +570,9 @@ function process(raw, opt) {
   const bad = new Uint8Array(n + 1);
   for (let i = i0; i < i1; i++) if (!(BSP[i] >= cfg.minBsp) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i] < 0 || (cfg.racingOnly && !L.race[i])) bad[i] = 1;
   for (const m of mans) for (let k = Math.max(i0, m.i - cfg.manBefore); k < Math.min(i1, m.i + cfg.manAfter); k++) bad[k] = 1;
-  for (let i = i0 + 1; i < i1; i++) if (L.sail[i] !== L.sail[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
+  for (let i = i0 + 1; i < i1; i++) if (L.sailState?.[i] !== L.sailState?.[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
   for (let i = i0 + 1; i < i1; i++) if (L.race[i] !== L.race[i - 1] || L.leg[i] !== L.leg[i - 1] || L.testing[i] !== L.testing[i - 1] || mode[i] !== mode[i - 1] || tack[i] !== tack[i - 1]) bad[i] = 1;
-  const cs = new Int32Array(n + 1); for (let i = 0; i < n; i++) cs[i + 1] = cs[i] + bad[i];
+  const cs = new Int32Array(n + 1);
   const formulaDiagnostics = opt.formulas?.length ? SL.evaluateFormulas(ch, opt.originalChannels || raw.ch, opt.formulas, n) : [];
   for (const q of formulaDiagnostics) if (q.missing.length) warn.push(q.name + ': ontbrekende kanalen ' + q.missing.join(', '));
   const formulaAngles = new Set((opt.formulas || []).filter(d => d.type === 'angle').map(d => d.name));
@@ -562,7 +583,9 @@ function process(raw, opt) {
   for (let i = i0; !opt.skipPhases && i + PL <= i1;) {
     if (cs[i + PL] - cs[i] > 0) { phaseDiagnostics.masked++; i += 3; continue; }
     const tw = TWA.subarray(i, i + PL);
-    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1] || (fin(cfg.sdHdg) && ch.HDG && sd(Array.from(ch.HDG.subarray(i,i+PL),x=>w180(x-cmean(ch.HDG.subarray(i,i+PL)))))>cfg.sdHdg)) { phaseDiagnostics.stability++; i += 5; continue; }
+    const headings=fin(cfg.sdHdg)&&ch.HDG?ch.HDG.subarray(i,i+PL):null;
+    const headingMean=headings?cmean(headings):NaN;
+    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1] || (headings && sd(Array.from(headings,x=>w180(x-headingMean)))>cfg.sdHdg)) { phaseDiagnostics.stability++; i += 5; continue; }
     const v = {}; for (const k of names) v[k] = (ANG.test(k) || formulaAngles.has(k) ? cmean : mean)(ch[k].subarray(i, i + PL));
     if ((fin(v['BSPpol%']) && (v['BSPpol%'] < cfg.polMin || v['BSPpol%'] > cfg.polMax)) || v.absTWA < 28) { phaseDiagnostics.target++; i += 5; continue; }
     if (fin(v.Cur_E) && fin(v.Cur_N)) { v.CUR_RATE = Math.hypot(v.Cur_E, v.Cur_N); v.CUR_DIR = w360(Math.atan2(v.Cur_E, v.Cur_N) * R2D); }
@@ -754,7 +777,7 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;
 
@@ -902,18 +925,30 @@ const p2 = n => String(n).padStart(2, '0');
 const tsParts = tl => { const d = new Date(tl); return [d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()), p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) + ':' + p2(d.getUTCSeconds())]; };
 function eventsXml(ev) {
   const off = ev.evOff || 0, m = ev.meta || {};
-  const evs = ev.events.slice().sort((a, b) => a.tl - b.tl).map(e => { const [d, t] = tsParts(e.tl); return `    <event date="${d}" time="${t}" type="${xesc(e.type)}" attribute="${xesc(e.attr)}" comments="${xesc(e.comments)}" labelalign="Top" />`; }).join('\r\n');
+  const evs = ev.events.slice().sort((a, b) => a.tl - b.tl).map(e => { const [d, t] = tsParts(e.tl); return `    <event date="${d}" time="${t}" type="${xesc(e.type)}" attribute="${xesc(e.attr)}" comments="${xesc(e.comments)}" ${Object.entries({labelalign:'Top',...e.xmlAttrs}).filter(([k])=>/^[A-Za-z_][\w.:-]*$/.test(k)&&!['date','time','datetime','type','attribute','attr','comments'].includes(k)).map(([k,v])=>k+'="'+xesc(v)+'"').join(' ')} />`; }).join('\r\n');
   const block = `<events utc_offset_hours="${off}">\r\n${evs}\r\n  </events>`;
-  const sails = `<saillist>\r\n${(ev.sails || []).map(s => `    <item name="${xesc(s.name)}" sailtype="${xesc(s.type)}" sailgroup="${s.type === 'Mainsail' ? 'M' : 'H'}" weight="0" />`).join('\r\n')}\r\n  </saillist>`;
+  const sailItem = s => {
+    const a={...s.xmlAttrs,name:s.name,sailtype:s.type,sailgroup:s.xmlAttrs?.sailgroup||(s.type==='Mainsail'?'M':'H'),weight:s.xmlAttrs?.weight??'0'};
+    return '    <item '+Object.entries(a).filter(([k])=>/^[A-Za-z_][\w.:-]*$/.test(k)).map(([k,v])=>k+'="'+xesc(v)+'"').join(' ')+' />';
+  };
+  const sails = '<saillist>\r\n'+(ev.sails||[]).map(sailItem).join('\r\n')+'\r\n  </saillist>';
   if (ev.xml && /<events[\s\S]*?<\/events>/.test(ev.xml)) { // keep everything RaceReplay wrote, replace only what was edited here
-    let x = ev.xml.replace(/<events[\s\S]*?<\/events>/, block); if (/<saillist[\s\S]*?<\/saillist>/.test(x)) x = x.replace(/<saillist[\s\S]*?<\/saillist>/, sails);
-    const setv = (tag, v) => { if (v != null) x = x.replace(new RegExp('<' + tag + '\\s+val="[^"]*"'), '<' + tag + ' val="' + xesc(v) + '"'); };
+    let x = ev.xml.replace(/<events\b[^>]*>[\s\S]*?<\/events>/, () => block);
+    const nativeNames=new Set(parseSailList(x).map(v=>v.name));
+    const added=(ev.sails||[]).filter(v=>!nativeNames.has(v.name));
+    if(added.length){
+      if(/<\/saillist>/.test(x))x=x.replace('</saillist>',()=>added.map(sailItem).join('\r\n')+'\r\n  </saillist>');
+      else if(/<saillist\s*\/>/.test(x))x=x.replace(/<saillist\s*\/>/,()=>sails);
+      else x=x.replace('<events',()=>sails+'\r\n  <events');
+    }
+    for(const [tag,value] of [['event_file',off],['log_file',ev.logOff||0]]) x=x.replace(new RegExp('(<'+tag+'\\b[^>]*?hours=")[^"]*(")'),(_,a,b)=>a+value+b);
+    const setv = (tag,v) => {if(v!=null)x=x.replace(new RegExp('<'+tag+'\\s+val="[^"]*"'),()=>'<'+tag+' val="'+xesc(v)+'"');};
     setv('boat', m.boat); setv('boatdaydescription', m.desc); setv('location', m.location); setv('daygoals', m.goals); setv('daycomments', m.comments); return x;
   }
   const date = m.date || (ev.events[0] ? tsParts(ev.events[0].tl)[0] : '');
   return `<?xml version="1.0" encoding="utf-8"?>\r\n<daysail>\r\n  <boat val="${xesc(m.boat)}" />\r\n  <confignum val="0" />\r\n  <date val="${date}" />\r\n  <boatdaydescription val="${xesc(m.desc)}" />\r\n  <location val="${xesc(m.location)}" />\r\n  <daytypestr val="${xesc(m.daytype)}" />\r\n  <utc_offset>\r\n    <event_file hours="${off}" />\r\n    <log_file hours="${ev.logOff || 0}" />\r\n  </utc_offset>\r\n  <dailycomments>\r\n    <boatname val="${xesc(m.boat)}" />\r\n    <date val="${date}" />\r\n    <daygoals val="${xesc(m.goals)}" />\r\n    <daycomments val="${xesc(m.comments)}" />\r\n  </dailycomments>\r\n  ${sails}\r\n  ${block}\r\n</daysail>\r\n`;
 }
-function parseSailList(xml) { const out = []; const blk = (xml.match(/<saillist[\s\S]*?<\/saillist>/) || [''])[0]; blk.replace(/<item\s+([^>]*?)\/?>/g, (m, a) => { const o = {}; a.replace(/(\w+)="([^"]*)"/g, (mm, k, v) => { o[k] = v; }); if (o.name) out.push({ name: o.name, type: o.sailtype || 'Jib' }); }); return out; }
+function parseSailList(xml) { const out = []; const blk = (xml.match(/<saillist[\s\S]*?<\/saillist>/) || [''])[0]; blk.replace(/<item\s+([^>]*?)\/?>/g, (m, a) => { const o=SL.attrs(a);if(o.name)out.push({name:o.name,type:o.sailtype||'Jib',xmlAttrs:o}); }); return out; }
 /* places where the boat goes from upwind to downwind or back: candidates for race marks */
 function suggestMarks(D) {
   const out = [], a = D.ch.absTWA, W = 25; let prev = 0, since = 0;
@@ -1372,7 +1407,7 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
   function phaseDefaults(cfg) { return { ...Object.fromEntries(phaseKeys.map(k => [k, cfg[k] ?? (k === 'sdHdg' ? 10 : SL.DEF[k])])), scope:'all', race:'', sail:'', mode:'', tack:'', range:null }; }
   const eventKey = s => JSON.stringify({sources:s.sources.map(x=>x.hash), raw:s.raw && [s.raw.t0,s.raw.n], events:(s.events?.events||[]).filter(e=>e.type!=='MiscEvent').map(({type,tl,attr})=>[type,tl,attr]), turns:s.turnEdits?.length?s.turnEdits:undefined, clocks:[s.cfg.logOff,s.cfg.evOff,s.cfg.evShiftSec,s.cfg.tStart,s.cfg.tEnd,s.cfg.maxHold,s.cfg.useEvents], channels:s.profile.channels});
   const preparationKey = s => JSON.stringify({source:eventKey(s), annotations:(s.events?.events||[]).map(e=>[e.type,e.tl,e.comments]),cfg:s.cfg, profile:s.profile, polar:s.polar, chart:s.chart, calib:s.calib, baseline:s.baseline, changed:s.calibrationChanged, reviews:s.reviews, phases:s.phaseBuild, pairs:s.manoeuvrePairs});
-  function sampleMatches(D,i,f={}) { const t=D.raw.t0+i*1000; return i>=D.i0&&i<D.i1 && (!f.range || (t>=f.range.start&&t<f.range.end)) && (!f.race || String(D.L.race[i])===String(f.race)) && (!f.sail || D.L.sailNames[D.L.sail[i]]===f.sail) && (!f.mode || SL.MODES[D.mode[i]]===f.mode) && (!f.tack || (D.tack[i]>0?'Stbd':'Port')===f.tack) && (f.scope!=='racing'||D.L.race[i]>0) && (f.scope!=='training'||D.L.testing[i]>0) && !D.L.motor?.[i]; }
+  function sampleMatches(D,i,f={}) { const t=D.raw.t0+i*1000; return i>=D.i0&&i<D.i1 && (!f.range || (t>=f.range.start&&t<f.range.end)) && (!f.race || String(D.L.race[i])===String(f.race)) && (!f.sail || D.L.sailNames[D.L.sail[i]]===f.sail||D.L.sailSlots?.[D.L.sailState?.[i]]?.includes(f.sail)) && (!f.mode || SL.MODES[D.mode[i]]===f.mode) && (!f.tack || (D.tack[i]>0?'Stbd':'Port')===f.tack) && (f.scope!=='racing'||D.L.race[i]>0) && (f.scope!=='training'||D.L.testing[i]>0) && !D.L.motor?.[i]; }
   const angle = (D,k) => SL.ANG.test(k) || ['TWA','AWA'].includes(k) || D.formulaAngles?.includes(k);
   function windowPhase(D,r) {
     if (!r || !finite(r.start)||!finite(r.end)||r.end<=r.start) return null;
@@ -1401,10 +1436,10 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
       if(Array.from(D.invalid.subarray(w.i,w.i1)).some(Boolean))errors.push(label+': bevat ongeldig verklaarde data.');
       if(w.v.BSP<(cfg.minBsp||2))errors.push(label+': te weinig bootsnelheid.');
       for(const [k,limit]of [['BSP',cfg.sdBsp],['TWA',cfg.sdTwa],['TWS',cfg.sdTws],['HDG',cfg.sdHdg??10]])if(finite(w.spread[k])&&w.spread[k]>limit)errors.push(label+': '+k+' is niet stabiel genoeg.');
-      for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sail[i]!==D.L.sail[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
+      for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sailState?.[i]!==D.L.sailState?.[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
       if(D.mans.some(m=>m.i>=w.i&&m.i<w.i1))errors.push(label+': bevat nog een manoeuvre.');
     }
-    if(before&&after){if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails)errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
+    if(before&&after){if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
     return {before,after,errors,valid:!errors.length};
   }
   function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
@@ -1597,25 +1632,38 @@ function mapGeom(D) { if (D._geo) return D._geo; const la = D.ch.Lat, lo = D.ch.
 function drawMap(cv, o) {
   const D = A.D, G = mapGeom(D), W = o.w || cv.parentElement.clientWidth || 700, H = o.h || 520, dp = window.devicePixelRatio || 1;
   cv.width = W * dp; cv.height = H * dp; cv.style.height = H + 'px'; const c = cv.getContext('2d'); c.setTransform(dp, 0, 0, dp, 0, 0); c.fillStyle = css('--water'); c.fillRect(0, 0, W, H);
-  if (!G) { c.fillStyle = css('--muted'); c.font = '13px ' + css('--font'); c.fillText('No Lat/Lon in this log.', 20, 30); return null; }
-  const v = o.view, s0 = Math.min((W - 60) / ((G.bx[1] - G.bx[0]) || 1e-6), (H - 60) / ((G.by[1] - G.by[0]) || 1e-6)), sc = s0 * (v ? v.z : 1), cx = (G.bx[0] + G.bx[1]) / 2 + (v ? v.x : 0) / s0, cy = (G.by[0] + G.by[1]) / 2 + (v ? v.y : 0) / s0;
-  const X = i => W / 2 + (G.x[i] - cx) * sc, Y = i => H / 2 + (G.y[i] - cy) * sc;
+  if (!G || !fin(G.bx[0])) { c.fillStyle = css('--muted'); c.font = '13px ' + css('--font'); c.fillText('Geen geldige GPS-posities in dit log.', 20, 30); return null; }
+  const v = o.view, rot=(o.bearing||0)*SL.D2R, co=Math.cos(rot), si=Math.sin(rot);
+  const bx=o.bounds?.bx||G.bx, by=o.bounds?.by||G.by, dx=bx[1]-bx[0], dy=by[1]-by[0];
+  const s0=Math.min((W-60)/Math.max(1e-6,Math.abs(dx*co)+Math.abs(dy*si)),(H-60)/Math.max(1e-6,Math.abs(dx*si)+Math.abs(dy*co))), sc=s0*(v?.z||1);
+  const cx=(bx[0]+bx[1])/2, cy=(by[0]+by[1])/2;
+  const X=i=>W/2+((G.x[i]-cx)*co+(G.y[i]-cy)*si)*sc-(v?.x||0)*(v?.z||1);
+  const Y=i=>H/2+((G.y[i]-cy)*co-(G.x[i]-cx)*si)*sc-(v?.y||0)*(v?.z||1);
   // graticule: 1 nm squares
   const nm = sc / 60, stepNm = nm > 200 ? 0.25 : nm > 60 ? 1 : nm > 12 ? 5 : 20; c.strokeStyle = css('--grid'); c.lineWidth = 1; c.beginPath(); for (let gx = (W / 2) % (nm * stepNm); gx < W; gx += nm * stepNm) { c.moveTo(gx, 0); c.lineTo(gx, H); } for (let gy = (H / 2) % (nm * stepNm); gy < H; gy += nm * stepNm) { c.moveTo(0, gy); c.lineTo(W, gy); } c.stroke();
-  c.fillStyle = css('--muted'); c.font = '10px ' + css('--font'); c.textAlign = 'left'; c.fillText('grid ' + stepNm + ' nm · north up', 8, H - 8);
-  const a = D.ch[o.v], vals = []; for (let i = D.i0; i < D.i1; i += 7) if (a && fin(a[i]) && D.ch.BSP[i] > 1) vals.push(a[i]); const S = a ? scale(o.v, vals) : null;
+  c.fillStyle = css('--muted'); c.font = '10px ' + css('--font'); c.textAlign = 'left'; c.fillText('grid ' + stepNm + ' nm · ' + (o.bearing==null?'North up':'Wind up '+Math.round(o.bearing)+'°'), 8, H - 8);
+  const [lo,hi]=o.range||[D.i0,D.i1];
+  const a = D.ch[o.v], vals = []; for (let i = lo; i < hi; i += 7) if (a && fin(a[i]) && D.ch.BSP[i] > 1) vals.push(a[i]); const S = a ? scale(o.v, vals) : null;
   const NB = 24, buckets = Array.from({ length: NB + 1 }, () => []), bk = val => !fin(val) ? NB : Math.max(0, Math.min(NB - 1, Math.floor((val - S.lo) / ((S.hi - S.lo) || 1) * NB)));
-  for (let i = D.i0 + 1; i < D.i1; i++) { if (!fin(G.x[i]) || !fin(G.x[i - 1])) continue; buckets[S ? bk(a[i]) : 0].push(i); }
+  for (let i = lo + 1; i < hi; i++) { if (!fin(G.x[i]) || !fin(G.x[i - 1])) continue; buckets[S ? bk(a[i]) : 0].push(i); }
   c.lineWidth = 3; c.lineCap = 'round';
   buckets.forEach((b, k) => { if (!b.length) return; c.strokeStyle = !S ? css('--s1') : k === NB ? css('--muted') : S.col(S.lo + (k + 0.5) / NB * (S.hi - S.lo)); c.beginPath(); for (const i of b) { c.moveTo(X(i - 1), Y(i - 1)); c.lineTo(X(i), Y(i)); } c.stroke(); });
   if (o.barbs && D.ch.TWD) { const st = Math.max(60, Math.round((D.i1 - D.i0) / 45)); c.strokeStyle = css('--ink2'); c.fillStyle = css('--ink2'); c.lineWidth = 1; c.font = '10px ' + css('--font'); c.textAlign = 'center'; c.textBaseline = 'middle'; for (let i = D.i0 + st; i < D.i1; i += st) { if (!fin(G.x[i]) || !fin(D.ch.TWD[i]) || !(D.ch.BSP[i] > 1)) continue; const t = (D.ch.TWD[i] + D.magVar) * SL.D2R, x = X(i), y = Y(i), ux = Math.sin(t), uy = -Math.cos(t); c.beginPath(); c.moveTo(x, y); c.lineTo(x + ux * 20, y + uy * 20); c.moveTo(x + ux * 20, y + uy * 20); c.lineTo(x + ux * 20 + uy * 6 - ux * 3, y + uy * 20 - ux * 6 - uy * 3); c.stroke(); c.fillText(f1(D.ch.TWS[i], 0), x + ux * 30, y + uy * 30); } }
   c.font = '600 10px ' + css('--font'); c.textAlign = 'left'; c.textBaseline = 'middle';
-  for (const m of D.mans) { c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
-  let ly = -99, lx = -99; for (const e of D.L.list) { if (!e.label || e.i < D.i0 || e.i >= D.i1 || !fin(G.x[e.i])) continue; const x = X(e.i), y = Y(e.i), race = e.type !== 'SailsUp'; c.fillStyle = race ? css('--ink') : css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.rect(x - 4, y - 4, 8, 8); c.fill(); c.stroke(); if (Math.abs(y - ly) < 12 && Math.abs(x - lx) < 80) continue; ly = y; lx = x; const t = e.label; c.lineWidth = 3; c.strokeStyle = css('--surface'); c.strokeText(t, x + 8, y); c.fillStyle = css('--ink'); c.fillText(t, x + 8, y); }
+  for (const m of D.mans) { if(m.i<lo||m.i>=hi)continue; c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
+  let ly = -99, lx = -99; for (const e of D.L.list) { if (!e.label || e.i < lo || e.i >= hi || !fin(G.x[e.i])) continue; const x = X(e.i), y = Y(e.i), race = e.type !== 'SailsUp'; c.fillStyle = race ? css('--ink') : css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.rect(x - 4, y - 4, 8, 8); c.fill(); c.stroke(); if (Math.abs(y - ly) < 12 && Math.abs(x - lx) < 80) continue; ly = y; lx = x; const t = e.label; c.lineWidth = 3; c.strokeStyle = css('--surface'); c.strokeText(t, x + 8, y); c.fillStyle = css('--ink'); c.fillText(t, x + 8, y); }
   // wind arrow (mean TWD, arrow points downwind)
-  if (D.sum.TWD) { const t = (D.sum.TWD.avg + D.magVar) * SL.D2R, ax = W - 46, ay = 48, dx = -Math.sin(t), dy = Math.cos(t); c.strokeStyle = c.fillStyle = css('--ink2'); c.lineWidth = 2.5; c.beginPath(); c.moveTo(ax - dx * 24, ay - dy * 24); c.lineTo(ax + dx * 20, ay + dy * 20); c.stroke(); c.beginPath(); c.moveTo(ax + dx * 28, ay + dy * 28); c.lineTo(ax + dx * 14 - dy * 7, ay + dy * 14 + dx * 7); c.lineTo(ax + dx * 14 + dy * 7, ay + dy * 14 - dx * 7); c.fill(); c.font = '600 11px ' + css('--font'); c.textAlign = 'center'; c.fillText('TWD ' + D.sum.TWD.avg.toFixed(0) + '°', ax, ay + 42); }
+  if (D.sum.TWD) { const t = (D.sum.TWD.avg + D.magVar) * SL.D2R - rot, ax = W - 46, ay = 48, dx = -Math.sin(t), dy = Math.cos(t); c.strokeStyle = c.fillStyle = css('--ink2'); c.lineWidth = 2.5; c.beginPath(); c.moveTo(ax - dx * 24, ay - dy * 24); c.lineTo(ax + dx * 20, ay + dy * 20); c.stroke(); c.beginPath(); c.moveTo(ax + dx * 28, ay + dy * 28); c.lineTo(ax + dx * 14 - dy * 7, ay + dy * 14 + dx * 7); c.lineTo(ax + dx * 14 + dy * 7, ay + dy * 14 - dx * 7); c.fill(); c.font = '600 11px ' + css('--font'); c.textAlign = 'center'; c.fillText('TWD ' + D.sum.TWD.avg.toFixed(0) + '°', ax, ay + 42); }
   if (S) { const lw = 150, lx0 = 12, ly0 = 26; c.fillStyle = alpha(css('--surface'), 0.85); c.fillRect(4, 4, lw + 16, 50); for (let k = 0; k < lw; k++) { c.fillStyle = S.col(S.lo + k / lw * (S.hi - S.lo)); c.fillRect(lx0 + k, ly0, 1.5, 9); } c.fillStyle = css('--ink'); c.font = '600 11px ' + css('--font'); c.textAlign = 'left'; c.textBaseline = 'top'; c.fillText(o.v, lx0, 9); c.font = '10px ' + css('--font'); c.fillStyle = css('--ink2'); c.fillText(f1(S.lo), lx0, ly0 + 12); c.textAlign = 'right'; c.fillText(f1(S.hi), lx0 + lw, ly0 + 12); }
-  if (o.cur != null && fin(G.x[o.cur])) { const x = X(o.cur), y = Y(o.cur), hd = ((D.ch.HDG ? D.ch.HDG[o.cur] + D.magVar : D.ch.COG ? D.ch.COG[o.cur] : 0) || 0) * SL.D2R; c.save(); c.translate(x, y); c.rotate(hd); c.fillStyle = css('--accent'); c.strokeStyle = css('--surface'); c.lineWidth = 2; c.beginPath(); c.moveTo(0, -13); c.lineTo(7, 9); c.lineTo(0, 5); c.lineTo(-7, 9); c.closePath(); c.fill(); c.stroke(); c.restore(); }
+  for(const [lo,hi,color] of o.highlights||[]) {
+    c.beginPath(); c.lineWidth=5; c.strokeStyle=color; let active=false;
+    for(let i=Math.max(D.i0,lo);i<Math.min(D.i1,hi);i++){
+      if(!fin(X(i))||!fin(Y(i))){active=false;continue;}
+      if(active)c.lineTo(X(i),Y(i));else c.moveTo(X(i),Y(i));active=true;
+    }
+    c.stroke();
+  }
+  if (o.cur != null && fin(G.x[o.cur])) { const x = X(o.cur), y = Y(o.cur), hd = ((D.ch.HDG ? D.ch.HDG[o.cur] + D.magVar : D.ch.COG ? D.ch.COG[o.cur] : 0) || 0) * SL.D2R; c.save(); c.translate(x, y); c.rotate(hd-rot); c.fillStyle = css('--accent'); c.strokeStyle = css('--surface'); c.lineWidth = 2; c.beginPath(); c.moveTo(0, -13); c.lineTo(7, 9); c.lineTo(0, 5); c.lineTo(-7, 9); c.closePath(); c.fill(); c.stroke(); c.restore(); }
   return { X, Y, s0 };
 }
 function blkCal(c, off) {
@@ -1650,6 +1698,8 @@ const kpi = (lab, val, unit, sub, cls) => h('div', { class: 'kpi ' + (cls || '')
 function dl(name, text) { const a = h('a', { href: URL.createObjectURL(new Blob([text], { type: 'text/plain' })), download: name }); document.body.append(a); a.click(); a.remove(); }
 function show(tab) {
   if (typeof WF !== 'undefined') tab = WF.resolve(tab);
+  if(typeof PrepDesk!=='undefined') PrepDesk.leave();
+  document.body.classList.toggle('desk-mode',!!A.D && ['events','review','pairreview'].includes(tab));
   A.tab = tab; A.playing = false; _css = null;
   if ((A.bannerAge = (A.bannerAge || 0) + 1) > 2 && !(A.D && A.D.warn.length && $('#banner').textContent === A.D.warn.join(' '))) banner('');
   document.querySelectorAll('button.nav').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab));
@@ -2480,7 +2530,7 @@ const WF = (() => {
     const b = library.boats.find(x => x.id === boatId); if (!b) throw new Error('Kies eerst een boot.');
     const s = SL.newSession(b, demo ? 'Voorbeeldtraining' : 'Training ' + new Date().toLocaleDateString('nl-NL'));
     if (demo) { const d = SL.demo(); Object.assign(s, { raw: d.raw, events: d.events, polar: { rows: d.polar.rows, src: 'file' }, demo: true }); s.cfg.evOff = 2; s.cfg.dispOff = 2; s.files.log = 'Synthetische voorbeelddata'; }
-    loading = true; adopt(s, process(s)); loading = false; touch(); await persist(); show('setup');
+    loading = true; adopt(s, process(s)); loading = false; touch(); await persist(); show(demo?'events':'setup');
   }
   function resolve(tab) {
     if(tab==='chart') { selectedKey=null; if(A.D) session.viewport=[Math.max(A.D.i0,A.cur-90),Math.min(A.D.i1,A.cur+120)]; tab=session?.stage==='analysis'?'daycharts':'events'; }
@@ -2534,9 +2584,18 @@ const WF = (() => {
         const source = { ...item, size: new TextEncoder().encode(item.text).length };
         if (item.kind === 'log') { const r = SL.parseLog(item.text); logParts.push(r); source.start = r.t0; source.end = r.t0 + r.n * 1000; source.channels = Object.keys(r.ch); }
         else if (item.kind === 'ev') { const ev = SL.parseEvents(item.text); ev.sails = SL.parseSailList(item.text); ev.xml = item.text;
-          if (staged.events && (staged.events.evOff !== ev.evOff || staged.events.logOff !== ev.logOff)) throw new Error('Eventbestanden hebben verschillende klokinstellingen. Importeer ze als aparte sessies.');
-          if (staged.events) { const all = [...staged.events.events, ...ev.events]; ev.events = [...new Map(all.map(e => [JSON.stringify(e), e])).values()].sort((a, b) => a.tl - b.tl); }
-          staged.events = ev; staged.cfg.evOff = ev.evOff; staged.cfg.logOff = ev.logOff;
+          if (staged.sources.some(x=>x.kind==='ev') && staged.events && (staged.events.evOff !== ev.evOff || staged.events.logOff !== ev.logOff)) throw new Error('Eventbestanden hebben verschillende klokinstellingen. Importeer ze als aparte sessies.');
+          if (staged.events) {
+            // Manually placed events may precede the first import with a declared UTC offset.
+            const old=staged.events;
+            const prior=staged.raw?SL.logOffset(staged.raw,staged.cfg):(old.logOff||0);
+            const next=staged.raw?SL.logOffset(staged.raw,{...staged.cfg,logOff:ev.logOff}):ev.logOff;
+            const shift=(ev.evOff-(old.evOff||0)+prior-next)*36e5;
+            const existing=old.events.map(e=>({...e,tl:e.tl+shift})), key=e=>JSON.stringify([e.tl,e.type,e.attr,e.comments]), counts=new Map();
+            for(const e of existing)counts.set(key(e),(counts.get(key(e))||0)+1);
+            for(const e of ev.events){const k=key(e);if(counts.get(k))counts.set(k,counts.get(k)-1);else existing.push(e);}
+            ev.events=existing.sort((a,b)=>a.tl-b.tl);ev.sails=[...new Map([...staged.events.sails||[],...ev.sails].map(s=>[s.name,s])).values()]; }
+          staged.eventUndo=[];staged.events = ev; staged.cfg.evOff = ev.evOff; staged.cfg.logOff = ev.logOff;
         } else if (item.kind === 'polar') staged.polar = { rows: SL.parsePolar(item.text), src: 'file' };
         else if (item.kind === 'chart') staged.chart = SL.parseSailChart(item.text, item.name);
         else if (item.kind === 'calib') { staged.draft = validateCalib(JSON.parse(item.text)); }
@@ -2546,8 +2605,12 @@ const WF = (() => {
       if (staged.raw) { staged.cfg.logOff = SL.logOffset(staged.raw, staged.cfg); staged.cfg.dispOff = (staged.cfg.evOff || 0) - staged.cfg.logOff; }
       const D = process(staged);
       if (staged.polar) { const b = library.boats.find(x => x.id === staged.boatId); b.polar = SL.copy(staged.polar); }
-      if (staged.events?.sails?.length) library.boats.find(x => x.id === staged.boatId).sails = SL.copy(staged.events.sails);
-      adopt(staged, D); touch(); await persist(); show('setup');
+      if (staged.events?.sails?.length) {
+        const b=library.boats.find(x=>x.id===staged.boatId);
+        b.sails=[...new Map([...(b.sails||[]),...staged.events.sails].map(v=>[v.name,v])).values()];
+        staged.profile.sails=SL.copy(b.sails);
+      }
+      adopt(staged, D); touch(); await persist(); show(D && items.some(x=>x.kind==='log'||x.kind==='ev')?'events':'setup');
       banner(`${items.length - duplicates} bestand(en) toegevoegd${duplicates ? '; ' + duplicates + ' duplicaten overgeslagen' : ''}.`);
     } catch (e) { banner(e.message, true); }
   }
@@ -2612,7 +2675,7 @@ const WF = (() => {
         if (a) { const step = Math.max(1, Math.floor((hi - lo) / 1800)); const pts = []; for (let i = lo; i < hi; i += step) pts.push([i, a[i]]); p.line(pts, css('--s1')); }
         p.c.strokeStyle = css('--ink'); p.c.beginPath(); p.c.moveTo(p.X(A.cur), p.pt); p.c.lineTo(p.X(A.cur), p.H - p.pb); p.c.stroke();
       }
-      readout.textContent = tstr(iT(A.cur)) + ' · ' + key + ' ' + f1(D.ch[key]?.[A.cur], 2); cursor.value = A.cur; if(typeof STUDIO!=='undefined')STUDIO.cursorMoved();
+      readout.textContent = tstr(iT(A.cur)) + ' · ' + key + ' ' + f1(D.ch[key]?.[A.cur], 2); cursor.value = A.cur;
     }
     box.append(cursor, bar(readout, btn('Zoom op selectie', () => { session.viewport = rangeIndices(); show(A.tab); }), btn('Volledig beeld', () => { session.viewport = null; A.view = { z: 1, x: 0, y: 0 }; show(A.tab); }), btn('Kaart +', () => { A.view.z = Math.min(80, A.view.z * 1.4); draw(); touch(); }), btn('Kaart −', () => { A.view.z = Math.max(.5, A.view.z / 1.4); draw(); touch(); })), help('Klik voor de tijdcursor; sleep in de grafiek voor een selectie. Versleep de kaart om te pannen. De selectie is ook met de tijdvelden instelbaar.'));
     const at = e => Math.max(D.i0, Math.min(D.i1, Math.round(p.xr[0] + (e.offsetX - p.pl) / (p.W - p.pl - p.pr) * (p.xr[1] - p.xr[0]))));
@@ -2658,31 +2721,37 @@ const WF = (() => {
     const c = pane('review'); if (!A.D) return;
     reviewMode = 'Fases';
     const reviewVar = session.reviewVariable || 'VMG%', all = objects(), list = all.filter(x => x.kind === (reviewMode === 'Fases' ? 'phase' : 'manoeuvre'));
-    c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Eerst vertrouwen in de data.'), help('Kalibratiereferenties vragen stabiele omstandigheden. Een trage tack blijft waardevol voor je performanceanalyse.')), btn('Verder: manoeuvreparen', () => show('pairreview'), true)), selectionBar());
-    timePanel(c);
-    if (session.staleReviews) c.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
-    const detail = all.find(x => x.key === selectedKey);
+    const detail = !session.selections.analysis&&list.find(x => x.key === selectedKey);
+    function focusPhase(x){
+      selectedKey=x.key;A.cur=x.obj.i;session.selections.analysis=null;
+      session.deskMap={...session.deskMap,z:1,x:0,y:0};session.reviewPage=Math.floor(list.indexOf(x)/40);
+      session.viewport=[Math.max(A.D.i0,x.obj.i-90),Math.min(A.D.i1,x.obj.i1+120)];
+    }
+    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range});
+    toolbar.append(btn('Manoeuvres →',()=>show('pairreview')));
+    if (session.staleReviews) side.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
     const range = session.selections.analysis;
     if (detail || range) {
       const item = detail || { key: SL.reviewKey({ kind: 'interval', ...range }), range: { kind: 'interval', ...range }, label: 'Geselecteerd tijdvak' };
       const r = session.reviews[item.key] || {}, reason = h('input', { id: 'review-reason', value: r.reason || '', placeholder: 'Bijv. windshift, vuile sensor of slechte uitvoering' });
-      c.append(card(item.label, help(dstr(item.range.start) + ' – ' + tstr(item.range.end)), field('Reden / notitie', reason),
+      side.append(card(item.label, help([dstr(item.range.start)+' – '+tstr(item.range.end),detail?.obj.raceLeg,detail?.obj.sails].filter(Boolean).join(' · ')), field('Reden / notitie', reason),
         bar(btn(r.calibration ? 'Kalibratie: goedgekeurd ✓' : 'Goedkeuren voor kalibratie', () => setReview(item, { calibration: !r.calibration, reason: reason.value }), !!r.calibration),
+          detail&&list.indexOf(detail)<list.length-1?btn('Goedkeuren & volgende',()=>{focusPhase(list[list.indexOf(detail)+1]);setReview(item,{calibration:true,reason:reason.value});},true,{disabled:!!r.invalid}):null,
           btn('Buiten kalibratie houden', () => { if (!reason.value.trim()) return banner('Vul een reden in, zodat je deze keuze later kunt volgen.', true); setReview(item, { calibration: false, reason: reason.value }); }),
           btn(r.performance === false ? 'Weer in performance' : 'Buiten performance houden', () => { if (!reason.value.trim()) return banner('Vul een reden in.', true); setReview(item, { performance: r.performance === false, reason: reason.value }); }),
           btn(r.invalid ? 'Meting weer geldig' : 'Meting ongeldig', () => { if (!reason.value.trim()) return banner('Geef aan waarom de meting ongeldig is.', true); setReview(item, { invalid: !r.invalid, calibration: false, reason: reason.value }); })),
         help('“Meting ongeldig” sluit dit tijdvak uit voor alle berekeningen. Alleen een slechte manoeuvre? Houd die in performance en sluit hem uit voor kalibratie.')));
     }
-    const visible = range ? list.filter(x => x.range.start < range.end && x.range.end > range.start) : list;
+    const visible = list;
     const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(visible.length / 40) - 1)), shown = visible.slice(page * 40, (page + 1) * 40);
     const approved = all.filter(x => SL.allowed(session.reviews[x.key], 'calibration')).length;
-    c.append(card('Fases & manoeuvres', bar(['Fases', 'Manoeuvres'].map(k => btn(k, () => { if(k==='Manoeuvres'){show('pairreview');return;} reviewMode = k; session.reviewPage = 0; show('review'); }, reviewMode === k)), h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
+    side.append(card('Fasetabel', bar(h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
       btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
-      table(['Tijd', 'Type / boeg', 'BSP', 'TWS', reviewVar, 'Kalibratie', 'Performance', ''], shown.map(x => { const r = session.reviews[x.key]; return [tstr(x.range.anchor || x.range.start), x.label, f1(x.obj.v?.BSP ?? x.obj.bspIn, 2), f1(x.obj.v?.TWS ?? x.obj.tws), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', r?.invalid || r?.performance === false ? 'Uitgesloten' : 'Meenemen', btn('Bekijk', () => { selectedKey = x.key; A.cur = x.obj.i; session.selections.analysis = { start: Math.max(iT(A.D.i0), x.range.start), end: Math.min(iT(A.D.i1), x.range.end) }; session.viewport = [Math.max(A.D.i0, x.obj.i - 90), Math.min(A.D.i1, (x.obj.i1 || x.obj.i) + 120)]; show('review'); })]; })),
+      table(['Tijd', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return [tstr(x.range.anchor || x.range.start), x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
       !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
       bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, `${Math.min(page * 40 + 1, visible.length)}–${Math.min((page + 1) * 40, visible.length)} van ${visible.length}`), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));
-    if (exclusions.length) c.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
+    if (exclusions.length) side.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
 
   }
   function validateCalib(value) {
@@ -2824,7 +2893,7 @@ const STUDIO=(()=>{
  const S=()=>WF.session, safe=fn=>async(...a)=>{try{return await fn(...a);}catch(e){banner(e.message,true);}}, button=(text,fn,primary=false,attrs={})=>h('button',{type:'button',class:primary?'primary':'',onclick:fn,...attrs},text), help=t=>h('p',{class:'muted'},t);
  const local=t=>new Date(t+A.cfg.dispOff*36e5).toISOString().slice(0,19), fromLocal=t=>Date.parse(t+'Z')-A.cfg.dispOff*36e5;
  const latest=()=>S()?.analysisVersions?.at(-1), current=()=>!!latest()&&SL.preparationKey(latest().input)===SL.preparationKey(WF.snapshot());
- let installing=false, editingEvent=null;
+ let installing=false;
  function route(tab){if(!S())return tab; if(analytical.has(tab)){if(!current()){banner('Rond de voorbereiding af met ‘Sessie opslaan & analyseren’. Je eerdere report blijft bewaard.');return 'cal';}S().stage='analysis';}else if(prep.some(x=>x[0]===tab))S().stage='prepare';return tab;}
  function chrome(){
   document.querySelectorAll('#nav .nav').forEach(b=>b.hidden=!['home','boat','season','report'].includes(b.dataset.tab));document.querySelectorAll('#nav h6').forEach(e=>e.hidden=true);$('#scope').hidden=true;
@@ -2836,53 +2905,41 @@ const STUDIO=(()=>{
  }
  function filteredD(){const D=A.D,f={...(S().analysisFilter||{}),range:S().selections.analysis};const mask=Uint8Array.from({length:D.n},(_,i)=>SL.sampleMatches(D,i,f)&&SL.performanceAllowed({start:iT(i),end:iT(i+1)},S().reviews));const allow=i=>mask[i];const ch={};for(const [k,a]of Object.entries(D.ch))ch[k]=Float64Array.from(a,(v,i)=>allow(i)?v:NaN);const out={...D,ch,phases:WF.filteredPhases(D.phases),mans:D.mans.filter(m=>allow(m.i))};out.legs=SL.buildLegs(out);out.sum=SL.summary(out);return out;}
  function analysisHeader(c){c.querySelectorAll('.wf-selection').forEach(e=>e.remove());const f=S().analysisFilter||={},change=(k,v)=>{S().analysisFilter={...f,[k]:v};A.ml={};WF.touch();show(A.tab);};const races=[...new Set(Array.from(A.D.L.race).filter(Boolean))].sort((a,b)=>a-b).map(String);
-  c.prepend(card('Selectie voor alle analyses',bar(field('Race',sel('analysis-race',['',...races],f.race||'',v=>change('race',v))),field('Zeil',sel('analysis-sail',['',...A.D.L.sailNames],f.sail||'',v=>change('sail',v))),field('Vaarmodus',sel('analysis-mode',['',...SL.MODES],f.mode||'',v=>change('mode',v))),field('Boeg',sel('analysis-tack',['','Port','Stbd'],f.tack||'',v=>change('tack',v))),button('Filters wissen',()=>{S().analysisFilter={};S().selections.analysis=null;A.filt={sails:'',leg:'',tack:'',day:''};show(A.tab);})),WF.selectionBar()));
+  c.prepend(card('Selectie voor alle analyses',bar(field('Race',sel('analysis-race',['',...races],f.race||'',v=>change('race',v))),field('Zeil',sel('analysis-sail',['',...new Set([...A.D.L.sailNames,...(A.D.L.sailSlots||[]).flat()])],f.sail||'',v=>change('sail',v))),field('Vaarmodus',sel('analysis-mode',['',...SL.MODES],f.mode||'',v=>change('mode',v))),field('Boeg',sel('analysis-tack',['','Port','Stbd'],f.tack||'',v=>change('tack',v))),button('Filters wissen',()=>{S().analysisFilter={};S().selections.analysis=null;A.filt={sails:'',leg:'',tack:'',day:''};show(A.tab);})),WF.selectionBar()));
  }
  async function publish(){const s=WF.snapshot();SL.validatePreparation(s,A.D);const signature=SL.preparationKey(s),versions=S().analysisVersions||(S().analysisVersions=[]),oldStage=S().stage,pushed=!latest()||SL.preparationKey(latest().input)!==signature;
   if(pushed)versions.push({number:(latest()?.number||0)+1,at:Date.now(),signature,input:SL.versionInput(s)});
   S().stage='analysis';WF.touch();try{await WF.persist();}catch(e){if(pushed)versions.pop();S().stage=oldStage;throw e;}show('analysis');
  }
- function generate(rules){const cfg={...A.cfg,...Object.fromEntries(SL.phaseKeys.map(k=>[k,+rules[k]]))};if(!fin(cfg.sdHdg)||cfg.sdHdg<0)throw new Error('Heading-stabiliteit moet een positief getal zijn.');const r={...rules,...Object.fromEntries(SL.phaseKeys.map(k=>[k,cfg[k]]))};if(r.scope==='selection'){if(!S().selections.analysis)throw new Error('Selecteer eerst een tijdvak op de kaart/tijdlijn.');r.range=SL.copy(S().selections.analysis);}else r.range=null;
-  const staged=WF.snapshot();staged.cfg=cfg;staged.phaseBuild={generated:true,rules:r};const D=WF.process(staged);const build={...staged.phaseBuild,ranges:D.phases.map(p=>({start:p.t,end:iT(p.i1)})),diagnostics:D.phaseDiagnostics,at:Date.now()};A.cfg=cfg;S().phaseBuild=build;build.sourceKey=SL.eventKey(WF.snapshot());S().phaseDraft=SL.copy(r);S().selections.analysis=null;S().reviewPage=0;WF.recompute();show('review');banner(D.phases.length+' fases gemaakt. Controleer de lijst en ga daarna naar de manoeuvreparen.');}
+ function generate(rules,preview=false){const cfg={...A.cfg,...Object.fromEntries(SL.phaseKeys.map(k=>[k,+rules[k]]))};if(!fin(cfg.sdHdg)||cfg.sdHdg<0)throw new Error('Heading-stabiliteit moet een positief getal zijn.');const r={...rules,...Object.fromEntries(SL.phaseKeys.map(k=>[k,cfg[k]]))};if(r.scope==='selection'){if(!S().selections.analysis)throw new Error('Selecteer eerst een tijdvak op de kaart/tijdlijn.');r.range=SL.copy(S().selections.analysis);}else r.range=null;
+  const staged=WF.snapshot();staged.cfg=cfg;staged.phaseBuild={generated:true,rules:r};const D=WF.process(staged);if(preview)return D.phases.length;const build={...staged.phaseBuild,ranges:D.phases.map(p=>({start:p.t,end:iT(p.i1)})),diagnostics:D.phaseDiagnostics,at:Date.now()};A.cfg=cfg;S().phaseBuild=build;build.sourceKey=SL.eventKey(WF.snapshot());S().phaseDraft=SL.copy(r);S().selections.analysis=null;S().reviewPage=0;WF.recompute();show('review');banner(D.phases.length+' fases gemaakt. Controleer de lijst en ga daarna naar de manoeuvreparen.');}
  function phaseControls(){const s=S(),c=$('#t-review');if(!A.D)return;const rules=s.phaseDraft||(s.phaseDraft=SL.copy(s.phaseBuild?.rules||SL.phaseDefaults(A.cfg))),num=(k,label,step=1)=>field(label,h('input',{id:'phase-'+k,type:'number',step,value:rules[k],oninput:e=>{rules[k]=+e.target.value;WF.touch();}}));
   const scope=sel('phase-scope',['all','racing','training','selection'],rules.scope,v=>{rules.scope=v;WF.touch();});[...scope.options].forEach((o,i)=>o.textContent=['Hele sessie','Alleen races','Alleen training','Geselecteerd tijdvak'][i]);
-  const body=card('Maak fases',help('Kies eerst je events en zeilen. De criteria worden pas toegepast wanneer je op Maak fases klikt. Een nieuwe generatie vervangt de faselijst; afwijkende grenzen vragen opnieuw beoordeling.'),bar(field('Tijdvakken',scope),field('Race',sel('phase-race',['',...[...new Set(Array.from(A.D.L.race).filter(Boolean))].map(String)],rules.race,v=>rules.race=v)),field('Zeil',sel('phase-sail',['',...A.D.L.sailNames],rules.sail,v=>rules.sail=v)),field('Vaarmodus',sel('phase-mode',['',...SL.MODES],rules.mode,v=>rules.mode=v)),field('Boeg',sel('phase-tack',['','Port','Stbd'],rules.tack,v=>rules.tack=v))),
+  const feedback=h('p',{role:'status'});
+  const attempt=fn=>()=>{try{fn();}catch(e){feedback.textContent=e.message;}};
+  const body=card(null,help('Kies eerst je events en zeilen. De criteria worden pas toegepast wanneer je op Maak fases klikt. Een nieuwe generatie vervangt de faselijst; afwijkende grenzen vragen opnieuw beoordeling.'),bar(field('Tijdvakken',scope),field('Race',sel('phase-race',['',...[...new Set(Array.from(A.D.L.race).filter(Boolean))].map(String)],rules.race,v=>rules.race=v)),field('Zeil',sel('phase-sail',['',...new Set([...A.D.L.sailNames,...(A.D.L.sailSlots||[]).flat()])],rules.sail,v=>rules.sail=v)),field('Vaarmodus',sel('phase-mode',['',...SL.MODES],rules.mode,v=>rules.mode=v)),field('Boeg',sel('phase-tack',['','Port','Stbd'],rules.tack,v=>rules.tack=v))),
    h('div',{class:'form'},num('phaseLen','Faseduur (s)'),num('phaseGap','Tussenruimte (s)'),num('sdBsp','Max. spreiding BSP (kn)',.1),num('sdTwa','Max. spreiding TWA (°)',.5),num('sdTws','Max. spreiding TWS (kn)',.1),num('sdHdg','Max. spreiding heading (°)',.5),num('minBsp','Minimum BSP (kn)',.1),num('manBefore','Vrij vóór manoeuvre (s)'),num('manAfter','Vrij ná manoeuvre (s)'),num('polMin','Minimum polar %'),num('polMax','Maximum polar %')),
-   bar(button('Maak fases',safe(()=>generate(rules)),true),button('Criteria bewaren bij boot',()=>{const b=WF.library.boats.find(x=>x.id===s.boatId);b.cfg={...b.cfg,...Object.fromEntries(SL.phaseKeys.map(k=>[k,rules[k]]))};b.revision++;WF.touch();banner('Detectiecriteria opgeslagen als bootstandaard.');})),
+   feedback,bar(button('Bekijk aantal',attempt(()=>{feedback.textContent=generate(rules,true)+' fases voldoen aan deze criteria.';})),button('Maak fases',attempt(()=>generate(rules)),true),button('Criteria bewaren bij boot',()=>{const b=WF.library.boats.find(x=>x.id===s.boatId);b.cfg={...b.cfg,...Object.fromEntries(SL.phaseKeys.map(k=>[k,rules[k]]))};b.revision++;WF.touch();banner('Detectiecriteria opgeslagen als bootstandaard.');})),
    s.phaseBuild?.generated?help(`${A.D.phases.length} fases · generatie ${new Date(s.phaseBuild.at||s.created).toLocaleString('nl-NL')}. Kalibratie rekent deze vaste tijdvakken opnieuw door.`):help('Nog geen fases gegenereerd.'),
    s.phaseBuild?.generated&&s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot())?h('p',{class:'wf-notice'},'Events of broninstellingen gewijzigd — maak fases opnieuw voordat je de sessie afrondt.'):null);
-  if(s.phaseBuild?.diagnostics){const d=s.phaseBuild.diagnostics;body.append(help(`Overgeslagen kandidaatvensters: ${d.masked} door selectie, ontbrekende data, manoeuvres of wissels; ${d.stability} door stabiliteit; ${d.target} door polar-/hoekgrenzen. Kandidaten overlappen; dit zijn geen percentages van de vaartijd.`));}c.prepend(body);
+  if(s.phaseBuild?.diagnostics){const d=s.phaseBuild.diagnostics;body.append(help(`Overgeslagen kandidaatvensters: ${d.masked} door selectie, ontbrekende data, manoeuvres of wissels; ${d.stability} door stabiliteit; ${d.target} door polar-/hoekgrenzen. Kandidaten overlappen; dit zijn geen percentages van de vaartijd.`));}const toolbar=c.querySelector('.desk-side > .bar');toolbar.append(button('Fases maken',()=>PrepDesk.dialog('Fases maken',body),true));if(s.phaseBuild?.generated&&s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot()))toolbar.after(help('Events gewijzigd. Maak de fases opnieuw.'));
  }
- const eventLabels={RaceStartGun:'Startschot',RaceMark:'Mark rounding',RaceFinish:'Finish',SailsUp:'Zeilwissel',StartTesting:'Training begint',StopTesting:'Training eindigt',MotorStart:'Motor aan',MotorStop:'Motor uit',MiscEvent:'Notitie',DayStart:'Dag begint',DayStop:'Dag eindigt',ManualEntry:'Handmatige waarden'};
- function eventTime(e){return e.tl-A.cfg.evOff*36e5+SL.logOffset(A.raw,A.cfg)*36e5+(A.cfg.evShiftSec||0)*1000;}
- function cursorMoved(){const el=$('#event-time');if(el&&document.activeElement!==el&&!editingEvent)el.value=local(iT(A.cur));const l=$('#cursor-event-label');if(l)l.textContent='Cursor '+tstr(iT(A.cur));}
- function changedEvents(){A.events.events.sort((a,b)=>a.tl-b.tl);A.evDirty=true;WF.recompute();WF.touch();show('events');}
- function events(){const c=pane('events');if(!A.D)return;const ev=evEnsure();ev.events.forEach(e=>e.id||=SL.uid());
-  c.append(h('div',{class:'wf-pagehead'},h('div',{},h('span',{class:'eyebrow'},'SESSIE INDELEN'),h('h1',{},'Wat gebeurde wanneer?'),help('Klik op de kaart of tijdlijn. Voeg starts, zeilwissels en ontbrekende events toe, of markeer een geselecteerd tijdvak.')),button('Verder: maak fases',()=>show('review'),true)),WF.selectionBar());WF.timePanel(c);RaceTools.turnControls(c);eventStrip(c);
-  const e=ev.events.find(x=>x.id===editingEvent),type=sel('event-kind',[...new Set([...Object.keys(eventLabels),...(e?[e.type]:[])])],e?.type||'RaceStartGun',v=>{if(v==='SailsUp')$('#event-attribute').placeholder='Main;J2;;';});[...type.options].forEach(o=>o.textContent=eventLabels[o.value]||o.value);
-  const time=h('input',{id:'event-time',type:'datetime-local',step:1,value:local(e?eventTime(e):iT(A.cur))}),attr=h('input',{id:'event-attribute',value:e?.attr||'',placeholder:'Race/marknummer; bij zeilen Main;J2;;'}),note=h('input',{id:'event-note',value:e?.comments||'',placeholder:'Bijvoorbeeld te laat bij de lijn'});
-  const save=()=>{const t=fromLocal(time.value);if(!fin(t)||t<iT(0)||t>iT(A.raw.n))throw new Error('Kies een geldig tijdstip binnen het log.');let value=attr.value.trim();if(type.value==='SailsUp'&&!value)throw new Error('Vul de zeilconfiguratie in, bijvoorbeeld Main;J2;;.');if(type.value==='RaceStartGun'&&!value)value=String(Math.max(0,...ev.events.filter(x=>x.type==='RaceStartGun').map(x=>+x.attr||0))+1);const next={id:e?.id||SL.uid(),tl:idxTl((t-A.raw.t0)/1000),type:type.value,attr:value,comments:note.value,origin:e?.origin||'manual'};if(e)Object.assign(e,next);else ev.events.push(next);editingEvent=null;changedEvents();};
-  c.append(card(e?'Event aanpassen':'Event bij de cursor',bar(field('Tijdstip',time),button('Gebruik huidige cursor',()=>time.value=local(iT(A.cur))),field('Eventtype',type),field('Waarde / zeilen',attr),field('Toelichting',note),button(e?'Event bijwerken':'Event toevoegen',safe(save),true),e?button('Annuleren',()=>{editingEvent=null;show('events');}):null),help('Zeilconfiguratie: grootzeil;voorzeil;stagzeil;spinnaker. Bijvoorbeeld Main;J2;; of Main;;;A2. Een zeilwissel geldt tot de volgende zeilwissel. Start/finish vormen een race.')),
-   card('Selectie als tijdvak',help(S().selections.analysis?dstr(S().selections.analysis.start)+' — '+tstr(S().selections.analysis.end):'Sleep in de tijdgrafiek of gebruik de tijdvelden om een begin en einde te kiezen.'),bar(...[['Race','RaceStartGun','RaceFinish'],['Training','StartTesting','StopTesting'],['Motorgebruik','MotorStart','MotorStop']].map(([label,a,b])=>button('Markeer '+label,safe(()=>{const r=S().selections.analysis;if(!r)throw new Error('Selecteer eerst een tijdvak.');const num=String(Math.max(0,...ev.events.filter(x=>x.type==='RaceStartGun').map(x=>+x.attr||0))+1);if(a==='RaceStartGun'&&Array.from(A.D.L.race.subarray(...WF.rangeIndices(r))).some(Boolean))throw new Error('Deze selectie overlapt een bestaande race. Pas de bestaande start/finish aan.');ev.events.push({id:SL.uid(),type:a,tl:idxTl((r.start-A.raw.t0)/1000),attr:a==='RaceStartGun'?num:'',comments:'Handmatig tijdvak'},{id:SL.uid(),type:b,tl:idxTl((r.end-A.raw.t0)/1000),attr:a==='RaceStartGun'?num:'',comments:'Handmatig tijdvak'});changedEvents();}))))),
-   card('Events ('+ev.events.length+')',table(['Tijd','Event','Waarde','Toelichting',''],ev.events.map(x=>[dstr(eventTime(x)),eventLabels[x.type]||x.type,x.attr,x.comments,bar(button('Bewerk event',()=>{editingEvent=x.id;A.cur=Math.max(0,Math.min(A.raw.n-1,Math.round((eventTime(x)-A.raw.t0)/1000)));show('events');}),button('Verwijder event',()=>{(S().eventTrash||=[]).push(SL.copy(x));ev.events.splice(ev.events.indexOf(x),1);changedEvents();}))])),bar(button('Events exporteren',()=>dl('SailLens-events.ev.xml',SL.eventsXml(ev))),button('Verwijdering ongedaan maken',()=>{const x=S().eventTrash?.pop();if(x){ev.events.push(x);changedEvents();}},false,{disabled:!S().eventTrash?.length}))),help('Events worden met hun volledige datum opgeslagen. De tijdlabels volgen de weergave-offset van de sessie.'));
- }
- function eventStrip(c){const D=A.D,[lo,hi]=S().viewport||[D.i0,D.i1],cv=h('canvas',{'aria-label':'Eventtijdlijn met races, zeilen, training en motor',class:'event-strip'}),box=card('Events op de tijdlijn',h('span',{id:'cursor-event-label'},'Cursor '+tstr(iT(A.cur))),cv);c.append(box);const p=plot(cv,{xr:[lo,hi],yr:[0,4],h:156,pl:80,pb:30,xfmt:i=>tstr(iT(i)),xTickGap:110}),ctx=p.c;ctx.fillStyle=css('--surface');ctx.fillRect(0,0,p.pl-2,p.H);ctx.font='11px '+css('--font');ctx.textAlign='left';['Motor','Training','Zeilen','Races'].forEach((t,j)=>ctx.fillText(t,3,p.Y(j+.5)));
-  for(const [arr,row,color]of [[D.L.race,3,'--s1'],[D.L.sail,2,'--s3'],[D.L.testing,1,'--s4'],[D.L.motor,0,'--s2']]){let start=lo;for(let i=lo+1;i<=hi;i++)if(i===hi||arr[i]!==arr[start]){const active=row===2?arr[start]>=0:arr[start]>0;if(active){ctx.fillStyle=alpha(css(color),.38);ctx.fillRect(p.X(start),p.Y(row+.85),Math.max(1,p.X(i)-p.X(start)),22);}start=i;}}
-  const picks=[];for(const e of A.events.events){const i=(eventTime(e)-D.raw.t0)/1000;if(i<lo||i>hi)continue;const row=e.type==='SailsUp'?2:/Motor/.test(e.type)?0:/Testing/.test(e.type)?1:3;p.dot(i,row+.5,css('--ink'),null,null,false,4);picks.push({x:p.X(i),y:p.Y(row+.5),e});}
-  cv.addEventListener('pointerdown',e=>{const found=picks.find(x=>Math.hypot(x.x-e.offsetX,x.y-e.offsetY)<10);if(found){editingEvent=found.e.id;A.cur=Math.max(D.i0,Math.min(D.i1-1,Math.round((eventTime(found.e)-D.raw.t0)/1000)));}else{editingEvent=null;A.cur=Math.max(D.i0,Math.min(D.i1-1,Math.round(lo+(e.offsetX-p.pl)/(p.W-p.pl-p.pr)*(hi-lo))));}show('events');});
- }
- function pairs(){const c=pane('pairreview'),s=S(),D=A.D;if(!D)return;const type=s.pairType||'Alle',list=D.mans.filter(m=>type==='Alle'||m.type===type);c.append(h('div',{class:'wf-pagehead'},h('div',{},h('h1',{},'Eén manoeuvre. Twee goede vensters.'),help('Kies stabiele data vóór en ná de manoeuvre. Deze vensters staan los van je performancefases.')),button('Verder: kalibratie',()=>show('cal'),true)),bar(field('Type manoeuvre',sel('pair-type',['Alle','Tack','Gybe'],type,v=>{s.pairType=v;s.activePairKey=null;show('pairreview');}))));if(!list.length){c.append(help('Geen tacks/gybes gedetecteerd. Controleer wind- en headingkanalen.'));return;}
+ function pairs(){const c=pane('pairreview'),s=S(),D=A.D;if(!D)return;const type=s.pairType||'Alle',list=D.mans.filter(m=>type==='Alle'||m.type===type);if(!list.length){const {side}=PrepDesk.mount(c,'Manoeuvres');side.append(help('Geen '+(type==='Alle'?'manoeuvres':type)+' gevonden.'),button('Alle manoeuvres',()=>{s.pairType='Alle';show('pairreview');}),button('Naar events',()=>show('events')),button('Verder naar kalibratie',()=>show('cal')));return;}
   let idx=list.findIndex(m=>SL.pairKey(D,m)===s.activePairKey);if(idx<0){idx=0;A.cur=list[0].i;s.viewport=[Math.max(D.i0,list[0].i-150),Math.min(D.i1,list[0].i+150)];}const m=list[idx],key=SL.pairKey(D,m);s.manoeuvrePairs||={};const pair=s.manoeuvrePairs[key]||(s.manoeuvrePairs[key]=RaceTools.suggest(D,m,s));s.activePairKey=key;const check=SL.inspectPair(D,pair,s.phaseBuild?.rules||D.cfg);
-  const go=n=>{const next=list[Math.max(0,Math.min(list.length-1,n))];s.activePairKey=SL.pairKey(D,next);A.cur=next.i;s.viewport=[Math.max(D.i0,next.i-150),Math.min(D.i1,next.i+150)];s.selections.analysis=null;show('pairreview');};
-  c.append(card(`${m.type} ${idx+1} / ${list.length} · ${tstr(iT(m.i))}`,bar(button('Vorige manoeuvre',()=>go(idx-1),false,{disabled:idx===0}),button('Volgende manoeuvre',()=>go(idx+1),false,{disabled:idx===list.length-1}),button('Zoom rond manoeuvre',()=>go(idx)),h('b',{},pair.validation?'Controlepaar':pair.approved?'Goedgekeurd voor kalibratie':pair.reason?'Overgeslagen: '+pair.reason:'Nog te beoordelen')),help('Blauw = vóór, groen = ná. Sleep een selectie in de grafiek en gebruik ‘Selectie als vóór/na’, of stel de grenzen hieronder in.')));
-  if(!s.viewport)s.viewport=[Math.max(D.i0,m.i-150),Math.min(D.i1,m.i+150)];WF.timePanel(c);WF.selectionBar && c.append(WF.selectionBar());
-  RaceTools.review(c,pair,check);const form=h('div',{class:'form'}),inputs={};for(const side of ['before','after'])for(const edge of ['start','end']){const id='pair-'+side+'-'+edge;inputs[id]=h('input',{id,type:'datetime-local',step:1,value:local(pair[side][edge])});form.append(field((side==='before'?'Vóór':'Na')+' · '+(edge==='start'?'begin':'einde'),inputs[id]));}
+  const go=n=>{const next=list[Math.max(0,Math.min(list.length-1,n))];s.activePairKey=SL.pairKey(D,next);s.deskMap={...s.deskMap,z:1,x:0,y:0};A.cur=next.i;s.viewport=[Math.max(D.i0,next.i-150),Math.min(D.i1,next.i+150)];s.selections.analysis=null;show('pairreview');};
+  if(!s.viewport||m.i<s.viewport[0]||m.i>=s.viewport[1]){A.cur=m.i;s.viewport=[Math.max(D.i0,m.i-150),Math.min(D.i1,m.i+150)];}
+  s.viewport=[Math.max(D.i0,Math.min(s.viewport[0],Math.floor((pair.before.start-D.raw.t0)/1000)-5)),Math.min(D.i1,Math.max(s.viewport[1],Math.ceil((pair.after.end-D.raw.t0)/1000)+5))];
+  const {side,toolbar}=PrepDesk.mount(c,m.type+' '+(idx+1)+' / '+list.length+' · '+tstr(iT(m.i)),{pair});
+  toolbar.append(sel('pair-type',['Alle','Tack','Gybe'],type,v=>{s.pairType=v;s.activePairKey=null;show('pairreview');}),button('Kalibratie →',()=>show('cal')));
+  side.append(card(null,bar(button('Vorige manoeuvre',()=>go(idx-1),false,{disabled:idx===0}),button('Volgende manoeuvre',()=>go(idx+1),false,{disabled:idx===list.length-1}),button('Zoom rond manoeuvre',()=>go(idx)),h('b',{},pair.validation?'Controlepaar':pair.approved?'Goedgekeurd voor kalibratie':pair.reason?'Overgeslagen: '+pair.reason:'Nog te beoordelen')),help('Blauw is vóór de manoeuvre, groen is erna. Sleep een vensterrand om de selectie bij te stellen.')));
+  if(!s.viewport)s.viewport=[Math.max(D.i0,m.i-150),Math.min(D.i1,m.i+150)];
+  const extended=h('details',{},h('summary',{},'Controlepaar en brondata'));RaceTools.review(extended,pair,check,true);const form=h('div',{class:'form'}),inputs={};for(const side of ['before','after'])for(const edge of ['start','end']){const id='pair-'+side+'-'+edge;inputs[id]=h('input',{id,type:'datetime-local',step:1,value:local(pair[side][edge])});form.append(field((side==='before'?'Vóór':'Na')+' · '+(edge==='start'?'begin':'einde'),inputs[id]));}
   const update=()=>{const next={...pair,before:{start:fromLocal(inputs['pair-before-start'].value),end:fromLocal(inputs['pair-before-end'].value)},after:{start:fromLocal(inputs['pair-after-start'].value),end:fromLocal(inputs['pair-after-end'].value)},approved:false,validation:false};if(!SL.windowPhase(D,next.before)||!SL.windowPhase(D,next.after))throw new Error('Kies twee geldige vensters van minimaal 5 seconden binnen het log.');s.manoeuvrePairs[key]=next;WF.touch();show('pairreview');};
   const setRange=side=>{if(!s.selections.analysis)throw new Error('Maak eerst een tijdselectie.');pair[side]=SL.copy(s.selections.analysis);pair.approved=false;pair.validation=false;WF.touch();show('pairreview');};const reason=h('input',{id:'pair-reason',value:pair.reason||'',placeholder:'Bijvoorbeeld windshift of onrustige aanloop'});
-  c.append(card('Kalibratievensters',form,bar(button('Vensters bijwerken',safe(update),true),button('Selectie als vóór',safe(()=>setRange('before'))),button('Selectie als na',safe(()=>setRange('after')))),
-   table(['Kanaal','Vóór: gemiddelde ± spreiding','Na: gemiddelde ± spreiding','Verschil na − vóór'],['BSP','AWA','TWA','TWD','TWS','HDG','Heel'].filter(k=>D.ch[k]).map(k=>{const a=check.before,b=check.after,v=(a&&b)?((SL.ANG.test(k)||['TWA','AWA'].includes(k))?SL.w180(b.v[k]-a.v[k]):b.v[k]-a.v[k]):NaN;return [k,a?f1(a.v[k],2)+' ± '+f1(a.spread[k],2):'—',b?f1(b.v[k],2)+' ± '+f1(b.spread[k],2):'—',f1(v,2)];})),
+  side.append(card('Kalibratievensters',h('details',{},h('summary',{},'Tijden precies instellen'),form,bar(button('Vensters bijwerken',safe(update),true),button('Selectie als vóór',safe(()=>setRange('before'))),button('Selectie als na',safe(()=>setRange('after'))))),
    check.valid?help('Beide vensters voldoen aan de ingestelde stabiliteit en datadekking. Controleer ook visueel of de omstandigheden vergelijkbaar zijn.'):h('ul',{class:'wf-notice'},check.errors.map(t=>h('li',{},t))),field('Reden / notitie',reason),bar(button('Paar goedkeuren',()=>{pair.approved=true;pair.validation=false;pair.reason=reason.value;pair.reviewedAt=Date.now();WF.touch();show('pairreview');},true,{disabled:!check.valid}),button('Goedkeuren & volgende',()=>{pair.approved=true;pair.validation=false;pair.reason=reason.value;pair.reviewedAt=Date.now();WF.touch();go(idx+1);},false,{disabled:!check.valid||idx===list.length-1}),button('Overslaan voor kalibratie',safe(()=>{if(!reason.value.trim())throw new Error('Vul een reden in.');pair.approved=false;pair.validation=false;pair.reason=reason.value.trim();WF.touch();if(idx<list.length-1)go(idx+1);else show('pairreview');})),button('Goedkeuring intrekken',()=>{pair.approved=false;pair.validation=false;WF.touch();show('pairreview');},false,{disabled:!pair.approved}))),
-   card('Voortgang',help(`${SL.approvedPairs(D,s).length} bruikbare goedgekeurde paren. Overslaan heeft geen invloed op de manoeuvre-performanceanalyse.`),table(['Tijd','Manoeuvre','Beoordeling',''],list.map((x,i)=>{const q=s.manoeuvrePairs[SL.pairKey(D,x)];return [tstr(iT(x.i)),x.type,q?.approved?(SL.inspectPair(D,q,s.phaseBuild?.rules||D.cfg).valid?(q.validation?'Controlepaar':'Goedgekeurd'):'Opnieuw beoordelen'):q?.reason||'Te beoordelen',button('Open manoeuvre',()=>go(i))];}))));
+   table(['Kanaal','Vóór ± σ','Na ± σ','Δ na − vóór'],['BSP','AWA','TWA','TWD','TWS','HDG','Heel'].filter(k=>D.ch[k]).map(k=>{const a=check.before,b=check.after,v=(a&&b)?((SL.ANG.test(k)||['TWA','AWA'].includes(k))?SL.w180(b.v[k]-a.v[k]):b.v[k]-a.v[k]):NaN;return [k,a?f1(a.v[k],2)+' ± '+f1(a.spread[k],2):'—',b?f1(b.v[k],2)+' ± '+f1(b.spread[k],2):'—',f1(v,2)];})),
+   extended,card('Voortgang',help(`${SL.approvedPairs(D,s).length} bruikbare goedgekeurde paren. Overslaan heeft geen invloed op de manoeuvre-performanceanalyse.`),table(['Tijd','Manoeuvre','Beoordeling',''],list.map((x,i)=>{const q=s.manoeuvrePairs[SL.pairKey(D,x)];return [tstr(iT(x.i)),x.type,q?.approved?(SL.inspectPair(D,q,s.phaseBuild?.rules||D.cfg).valid?(q.validation?'Controlepaar':'Goedgekeurd'):'Opnieuw beoordelen'):q?.reason||'Te beoordelen',button('Open manoeuvre',()=>go(i))];}))));
  }
  function daycharts(){const c=pane('daycharts');c.append(h('h1',{},'Day charts'),help('Kaart, tijdlijn en kanalen van de opgeslagen sessie. De gedeelde selectie en filters bepalen welke meetpunten zichtbaar zijn.'));WF.timePanel(c);const channels=S().dayChannels||(S().dayChannels=['BSP','TWA','TWD'].filter(k=>A.D.ch[k]));const D=A.D,[lo,hi]=WF.rangeIndices();
   for(let j=0;j<channels.length;j++){const k=channels[j],cv=h('canvas'),section=card('Tijdreeks · '+k,field('Kanaal '+(j+1),sel('day-channel-'+j,varList(),k,v=>{channels[j]=v;show('daycharts');})),cv);c.append(section);const a=D.ch[k],v=Array.from(a.subarray(lo,hi)).filter(fin),min=SL.quant(v,.01),max=SL.quant(v,.99);const p=plot(cv,{xr:[lo,hi],yr:fin(min)?[min-.2,max+.2]:[0,1],h:200,yl:k,xfmt:i=>tstr(iT(i)),xTickGap:110});const step=Math.max(1,Math.floor((hi-lo)/2000));p.line(Array.from({length:Math.ceil((hi-lo)/step)},(_,n)=>[lo+n*step,a[lo+n*step]]),SER(j));}
@@ -2920,13 +2977,13 @@ const STUDIO=(()=>{
   if(s.analysisVersions?.length)c.append(card('Opgeslagen sessieversies',table(['Versie','Opgeslagen','Fases','Kalibratieversie',''],s.analysisVersions.map(v=>[v.number,new Date(v.at).toLocaleString('nl-NL'),v.input.phaseBuild?.ranges?.length||0,v.input.calibrationHistory.length,button('Open als aparte sessie',safe(()=>WF.openVersion(v.number)))]))));
  }
  function init(){if(installing)return;installing=true;for(const [id,title]of [['pairreview','Manoeuvreparen'],['daycharts','Day charts'],['dist','Distributies'],['prestart','Prestart']]){TITLE[id]=title;DAYONLY.add(id);if(!$('#t-'+id))$('#panes').append(h('div',{class:'tabpane',id:'t-'+id,hidden:''}));}
-  R.events=events;R.pairreview=pairs;R.daycharts=daycharts;R.dist=distributions;R.prestart=prestart;R.summary=tables;R.report=report;TITLE.review='Fases';TITLE.ml='Insights';
+  R.events=EventDesk.render;R.pairreview=pairs;R.daycharts=daycharts;R.dist=distributions;R.prestart=prestart;R.summary=tables;R.report=report;TITLE.review='Fases';TITLE.ml='Insights';
   const cal=R.cal;R.cal=()=>{cal();if(A.D)readiness($('#t-cal'));};
   const review=R.review;R.review=()=>{review();phaseControls();};
   const setup=R.setup;R.setup=()=>{setup();const c=$('#t-setup'),time=[...c.querySelectorAll('.card')].find(n=>n.querySelector('h3')?.textContent==='Track & tijdreeks');if(time){const selection=c.querySelector('.wf-selection');c.insertBefore(time,c.children[1]);if(selection)c.insertBefore(selection,time);}};
   for(const [id]of modules){const render=R[id];R[id]=()=>{const full=A.D;if(!full)return;try{if(id!=='prestart')A.D=filteredD();render();}finally{A.D=full;}const c=$('#t-'+id);analysisHeader(c);reportButtons(c);};}
  }
- return {init,route,chrome,publish,generate,current,events,pairs,cursorMoved,report,capture,refreshReport,restoreReport};
+ return {init,route,chrome,publish,generate,current,pairs,report,capture,refreshReport,restoreReport};
 })();
 
 'use strict';
@@ -2983,14 +3040,14 @@ const RaceTools = (() => {
   function pairMetrics(a,b){
     return [Math.abs(b.v.AWA)-Math.abs(a.v.AWA),Math.abs(b.v.TWA)-Math.abs(a.v.TWA),SL.w180(b.v.TWD-a.v.TWD)];
   }
-  function review(c,pair,check){
+  function review(c,pair,check,compact=false){
     const D=A.D,s=WF.session;
     const panel=card('Vensters rond het draaipunt',h('p',{},'Sleep een vensterrand in een grafiek om het begin of einde te verplaatsen. Blauw is vóór de manoeuvre, groen is erna.'));
     c.append(panel);
     const center=(pair.anchor-D.raw.t0)/1000;
     const lo=Math.max(D.i0,Math.min(center-120,(pair.before.start-D.raw.t0)/1000-5));
     const hi=Math.min(D.i1,Math.max(center+120,(pair.after.end-D.raw.t0)/1000+5));
-    for(const k of ['BSP','AWA','TWD','Heel']){
+    for(const k of (compact?[]:['BSP','AWA','TWD','Heel'])){
       const values=D.ch[k];if(!values)continue;
       const cv=h('canvas',{'aria-label':k+' rond manoeuvre',style:'touch-action:none'});
       panel.append(cv);
@@ -3158,6 +3215,271 @@ const RaceTools = (() => {
     block.append(table(['T.o.v. schot','Afstand tot lijnsegment (m)','Tijd tot lijn op huidige COG/SOG (s)'],rows));
   }
   return {suggest,review,turnControls,calibration,compareSlow,startLine,geometry};
+})();
+
+'use strict';
+const PrepDesk = (() => {
+  const button=(label,on,attrs={})=>h('button',{type:'button',onclick:on,...attrs},label);
+  let observer,frame,activeDialog,cleanup;
+  function leave(){cleanup?.();cleanup=null;observer?.disconnect();cancelAnimationFrame(frame);activeDialog?.remove();activeDialog=null;}
+  function dialog(title,body){
+    activeDialog?.remove();
+    const d=h('dialog',{class:'desk-dialog','aria-label':title},bar(h('h3',{},title),button('Sluiten',()=>d.remove())),body);
+    document.body.append(d);activeDialog=d;
+    if(d.showModal)d.showModal();else d.setAttribute('open','');
+    d.addEventListener('close',()=>d.remove());
+    d.onclick=e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.remove();}};
+    return d;
+  }
+  function mount(container,title,options={}){
+    const D=A.D,s=WF.session,g=mapGeom(D),pair=options.pair;
+    const view=s.deskMap||=( {z:1,x:0,y:0} );
+    const toolbar=bar(h('h3',{},title)),side=h('section',{class:'desk-side'},toolbar);
+    const map=h('canvas',{'aria-label':'GPS-track. Klik voor tijdcursor, sleep om te pannen.',class:'desk-map'});
+    const strip=h('canvas',{'aria-label':'Tijdgrafiek. Klik voor tijdcursor, sleep voor een tijdvak.',class:'desk-strip'});
+    const mapBox=h('div',{class:'desk-mapbox'},map),stripBox=h('div',{class:'desk-stripbox'},strip);
+    const clock=h('strong'),telemetry=h('span'),rangeLabel=h('span'),status=h('div',{class:'desk-read'},clock,telemetry);
+    const idx=t=>Math.round((t-D.raw.t0)/1000),clip=(v,a,b)=>Math.max(a,Math.min(b,v));
+    const [lo,hi]=(s.viewport||[D.i0,D.i1]).map(v=>clip(v,D.i0,D.i1));
+    const dt=Math.max(1,hi-lo),key=D.ch[s.plotVariable]?s.plotVariable:'BSP';
+    let geo,bounds,chartWidth,pan,drag;
+
+    const orient=sel('desk-orientation',['North up','Wind up'],view.bearing==null?'North up':'Wind up',v=>{
+      const wind=fin(D.ch.TWD?.[A.cur])?D.ch.TWD[A.cur]:D.sum.TWD?.avg;
+      if(v==='Wind up'&&!fin(wind)){orient.value='North up';return banner('Geen geldige windrichting beschikbaar.',true);}
+      view.bearing=v==='Wind up'?SL.w360(wind+(D.magVar||0)):null;view.x=view.y=0;draw();WF.touch();
+    });
+    orient.setAttribute('aria-label','Kaartoriëntatie');
+    function fit(){view.z=1;view.x=view.y=0;draw();WF.touch();}
+    function zoom(mult){view.z=clip(view.z*mult,.5,80);draw();WF.touch();}
+    const mapBar=bar(orient,button('−',()=>zoom(1/1.4),{'aria-label':'Kaart uitzoomen'}),button('+',()=>zoom(1.4),{'aria-label':'Kaart inzoomen'}),button('Pas track in',fit));
+    mapBar.classList.add('desk-maptools');mapBox.append(mapBar);
+    const nudge=step=>{A.cur=clip(A.cur+step,lo,hi-1);draw();WF.touch();};
+    const timeControls=bar(button('−1 s',()=>nudge(-1)),button('+1 s',()=>nudge(1)),field('Kanaal',sel('desk-channel',varList(),key,v=>{s.plotVariable=v;show(A.tab);})),rangeLabel,
+      button('Tijdvak',()=>dialog('Tijdvak instellen',WF.selectionBar())),
+      button('Zoom op selectie',()=>{if(!s.selections.analysis)return banner('Sleep eerst een tijdvak in de tijdgrafiek.');s.viewport=WF.rangeIndices();view.x=view.y=0;view.z=1;show(A.tab);}),
+      button('Hele log',()=>{s.viewport=null;s.selections.analysis=null;view.x=view.y=0;view.z=1;show(A.tab);}));
+    const desk=h('div',{class:'prep-desk'+(pair?' desk-pair':'')},h('section',{class:'desk-spatial'},status,mapBox),side,h('section',{class:'desk-time'},timeControls,stripBox));
+    const mobileToggle=button('',()=>{s.deskList=!s.deskList;mobile();schedule();},{class:'desk-mobile-toggle'});
+    function mobile(){desk.classList.toggle('desk-list-open',!!s.deskList);mobileToggle.textContent=s.deskList?'Kaart tonen':title+' tonen';}
+    mobile();container.append(mobileToggle,desk);
+    if(g&&s.viewport){const bx=[Infinity,-Infinity],by=[Infinity,-Infinity];for(let i=lo;i<hi;i++)if(fin(g.x[i])&&fin(g.y[i])){bx[0]=Math.min(bx[0],g.x[i]);bx[1]=Math.max(bx[1],g.x[i]);by[0]=Math.min(by[0],g.y[i]);by[1]=Math.max(by[1],g.y[i]);}if(fin(bx[0]))bounds={bx,by};}
+    const channels=pair?[...new Set([key,'AWA','TWD','Heel'])].filter(k=>D.ch[k]):[key];
+    const series=channels.map(k=>{
+      const step=Math.max(1,Math.floor(dt/2200)),pts=[],ref=k==='TWD'?SL.cmean(D.ch[k].subarray(lo,hi)):NaN;
+      let min=Infinity,max=-Infinity;
+      for(let i=lo;i<hi;i+=step){const a=D.ch[k]?.[i],v=fin(ref)?ref+SL.w180(a-ref):a;pts.push([i,v]);if(fin(v)){min=Math.min(min,v);max=Math.max(max,v);}}
+      return {k,pts,min,max};
+    });
+    const lanes=[];
+    if(!pair){
+      for(const [values,label,color] of [[D.L.race,'Race','--s1'],[D.L.sail,'Zeil','--s3'],[D.L.testing,'Training','--s4'],[D.L.motor,'Motor','--s2']]){
+        const runs=[];let start=lo;
+        for(let i=lo+1;i<=hi;i++)if(i===hi||values[i]!==values[start]){
+          const v=values[start];if(label==='Zeil'?v>=0:v>0)runs.push([start,i,label==='Race'?'R'+v:label==='Zeil'?D.L.sailNames[v]:'']);
+          start=i;
+        }
+        if(runs.length)lanes.push({label,color,runs});
+      }
+    }
+    function ranges(){
+      const ranges=[];
+      for(const [r,k] of [[pair?.before,'--s1'],[pair?.after,'--s3'],[options.phase,'--s3'],[s.selections.analysis,'--accent']])if(r)ranges.push([idx(r.start),idx(r.end),css(k)]);
+      return ranges;
+    }
+    const left=70,right=18;
+    function draw(){
+      if(!desk.isConnected)return;
+      const marks=ranges();
+      geo=drawMap(map,{v:key,view,bearing:view.bearing,bounds,range:[lo,hi],cur:A.cur,h:Math.max(95,mapBox.clientHeight||320),highlights:marks});
+      const W=chartWidth=stripBox.clientWidth||700,H=stripBox.clientHeight||(pair?170:98),dp=window.devicePixelRatio||1,c=strip.getContext('2d');
+      strip.width=W*dp;strip.height=H*dp;c.setTransform(dp,0,0,dp,0,0);c.fillStyle=css('--surface');c.fillRect(0,0,W,H);
+      const X=i=>left+(i-lo)/dt*(W-left-right);
+      c.font='11px system-ui';c.textBaseline='middle';
+      for(const [a,b,color] of marks){c.fillStyle=alpha(color,.19);c.fillRect(Math.max(left,X(a)),3,Math.max(0,Math.min(W-right,X(b))-Math.max(left,X(a))),H-25);}
+      const laneHeight=Math.min(13,(H-32)/Math.max(3,lanes.length+2)),row=(H-26-lanes.length*laneHeight)/Math.max(1,series.length);
+      lanes.forEach(({label,color,runs},j)=>{
+        const y=3+series.length*row+j*laneHeight;c.fillStyle=css('--ink2');c.textAlign='left';c.fillText(label,5,y+laneHeight/2);
+        for(const [a,b,name]of runs){const width=X(b)-X(a);c.fillStyle=alpha(css(color),.4);c.fillRect(X(a),y+1,width,laneHeight-2);
+          if(width>name.length*7+8){c.fillStyle=css('--ink');c.fillText(name,X(a)+4,y+laneHeight/2);}}
+      });
+      series.forEach(({k,pts,min,max},j)=>{
+        const y=3+j*row;c.strokeStyle=css('--line');c.beginPath();c.moveTo(left,y+row);c.lineTo(W-right,y+row);c.stroke();
+        c.fillStyle=css('--ink2');c.fillText(k,5,y+row*.3);if(fin(min))c.fillText(f1(min,1)+'–'+f1(max,1),5,y+row*.72);
+        c.strokeStyle=SER(j);c.lineWidth=1.6;c.beginPath();let on=false;
+        for(const [i,v]of pts){if(!fin(v)){on=false;continue;}const py=y+row-4-(max===min?.5:(v-min)/(max-min))*(row-8);if(on)c.lineTo(X(i),py);else c.moveTo(X(i),py);on=true;}c.stroke();
+      });
+      if(!pair){c.fillStyle=css('--s2');for(const e of D.L.list)if(e.i>=lo&&e.i<hi)c.fillRect(X(e.i)-1,1,3,8);}
+      if(pair)for(const r of [pair.before,pair.after])for(const t of [r.start,r.end]){c.fillStyle=css('--ink2');c.fillRect(X(idx(t)),3,1,H-26);}
+      const ticks=Math.max(2,Math.floor((W-left-right)/125));
+      for(let j=0;j<=ticks;j++){const i=lo+dt*j/ticks;c.fillStyle=css('--ink2');c.textAlign=j===ticks?'right':j===0?'left':'center';c.fillText(tstr(iT(Math.round(i))),X(i),H-10);}c.textAlign='left';
+      c.fillStyle=css('--ink');if(A.cur>=lo&&A.cur<hi)c.fillRect(X(A.cur),0,2,H-22);
+      clock.textContent=tstr(iT(A.cur));telemetry.textContent=['BSP','TWS','AWA','TWA','TWD','Heel'].filter(k=>D.ch[k]).map(k=>k+' '+f1(D.ch[k][A.cur],1)+(['BSP','TWS'].includes(k)?' kn':'°')).join('   ·   ');
+      rangeLabel.textContent=s.selections.analysis?tstr(s.selections.analysis.start)+' – '+tstr(s.selections.analysis.end):'Klik voor cursor · sleep voor tijdvak';
+    }
+    function schedule(){cancelAnimationFrame(frame);frame=requestAnimationFrame(draw);}
+    function timeAt(e){return clip(Math.round(lo+(e.offsetX-left)*dt/(chartWidth-left-right)),lo,hi);}
+    map.onpointerdown=e=>{pan={x:e.offsetX,y:e.offsetY,vx:view.x,vy:view.y};map.setPointerCapture?.(e.pointerId);};
+    map.onpointermove=e=>{if(!pan)return;const dx=e.offsetX-pan.x,dy=e.offsetY-pan.y;if(Math.abs(dx)+Math.abs(dy)>4||pan.moved){pan.moved=true;view.x=pan.vx-dx/view.z;view.y=pan.vy-dy/view.z;schedule();}};
+    map.onpointerup=e=>{if(pan&&!pan.moved&&geo){let dist=25**2,best=A.cur;for(let i=lo;i<hi;i++){const d=(geo.X(i)-e.offsetX)**2+(geo.Y(i)-e.offsetY)**2;if(d<dist){dist=d;best=i;}}A.cur=best;}pan=null;draw();WF.touch();};
+    map.onpointercancel=()=>pan=null;
+    strip.onpointerdown=e=>{const i=timeAt(e);drag={i,x:e.offsetX};strip.setPointerCapture?.(e.pointerId);
+      if(pair)for(const side of ['before','after'])for(const edge of ['start','end'])if(Math.abs(i-idx(pair[side][edge]))*(chartWidth-left-right)/dt<7)Object.assign(drag,{side,edge});};
+    strip.onpointermove=e=>{if(!drag)return;A.cur=Math.min(D.i1-1,timeAt(e));if(!drag.side&&Math.abs(e.offsetX-drag.x)>3)s.selections.analysis={start:iT(Math.min(A.cur,drag.i)),end:iT(Math.max(A.cur,drag.i))};schedule();};
+    strip.onpointerup=e=>{if(!drag)return;const {i,x,side,edge}=drag,end=timeAt(e);drag=null;A.cur=Math.min(D.i1-1,end);
+      if(side&&Math.abs(e.offsetX-x)>2){const r={...pair[side],[edge]:iT(end)};if(!SL.windowPhase(D,r)||(side==='before'?r.end>pair.anchor-5000:r.start<pair.anchor+5000))return banner('Houd het venster minstens 5 s lang en 5 s van het draaipunt.',true);pair[side]=r;pair.approved=pair.validation=false;WF.touch();show(A.tab);return;}
+      if(!side)s.selections.analysis=Math.abs(e.offsetX-x)>3&&i!==end?{start:iT(Math.min(i,end)),end:iT(Math.max(i,end))}:null;
+      draw();WF.touch();if(A.tab==='review')show('review');};
+    strip.onpointercancel=()=>drag=null;
+    const keyboard=e=>{
+      if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||document.querySelector('dialog[open]')||e.target.closest?.('input,select,textarea,[contenteditable]'))return;
+      if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();nudge((e.shiftKey?10:1)*(e.key==='ArrowLeft'?-1:1));}
+      if(e.key.toLowerCase()==='e'&&options.addEvent){e.preventDefault();options.addEvent();}
+    };
+    document.addEventListener('keydown',keyboard);cleanup=()=>document.removeEventListener('keydown',keyboard);
+    if(options.addEvent){map.ondblclick=strip.ondblclick=options.addEvent;}
+    draw();if(window.ResizeObserver){observer=new ResizeObserver(schedule);observer.observe(mapBox);observer.observe(stripBox);}
+    return {side,toolbar,draw};
+  }
+  return {mount,dialog,leave,button};
+})();
+
+'use strict';
+const EventDesk=(()=>{
+  const labels={RaceStartGun:'Startschot',RaceMark:'Boeironding',RaceFinish:'Finish',SailsUp:'Zeilwissel',MiscEvent:'Notitie',ManualEntry:'Handmatige waarden',StartTesting:'Training begint',StopTesting:'Training eindigt',MotorStart:'Motor aan',MotorStop:'Motor uit',DayStart:'Dag begint',DayStop:'Dag eindigt'};
+  const button=PrepDesk.button;
+  const logTime=e=>e.tl-A.cfg.evOff*36e5+SL.logOffset(A.raw,A.cfg)*36e5+(A.cfg.evShiftSec||0)*1000;
+  const local=t=>new Date(t+(A.cfg.dispOff||0)*36e5).toISOString().slice(0,19);
+  const clock=value=>Date.parse(value+'Z')-(A.cfg.dispOff||0)*36e5;
+  function context(events,time,exclude){
+    let race=null,mark=0,sails=';;;',maxRace=0;
+    for(const e of events){if(e.id===exclude&&exclude)continue;
+      if(e.type==='RaceStartGun')maxRace=Math.max(maxRace,Number(e.attr)||0);
+      if(e.tl>time)continue;
+      if(e.type==='RaceStartGun'){race=e.attr;mark=0;}
+      if(e.type==='RaceMark')mark=Math.max(mark+1,+e.attr||0);
+      if(e.type==='RaceFinish'||e.type==='DayStop')race=null;
+      if(e.type==='SailsUp')sails=e.attr;
+    }
+    return {race,mark,sails,maxRace};
+  }
+  function issues(events){
+    const bad=new Map(),open={},seen=new Set();let marked=new Set();
+    for(const e of events){
+      const key=e.id,group=e.type.startsWith('Race')?'race':e.type.includes('Testing')?'test':e.type.startsWith('Motor')?'motor':null;
+      if(e.type==='DayStop'){delete open.race;continue;}
+      if(!group)continue;
+      if(['RaceStartGun','StartTesting','MotorStart'].includes(e.type)){
+        if(open[group])bad.set(key,'Er staat al een '+({race:'race',test:'training',motor:'motorperiode'})[group]+' open op dit tijdstip.');
+        if(group==='race'&&seen.has(e.attr))bad.set(key,'Dit racenummer is al gebruikt.');
+        if(group==='race'){seen.add(e.attr);marked=new Set();}
+        open[group]=e;continue;
+      }
+      if(!open[group])bad.set(key,'Dit event heeft geen bijbehorende start op dit tijdstip.');
+      else if(e.tl<=open[group].tl)bad.set(key,'Kies een tijdstip na de start.');
+      else if(e.type==='RaceFinish'&&e.attr&&e.attr!==open[group].attr)bad.set(key,'Het finishnummer moet overeenkomen met het startschot.');
+      if(e.type==='RaceMark'){
+        if(marked.has(e.attr))bad.set(key,'Dit boeinummer komt al voor in deze race. Kies een ander nummer.');
+        marked.add(e.attr);
+      }else delete open[group];
+    }
+    return bad;
+  }
+  function commit(next,remember=true){
+    const ev=evEnsure(),previous=ev.events,old=issues(previous),ordered=next.slice().sort((a,b)=>a.tl-b.tl);
+    if(remember)for(const [id,msg] of issues(ordered))if(old.get(id)!==msg)throw Error(msg);
+    ev.events=ordered;if(!WF.recompute()){ev.events=previous;throw Error('Wijziging kon niet worden doorgerekend.');}
+    if(remember){const undo=WF.session.eventUndo||=[];undo.push(previous);if(undo.length>12)undo.shift();}
+    A.evDirty=true;WF.touch();show('events');
+  }
+  function editor(ev,initial='MiscEvent',existing){
+    const time=h('input',{id:'event-time',type:'datetime-local',step:1,value:local(existing?logTime(existing):iT(A.cur))});
+    const type=sel('event-kind',[...new Set([...Object.keys(labels),initial])],initial,()=>fields());
+    for(const opt of type.options)opt.textContent=labels[opt.value]||opt.value;
+    const dynamic=h('div',{class:'event-fields'}),error=h('p',{role:'alert',class:'event-error'}),note=h('textarea',{id:'event-note',rows:2});note.value=existing?.comments||'';
+    let attr,slots,reef,renumber,originalType;
+    const tl=()=>idxTl((clock(time.value)-A.raw.t0)/1000);
+    function fields(){
+      const k=type.value,ctx=context(ev.events,tl(),existing?.id),original=existing?.type===k;
+      dynamic.replaceChildren();error.textContent='';slots=null;renumber=null;originalType=k;
+      const val=original?existing.attr:k==='RaceStartGun'?String(ctx.maxRace+1):k==='RaceMark'?String(ctx.mark+1):k==='RaceFinish'?(ctx.race||''):['DayStart','DayStop'].includes(k)?'0':'';
+      attr=h('input',{id:'event-attribute',value:val});
+      if(k==='SailsUp'){
+        const parts=(original?existing.attr:ctx.sails).split(';'),m=(parts[0]||'').match(/^(.*?)\((\d+)\)$/);
+        reef=h('input',{id:'event-reef',type:'number',min:0,step:1,value:m?.[2]||'0'});if(m)parts[0]=m[1];
+        const names=['Grootzeil','Voorzeil','Stagzeil','Gennaker'];
+        slots=names.map((name,i)=>{
+          const id='event-slot-'+i,options=new Set(ev.events.filter(e=>e.type==='SailsUp').map(e=>e.attr.split(';')[i]?.replace(/\(\d+\)$/,'')).filter(Boolean));
+          const types=[/main|groot/i,/jib|head|genoa|fok/i,/stay|stag/i,/spin|genn|asym|sym/i];
+          for(const sail of [...(WF.session.profile.sails||[]),...(ev.sails||[])])if(types[i].test(sail.type))options.add(sail.name);
+          const input=h('input',{id,list:id+'-list',value:parts[i]||'',placeholder:'Geen'});
+          dynamic.append(field(name,input),h('datalist',{id:id+'-list'},[...options].map(v=>h('option',{value:v}))));return input;
+        });
+        dynamic.append(field('Rif',reef));
+      }else if(['RaceStartGun','RaceFinish','RaceMark','ManualEntry'].includes(k)||!labels[k]||original&&val){
+        dynamic.append(field(k==='RaceMark'?'Boeinummer':k.startsWith('Race')?'Racenummer':k==='ManualEntry'?'Waarden, bv. Mast_Base=53;Helm=Jelle':'Waarde',attr));
+      }
+      if(k==='RaceMark'&&!existing){
+        const later=ev.events.filter(e=>e.tl>=tl());
+        const nextBoundary=later.findIndex(e=>['RaceStartGun','RaceFinish','DayStop'].includes(e.type));
+        const marks=(nextBoundary<0?later:later.slice(0,nextBoundary)).filter(e=>e.type==='RaceMark');
+        if(marks.length){
+          renumber=h('input',{type:'checkbox',checked:true});
+          dynamic.append(field('Volgende '+marks.length+' boeironding(en) doornummeren',renumber));
+        }
+      }
+    }
+    fields(); time.onchange=()=>{if(!existing&&['RaceStartGun','RaceMark','RaceFinish','SailsUp'].includes(type.value))fields();};
+    function save(){try{
+      const t=clock(time.value),k=originalType;
+      if(!fin(t)||((!existing||t!==logTime(existing))&&(t<iT(0)||t>iT(A.raw.n))))throw Error('Kies een tijdstip binnen het log.');
+      let value=attr.value.trim();
+      if(slots){const parts=slots.map(x=>x.value.trim());if(parts.some(x=>x.includes(';')))throw Error('Gebruik één zeilnaam per veld.');
+        const n=reef.valueAsNumber;if(!Number.isInteger(n)||n<0||(n&&!parts[0]))throw Error('Kies een grootzeil en een geldig rifnummer.');
+        if(n)parts[0]+='('+n+')';value=parts.join(';');}
+      if(k.startsWith('Race')&&(!/^\d+$/.test(value)||+value<=0||+value>32767))throw Error('Kies een geldig positief nummer.');
+      if(k==='ManualEntry'&&value.split(';').some(p=>!/^\s*[^=;]+\s*=\s*[^=;]+\s*$/.test(p)||!p.split('=')[1]?.trim()))throw Error('Gebruik naam=waarde, gescheiden door puntkomma’s.');
+      if(k==='MiscEvent'&&!note.value.trim()&&!value)throw Error('Schrijf een korte notitie.');
+      const item={...existing,id:existing?.id||SL.uid(),tl:tl(),type:k,attr:value,comments:note.value};
+      let next=existing?ev.events.map(e=>e===existing?item:e):[...ev.events,item];
+      if(renumber?.checked){
+        next=next.sort((a,b)=>a.tl-b.tl);let active=false,n=+value;
+        next=next.map(e=>{
+          if(e===item)active=true;
+          else if(['RaceStartGun','RaceFinish','DayStop'].includes(e.type))active=false;
+          else if(active&&e.type==='RaceMark')return {...e,attr:String(++n)};
+          return e;
+        });
+      }
+      commit(next);
+    }catch(e){error.textContent=e.message;}}
+    const body=h('div',{class:'desk-form'},bar(field('Tijdstip',time),field('Eventtype',type)),dynamic,field('Toelichting',note),error,
+      bar(button(existing?'Event bijwerken':'Event toevoegen',save,{class:'primary'}),existing?button('Verwijder event',()=>{try{commit(ev.events.filter(x=>x!==existing));}catch(e){error.textContent=e.message;}}):null));
+    PrepDesk.dialog(existing?'Event bewerken':'Event bij de cursor',body);
+  }
+  function interval(ev){
+    const r=WF.session.selections.analysis;
+    if(!r)return banner('Sleep eerst een tijdvak in de tijdgrafiek, of gebruik Tijdvak.');
+    const err=h('p',{role:'alert'}),body=h('div',{},h('p',{},dstr(r.start)+' – '+tstr(r.end)),err);
+    for(const [label,a,b]of [['Race','RaceStartGun','RaceFinish'],['Training','StartTesting','StopTesting'],['Motor','MotorStart','MotorStop']])body.append(button('Markeer '+label,()=>{
+      try{const n=String(context(ev.events,Infinity).maxRace+1),event=(t,type)=>({id:SL.uid(),type,tl:idxTl((t-A.raw.t0)/1000),attr:label==='Race'?n:'',comments:''});commit([event(r.end,b),...ev.events,event(r.start,a)]);}catch(e){err.textContent=e.message;}
+    }));PrepDesk.dialog('Events voor tijdvak',body);
+  }
+  function render(){
+    const c=pane('events');if(!A.D)return;
+    const ev=evEnsure();for(const e of ev.events)e.id||=SL.uid();
+    const {side,toolbar}=PrepDesk.mount(c,'Events · '+ev.events.length,{addEvent:()=>editor(ev)});
+    toolbar.append(button('+ Event',()=>editor(ev),{class:'primary',title:'Event bij de cursor (E)'}));
+    side.append(bar(...['RaceStartGun','RaceMark','RaceFinish','SailsUp'].map(k=>button(labels[k],()=>editor(ev,k))),button('Tijdvak markeren',()=>interval(ev))));
+    const rows=ev.events.map(e=>{const t=logTime(e),pick=()=>{A.cur=Math.max(A.D.i0,Math.min(A.D.i1-1,Math.round((t-A.raw.t0)/1000)));if(WF.session.viewport&&(A.cur<WF.session.viewport[0]||A.cur>=WF.session.viewport[1]))WF.session.viewport=null;WF.session.deskEvent=e.id;show('events');};
+      const row=[button(tstr(t),pick,{title:dstr(t)}),labels[e.type]||e.type,e.type==='SailsUp'?e.attr.split(';').filter(Boolean).join(' / ')||'Geen':e.attr&&e.attr!=='0'?e.attr:e.comments,button('Bewerk',()=>editor(ev,e.type,e))];
+      row._attrs={'aria-selected':WF.session.deskEvent===e.id,title:e.comments||'',onclick:x=>{if(!x.target.closest('button'))pick();}};return row;});
+    side.append(table(['Tijd','Event','Waarde',''],rows));
+    if(!rows.length)side.append(h('p',{class:'muted'},'Klik op de track of tijdgrafiek en voeg het eerste event toe.'));
+    const extra=h('details',{},h('summary',{},'Manoeuvre handmatig plaatsen'));side.append(extra);RaceTools.turnControls(extra);
+    side.append(bar(button('Events exporteren',()=>dl('SailLens-events.ev.xml',SL.eventsXml(ev))),button('Ongedaan maken',()=>{const undo=WF.session.eventUndo,previous=undo.pop();try{commit(previous,false);}catch(e){undo.push(previous);banner(e.message,true);}},{disabled:!WF.session.eventUndo?.length})),button('Verder naar fases',()=>show('review'),{class:'primary'}));
+  }
+  return {render,context};
 })();
 
 </script>

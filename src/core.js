@@ -120,8 +120,8 @@ function parseLog(text, nativeWindow) {
 }
 
 /* ---------- event file ---------- */
-const xdec = s => s.replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCharCode(parseInt(h, 16))).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
-function attrs(s) { const o = {}; s.replace(/([\w:]+)\s*=\s*"([^"]*)"/g, (m, k, v) => { o[k] = xdec(v); }); return o; }
+const xdec = s => s.replace(/&#(\d+);/g, (m, d) => String.fromCharCode(+d)).replace(/&#x([0-9a-f]+);/gi, (m, h) => String.fromCharCode(parseInt(h, 16))).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+function attrs(s) { const o = Object.create(null); s.replace(/([\w.:-]+)\s*=\s*"([^"]*)"/g, (m, k, v) => { o[k] = xdec(v); }); return o; }
 function parseEvents(text) {
   const out = { meta: {}, evOff: 0, logOff: 0, events: [] };
   if (/<\w+/.test(text.slice(0, 2000))) {
@@ -130,14 +130,14 @@ function parseEvents(text) {
     let m = text.match(/<event_file\s+hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; else { m = text.match(/<events\s+utc_offset_hours="(-?[\d.]+)"/); if (m) out.evOff = +m[1]; }
     m = text.match(/<log_file\s+hours="(-?[\d.]+)"/); if (m) out.logOff = +m[1];
     const blk = (text.match(/<events[\s\S]*?<\/events>/) || [text])[0];
-    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t + (utcTime(ts) ? out.evOff * 36e5 : 0), type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '' }); });
+    blk.replace(/<event\s+([^>]*?)\/?>/g, (mm, a) => { const o = attrs(a); const ts = o.datetime || ((o.date || '') + ' ' + (o.time || '')); const t = parseTime(ts); if (fin(t) && o.type) out.events.push({ tl: t + (utcTime(ts) ? out.evOff * 36e5 : 0), type: o.type, attr: o.attribute || o.attr || '', comments: o.comments || '', xmlAttrs: Object.fromEntries(Object.entries(o).filter(([k])=>!['date','time','datetime','type','attribute','attr','comments'].includes(k))) }); });
   } else {
     for (const p of csvRows(text)) { if (p.length < 2) continue; const t = parseTime(p[0]); if (fin(t)) out.events.push({ tl: t, type: p[1].trim(), attr: (p[2] || '').trim(), comments: (p[3] || '').trim() }); }
   }
   out.events.sort((a, b) => a.tl - b.tl);
   return out;
 }
-function sailLabel(attr) { const p = attr.split(';').map(s => s.trim()); const hs = [p[3], p[1], p[2]].filter(Boolean); return hs.length ? hs.join('/') : (p[0] ? p[0] + ' only' : 'None'); }
+function sailLabel(attr) { const p = attr.split(';').map(s => s.trim()); const hs = [p[3], p[1], p[2]].filter(Boolean); return hs.length ? (/\(\d+\)$/.test(p[0]) ? p[0]+'/' : '') + hs.join('/') : (p[0] ? p[0] + ' only' : 'None'); }
 
 /* ---------- polar ---------- */
 function parsePolar(text) {
@@ -192,27 +192,31 @@ function validateConfig(cfg) {
 }
 
 function applyEvents(raw, ev, cfg) {
-  const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), motor: new Uint8Array(n), sailNames: [], list: [], manual: {}, dayStart: null, dayStop: null };
+  const n = raw.n, L = { sail: new Int16Array(n).fill(-1), race: new Int16Array(n), leg: new Int16Array(n), testing: new Uint8Array(n), motor: new Uint8Array(n), sailNames: [], list: [], manual: Object.create(null), dayStart: null, dayStop: null };
   if (!ev || !cfg.useEvents) return L;
   const toI = tl => Math.round((tl - cfg.evOff * 36e5 + logOffset(raw, cfg) * 36e5 + (cfg.evShiftSec || 0) * 1000 - raw.t0) / 1000);
   const E = ev.events.map(e => ({ ...e, i: toI(e.tl) })).sort((a,b)=>a.i-b.i);
   L.list = E;
   const fill = (arr, a, b, v) => { a = Math.max(0, a); b = Math.min(n, b); for (let i = a; i < b; i++) arr[i] = v; };
+  L.sailState = new Int32Array(n).fill(-1); L.sailConfigs = []; L.sailSlots = [];
   const sails = E.filter(e => e.type === 'SailsUp');
-  sails.forEach((e, k) => { const lab = sailLabel(e.attr); let id = L.sailNames.indexOf(lab); if (id < 0) id = L.sailNames.push(lab) - 1; e.label = lab; fill(L.sail, e.i, k + 1 < sails.length ? sails[k + 1].i : n, id); });
-  let race = 0, leg = 0, rs = -1;
+  sails.forEach((e, k) => { let state=L.sailConfigs.indexOf(e.attr);
+    if(state<0){state=L.sailConfigs.push(e.attr)-1;L.sailSlots.push(e.attr.split(';').map(x=>x.trim()).filter(Boolean));}
+    fill(L.sailState,e.i,sails[k+1]?.i??n,state);
+    const lab = sailLabel(e.attr); let id = L.sailNames.indexOf(lab); if (id < 0) id = L.sailNames.push(lab) - 1; e.label = lab; fill(L.sail, e.i, k + 1 < sails.length ? sails[k + 1].i : n, id); });
+  let race = 0, leg = 0, rs = null;
   for (const e of E) {
-    if (e.type === 'RaceStartGun') { if(rs>=0){fill(L.race,rs,e.i,race);fill(L.leg,rs,e.i,leg);} race = +e.attr || race + 1; leg = 1; rs = e.i; e.label = 'Start R' + race; }
-    else if (e.type === 'RaceMark' && rs >= 0) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); leg++; rs = e.i; e.label = 'M' + (e.attr || leg - 1); }
-    else if ((e.type === 'RaceFinish' || e.type === 'DayStop') && rs >= 0) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); rs = -1; e.label = e.type === 'RaceFinish' ? 'Finish R' + race : ''; }
+    if (e.type === 'RaceStartGun') { if(rs!==null){fill(L.race,rs,e.i,race);fill(L.leg,rs,e.i,leg);} race = +e.attr || race + 1; leg = 1; rs = e.i; e.label = 'Start R' + race; }
+    else if (e.type === 'RaceMark' && rs !== null) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); leg++; rs = e.i; e.label = 'M' + (e.attr || leg - 1); }
+    else if ((e.type === 'RaceFinish' || e.type === 'DayStop') && rs !== null) { fill(L.race, rs, e.i, race); fill(L.leg, rs, e.i, leg); rs = null; e.label = e.type === 'RaceFinish' ? 'Finish R' + race : ''; }
     else if (e.type === 'DayStart') L.dayStart = e.i; if (e.type === 'DayStop') L.dayStop = e.i;
   }
-  if (rs >= 0) { fill(L.race, rs, n, race); fill(L.leg, rs, n, leg); }
-  let ts = -1; for (const e of E) { if (e.type === 'StartTesting') ts = e.i; else if (e.type === 'StopTesting' && ts >= 0) { fill(L.testing, ts, e.i, 1); ts = -1; } }
-  if (ts >= 0) fill(L.testing, ts, n, 1);
-  let motorStart=-1; for(const e of E){if(e.type==='MotorStart')motorStart=e.i;else if(e.type==='MotorStop'&&motorStart>=0){fill(L.motor,motorStart,e.i,1);motorStart=-1;}} if(motorStart>=0)fill(L.motor,motorStart,n,1);
+  if (rs !== null) { fill(L.race, rs, n, race); fill(L.leg, rs, n, leg); }
+  let ts = null; for (const e of E) { if (e.type === 'StartTesting') ts = e.i; else if (e.type === 'StopTesting' && ts !== null) { fill(L.testing, ts, e.i, 1); ts = null; } }
+  if (ts !== null) fill(L.testing, ts, n, 1);
+  let motorStart=null; for(const e of E){if(e.type==='MotorStart')motorStart=e.i;else if(e.type==='MotorStop'&&motorStart!==null){fill(L.motor,motorStart,e.i,1);motorStart=null;}} if(motorStart!==null)fill(L.motor,motorStart,n,1);
   const man = E.filter(e => e.type === 'ManualEntry');
-  man.forEach(e => e.attr.split(';').forEach(kv => { const [k, v] = kv.split('='); if (!k || !fin(+v)) return; const key = k.trim(); if (!L.manual[key]) L.manual[key] = new Float64Array(n).fill(NaN); fill(L.manual[key], e.i, n, +v); }));
+  man.forEach(e => e.attr.split(';').forEach(kv => { const [k, v] = kv.split('='); if (!k || !v?.trim() || !fin(+v)) return; const key = k.trim(); if (!L.manual[key]) L.manual[key] = new Float64Array(n).fill(NaN); fill(L.manual[key], e.i, n, +v); }));
   return L;
 }
 
@@ -359,9 +363,9 @@ function process(raw, opt) {
   const bad = new Uint8Array(n + 1);
   for (let i = i0; i < i1; i++) if (!(BSP[i] >= cfg.minBsp) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i] < 0 || (cfg.racingOnly && !L.race[i])) bad[i] = 1;
   for (const m of mans) for (let k = Math.max(i0, m.i - cfg.manBefore); k < Math.min(i1, m.i + cfg.manAfter); k++) bad[k] = 1;
-  for (let i = i0 + 1; i < i1; i++) if (L.sail[i] !== L.sail[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
+  for (let i = i0 + 1; i < i1; i++) if (L.sailState?.[i] !== L.sailState?.[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
   for (let i = i0 + 1; i < i1; i++) if (L.race[i] !== L.race[i - 1] || L.leg[i] !== L.leg[i - 1] || L.testing[i] !== L.testing[i - 1] || mode[i] !== mode[i - 1] || tack[i] !== tack[i - 1]) bad[i] = 1;
-  const cs = new Int32Array(n + 1); for (let i = 0; i < n; i++) cs[i + 1] = cs[i] + bad[i];
+  const cs = new Int32Array(n + 1);
   const formulaDiagnostics = opt.formulas?.length ? SL.evaluateFormulas(ch, opt.originalChannels || raw.ch, opt.formulas, n) : [];
   for (const q of formulaDiagnostics) if (q.missing.length) warn.push(q.name + ': ontbrekende kanalen ' + q.missing.join(', '));
   const formulaAngles = new Set((opt.formulas || []).filter(d => d.type === 'angle').map(d => d.name));
@@ -372,7 +376,9 @@ function process(raw, opt) {
   for (let i = i0; !opt.skipPhases && i + PL <= i1;) {
     if (cs[i + PL] - cs[i] > 0) { phaseDiagnostics.masked++; i += 3; continue; }
     const tw = TWA.subarray(i, i + PL);
-    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1] || (fin(cfg.sdHdg) && ch.HDG && sd(Array.from(ch.HDG.subarray(i,i+PL),x=>w180(x-cmean(ch.HDG.subarray(i,i+PL)))))>cfg.sdHdg)) { phaseDiagnostics.stability++; i += 5; continue; }
+    const headings=fin(cfg.sdHdg)&&ch.HDG?ch.HDG.subarray(i,i+PL):null;
+    const headingMean=headings?cmean(headings):NaN;
+    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1] || (headings && sd(Array.from(headings,x=>w180(x-headingMean)))>cfg.sdHdg)) { phaseDiagnostics.stability++; i += 5; continue; }
     const v = {}; for (const k of names) v[k] = (ANG.test(k) || formulaAngles.has(k) ? cmean : mean)(ch[k].subarray(i, i + PL));
     if ((fin(v['BSPpol%']) && (v['BSPpol%'] < cfg.polMin || v['BSPpol%'] > cfg.polMax)) || v.absTWA < 28) { phaseDiagnostics.target++; i += 5; continue; }
     if (fin(v.Cur_E) && fin(v.Cur_N)) { v.CUR_RATE = Math.hypot(v.Cur_E, v.Cur_N); v.CUR_DIR = w360(Math.atan2(v.Cur_E, v.Cur_N) * R2D); }
@@ -564,6 +570,6 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;

@@ -52,14 +52,14 @@ const RaceTools = (() => {
   function pairMetrics(a,b){
     return [Math.abs(b.v.AWA)-Math.abs(a.v.AWA),Math.abs(b.v.TWA)-Math.abs(a.v.TWA),SL.w180(b.v.TWD-a.v.TWD)];
   }
-  function review(c,pair,check){
+  function review(c,pair,check,compact=false){
     const D=A.D,s=WF.session;
     const panel=card('Vensters rond het draaipunt',h('p',{},'Sleep een vensterrand in een grafiek om het begin of einde te verplaatsen. Blauw is vóór de manoeuvre, groen is erna.'));
     c.append(panel);
     const center=(pair.anchor-D.raw.t0)/1000;
     const lo=Math.max(D.i0,Math.min(center-120,(pair.before.start-D.raw.t0)/1000-5));
     const hi=Math.min(D.i1,Math.max(center+120,(pair.after.end-D.raw.t0)/1000+5));
-    for(const k of ['BSP','AWA','TWD','Heel']){
+    for(const k of (compact?[]:['BSP','AWA','TWD','Heel'])){
       const values=D.ch[k];if(!values)continue;
       const cv=h('canvas',{'aria-label':k+' rond manoeuvre',style:'touch-action:none'});
       panel.append(cv);

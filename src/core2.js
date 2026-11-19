@@ -142,18 +142,30 @@ const p2 = n => String(n).padStart(2, '0');
 const tsParts = tl => { const d = new Date(tl); return [d.getUTCFullYear() + '-' + p2(d.getUTCMonth() + 1) + '-' + p2(d.getUTCDate()), p2(d.getUTCHours()) + ':' + p2(d.getUTCMinutes()) + ':' + p2(d.getUTCSeconds())]; };
 function eventsXml(ev) {
   const off = ev.evOff || 0, m = ev.meta || {};
-  const evs = ev.events.slice().sort((a, b) => a.tl - b.tl).map(e => { const [d, t] = tsParts(e.tl); return `    <event date="${d}" time="${t}" type="${xesc(e.type)}" attribute="${xesc(e.attr)}" comments="${xesc(e.comments)}" labelalign="Top" />`; }).join('\r\n');
+  const evs = ev.events.slice().sort((a, b) => a.tl - b.tl).map(e => { const [d, t] = tsParts(e.tl); return `    <event date="${d}" time="${t}" type="${xesc(e.type)}" attribute="${xesc(e.attr)}" comments="${xesc(e.comments)}" ${Object.entries({labelalign:'Top',...e.xmlAttrs}).filter(([k])=>/^[A-Za-z_][\w.:-]*$/.test(k)&&!['date','time','datetime','type','attribute','attr','comments'].includes(k)).map(([k,v])=>k+'="'+xesc(v)+'"').join(' ')} />`; }).join('\r\n');
   const block = `<events utc_offset_hours="${off}">\r\n${evs}\r\n  </events>`;
-  const sails = `<saillist>\r\n${(ev.sails || []).map(s => `    <item name="${xesc(s.name)}" sailtype="${xesc(s.type)}" sailgroup="${s.type === 'Mainsail' ? 'M' : 'H'}" weight="0" />`).join('\r\n')}\r\n  </saillist>`;
+  const sailItem = s => {
+    const a={...s.xmlAttrs,name:s.name,sailtype:s.type,sailgroup:s.xmlAttrs?.sailgroup||(s.type==='Mainsail'?'M':'H'),weight:s.xmlAttrs?.weight??'0'};
+    return '    <item '+Object.entries(a).filter(([k])=>/^[A-Za-z_][\w.:-]*$/.test(k)).map(([k,v])=>k+'="'+xesc(v)+'"').join(' ')+' />';
+  };
+  const sails = '<saillist>\r\n'+(ev.sails||[]).map(sailItem).join('\r\n')+'\r\n  </saillist>';
   if (ev.xml && /<events[\s\S]*?<\/events>/.test(ev.xml)) { // keep everything RaceReplay wrote, replace only what was edited here
-    let x = ev.xml.replace(/<events[\s\S]*?<\/events>/, block); if (/<saillist[\s\S]*?<\/saillist>/.test(x)) x = x.replace(/<saillist[\s\S]*?<\/saillist>/, sails);
-    const setv = (tag, v) => { if (v != null) x = x.replace(new RegExp('<' + tag + '\\s+val="[^"]*"'), '<' + tag + ' val="' + xesc(v) + '"'); };
+    let x = ev.xml.replace(/<events\b[^>]*>[\s\S]*?<\/events>/, () => block);
+    const nativeNames=new Set(parseSailList(x).map(v=>v.name));
+    const added=(ev.sails||[]).filter(v=>!nativeNames.has(v.name));
+    if(added.length){
+      if(/<\/saillist>/.test(x))x=x.replace('</saillist>',()=>added.map(sailItem).join('\r\n')+'\r\n  </saillist>');
+      else if(/<saillist\s*\/>/.test(x))x=x.replace(/<saillist\s*\/>/,()=>sails);
+      else x=x.replace('<events',()=>sails+'\r\n  <events');
+    }
+    for(const [tag,value] of [['event_file',off],['log_file',ev.logOff||0]]) x=x.replace(new RegExp('(<'+tag+'\\b[^>]*?hours=")[^"]*(")'),(_,a,b)=>a+value+b);
+    const setv = (tag,v) => {if(v!=null)x=x.replace(new RegExp('<'+tag+'\\s+val="[^"]*"'),()=>'<'+tag+' val="'+xesc(v)+'"');};
     setv('boat', m.boat); setv('boatdaydescription', m.desc); setv('location', m.location); setv('daygoals', m.goals); setv('daycomments', m.comments); return x;
   }
   const date = m.date || (ev.events[0] ? tsParts(ev.events[0].tl)[0] : '');
   return `<?xml version="1.0" encoding="utf-8"?>\r\n<daysail>\r\n  <boat val="${xesc(m.boat)}" />\r\n  <confignum val="0" />\r\n  <date val="${date}" />\r\n  <boatdaydescription val="${xesc(m.desc)}" />\r\n  <location val="${xesc(m.location)}" />\r\n  <daytypestr val="${xesc(m.daytype)}" />\r\n  <utc_offset>\r\n    <event_file hours="${off}" />\r\n    <log_file hours="${ev.logOff || 0}" />\r\n  </utc_offset>\r\n  <dailycomments>\r\n    <boatname val="${xesc(m.boat)}" />\r\n    <date val="${date}" />\r\n    <daygoals val="${xesc(m.goals)}" />\r\n    <daycomments val="${xesc(m.comments)}" />\r\n  </dailycomments>\r\n  ${sails}\r\n  ${block}\r\n</daysail>\r\n`;
 }
-function parseSailList(xml) { const out = []; const blk = (xml.match(/<saillist[\s\S]*?<\/saillist>/) || [''])[0]; blk.replace(/<item\s+([^>]*?)\/?>/g, (m, a) => { const o = {}; a.replace(/(\w+)="([^"]*)"/g, (mm, k, v) => { o[k] = v; }); if (o.name) out.push({ name: o.name, type: o.sailtype || 'Jib' }); }); return out; }
+function parseSailList(xml) { const out = []; const blk = (xml.match(/<saillist[\s\S]*?<\/saillist>/) || [''])[0]; blk.replace(/<item\s+([^>]*?)\/?>/g, (m, a) => { const o=SL.attrs(a);if(o.name)out.push({name:o.name,type:o.sailtype||'Jib',xmlAttrs:o}); }); return out; }
 /* places where the boat goes from upwind to downwind or back: candidates for race marks */
 function suggestMarks(D) {
   const out = [], a = D.ch.absTWA, W = 25; let prev = 0, since = 0;
