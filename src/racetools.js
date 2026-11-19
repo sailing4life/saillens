@@ -12,7 +12,7 @@ const RaceTools = (() => {
         const range={start,end:start+length};
         const check=SL.inspectPair(D,{...base,[side]:range},rules);
         const w=check[side],prefix=side==='before'?'Vóór:':'Na:';
-        if(!w||!['BSP','TWA','TWS'].every(k=>w.coverage[k]>=.95)||check.errors.some(e=>e.startsWith(prefix)))continue;
+        if(!w||w.race!==D.L.race[m.i]||!['BSP','TWA','TWS'].every(k=>w.coverage[k]>=.95)||check.errors.some(e=>e.startsWith(prefix)))continue;
         if(D.mans.some(other=>other!==m && time(D,other.i)>Math.min(start,base.anchor)&&time(D,other.i)<Math.max(range.end,base.anchor)))continue;
         candidates.push({range,w});
       }
@@ -88,7 +88,7 @@ const RaceTools = (() => {
     if(check.before&&check.after)panel.append(table(['Δ |AWA|','Δ |TWA|','TWD-sprong na − vóór'],[pairMetrics(check.before,check.after).map(x=>f1(x,2)+'°')]));
     panel.append(action(pair.validation?'Vrijgeven voor model':'Apart houden voor controle',()=>{
       if(!pair.validation&&!check.valid)return banner('Kies eerst twee bruikbare vensters.',true);
-      pair.validation=!pair.validation;pair.approved=pair.validation;WF.touch();show('pairreview');
+      pair.validation=!pair.validation;pair.approved=pair.validation;pair.rejected=false;WF.touch();show('pairreview');
     }));
     nativePanel(panel,D,center);
   }

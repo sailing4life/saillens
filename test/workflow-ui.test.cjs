@@ -208,3 +208,69 @@ test('late RaceLogger import maps clock, full sail state and race boundaries to 
   assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });
+
+test('race-only manoeuvre queue rejects in one click, restores decision, and handles an empty selection',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');a.run("show('pairreview')");a.$('#pair-racing').click();
+  const keys=a.run("A.D.mans.filter(m=>A.D.L.race[m.i]>0).map(m=>SL.pairKey(A.D,m))");
+  const first=a.run('WF.session.activePairKey'),position=keys.indexOf(first);assert.ok(position>=0);
+  await a.click('Afwijzen & volgende');
+  assert.equal(a.run('WF.session.activePairKey'),keys[position+1]);a.w.firstKey=first;
+  assert.ok(a.run('WF.session.manoeuvrePairs[firstKey].rejected'));assert.equal(a.run('WF.session.manoeuvrePairs[firstKey].approved'),false);
+  await a.click('Besluit herstellen');assert.equal(a.run('WF.session.activePairKey'),first);
+  assert.equal(a.run('!!WF.session.manoeuvrePairs[firstKey].rejected'),false);
+  a.fill('#pair-type','Gybe');assert.ok(a.run("A.D.mans.filter(m=>m.type==='Gybe'&&A.D.L.race[m.i]>0).some(m=>SL.pairKey(A.D,m)===WF.session.activePairKey)"));
+  a.run("A.D.L.race.fill(0);show('pairreview')");assert.match(a.$('#t-pairreview').textContent,/Geen manoeuvres in deze selectie/);a.$('#pair-racing').click();assert.ok(a.$('#pair-reason'));
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});
+test('strip retains fractional timestamps, original peaks and channel mapping across viewport changes',async()=>{
+ const a=await app();try{
+  const traces=a.run(`(()=>{
+    const t=Date.UTC(2026,10,19,12);
+    const csv='Time,Sensor,AWA\\n2026-11-19T12:00:00.040Z,2,-25\\n2026-11-19T12:00:00.080Z,18,-31\\n2026-11-19T12:00:03.100Z,4,28';
+    const session={profile:{channels:[{source:'Sensor',target:'BSP',factor:.5,offset:1}]},sources:[{kind:'log',text:csv,channels:['Sensor','AWA']}]};
+    const read=(a,b)=>Object.fromEntries(PrepDesk.loggedTraces(session,['BSP','AWA','TWD'],t,a,b));
+    return JSON.stringify([read(0,1),read(1,4),SL.parseLog(csv).ch.Sensor[0]]);
+  })()`);
+  const [first,last,mean]=JSON.parse(traces);
+  assert.deepEqual(first.BSP,[[.04,2],[.08,10]]);assert.deepEqual(first.AWA,[[.04,-25],[.08,-31]]);assert.equal(first.TWD,undefined);
+  assert.deepEqual(last.BSP,[[3.1,3]]);assert.equal(mean,10);
+ }finally{a.close();}
+});
+test('wind pair corrections keep the same sign in either direction, cross north and separate gybes and validation',async()=>{
+ const a=await app();try{
+  const result=a.run(`(()=>{
+    const window=(tack,awa,twa,twd,tws)=>({tack,v:{AWA:awa,TWA:twa,TWD:twd,TWS:tws},coverage:{AWA:1,TWD:1,TWS:1}});
+    const p=window('Port',-27,-44,2,12),s=window('Stbd',33,48,358,13);
+    const g=window('Port',-134,-150,352,12),h=window('Stbd',140,150,358,13);
+    const pair=(type,before,after,validation=false)=>({pair:{type,validation},before,after});
+    const missing={...p,coverage:{AWA:0,TWD:0,TWS:1}};
+    return JSON.stringify([SL.windPairEvidence([pair('Tack',p,s),pair('Tack',s,p),pair('Gybe',h,g),pair('Tack',p,s,true),pair('Tack',missing,s)]),
+      SL.addTableResidual([{tws:8,up:1,dn:2},{tws:12,up:3,dn:6}],10,'up',1.5)]);
+  })()`);
+  const [calc,rows]=JSON.parse(result);
+  assert.deepEqual(calc.alignment,[-3,-3]);assert.deepEqual(calc.bands.find(b=>b.mode==='up').errors,[4,4]);assert.deepEqual(calc.bands.find(b=>b.mode==='dn').errors,[-6]);
+  assert.deepEqual(rows[1],{tws:10,up:3.5,dn:4});
+ }finally{a.close();}
+});
+test('paired MHU action recomputes the draft on fixed windows and leaves active calibration alone',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  a.run(`A.raw.ch.AWA=Float64Array.from(A.raw.ch.AWA,v=>v+3);WF.recompute();
+    for(const m of A.D.mans.filter(m=>m.type==='Tack')){
+      const pair=RaceTools.suggest(A.D,m,WF.session);
+      if(!pair.suggested)continue;
+      WF.session.manoeuvrePairs[pair.key]={...pair,approved:true};
+      if(Object.keys(WF.session.manoeuvrePairs).length===5)break;
+    }
+    show('cal');`);
+  const eligible=a.run('SL.windPairEvidence(SL.calibrationReferences(A.D,WF.session).pairs).alignment');
+  assert.ok(eligible.length>=3);
+  const expected=Math.round(a.run('SL.median(SL.windPairEvidence(SL.calibrationReferences(A.D,WF.session).pairs).alignment)')*10)/10;
+  await a.click('MHU-restfout naar voorstel');assert.equal(a.run('WF.session.draft.awaOff'),expected);assert.equal(a.run('A.calib.awaOff'),0);
+  assert.match(a.$('#t-cal').textContent,/Meetwaarden per goedgekeurd paar/);
+  await a.click('Voorstel vergelijken');assert.ok(a.$('#t-cal').textContent.includes('Gelogd · actief · voorstel'));
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});

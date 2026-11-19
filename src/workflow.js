@@ -330,8 +330,67 @@ const WF = (() => {
     if (!Array.isArray(c.twa) || c.twa.length > 100 || c.twa.some(r => !fin(r.tws) || r.tws <= 0 || !fin(r.up) || !fin(r.dn) || Math.abs(r.up) > 90 || Math.abs(r.dn) > 90) || new Set(c.twa.map(r => r.tws)).size !== c.twa.length) throw new Error('Ongeldige TWA-tabel: unieke positieve TWS en eindige correcties nodig.');
     return c;
   }
+  function windReview(c,refs,draft){
+    const live=SL.windPairEvidence(refs.pairs),result=h('div',{'aria-live':'polite'}),message=h('p',{role:'status'});
+    const panel=card('Windkalibratie uit vensterparen',help('Controleer eerst de MHU met aandewindse tacks. Controleer daarna de resterende TWD-sprong per windband, aandewinds en voor de wind. Een echte windshift, asymmetrische trim of kompasfout kan dezelfde sprong geven.'),result,message);
+    c.append(panel);
+    if(!refs.phases.length){
+      result.append(help('Nog geen bruikbare goedgekeurde paren voor de schatting. Kies stabiele vensters vóór en na een tack of gijp. Controleparen tellen alleen mee voor de toets.'),btn('Manoeuvres beoordelen',()=>show('pairreview')));return;
+    }
+    function render(){
+      const cfg=validateCalib(draft);
+      const D=JSON.stringify(cfg)===JSON.stringify(A.calib)?A.D:process(snapshot(),cfg);
+      const pairs=refs.pairs.map(reference=>({pair:reference.pair,reference,before:SL.windowPhase(D,reference.pair.before),after:SL.windowPhase(D,reference.pair.after)}));
+      const proposed=SL.windPairEvidence(pairs);
+      const signature=JSON.stringify(draft);
+      const med=values=>SL.median(values),degrees=v=>fin(v)?f1(v,1)+'°':'—';
+      const summary=(values,factor=1)=>values?.length?degrees(factor*med(values)):'—';
+      const update=fn=>()=>{if(JSON.stringify(draft)!==signature){message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';return;}
+        try{const next=SL.copy(draft);fn(next);session.draft=validateCalib(next);session.preview=false;touch();show('cal');}catch(e){message.textContent=e.message;}};
+      const alignment=med(proposed.alignment);
+      result.replaceChildren(h('h4',{},'1 · AWA en MHU-uitlijning'),table(['Tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[proposed.alignment.length,summary(live.alignment),degrees(alignment)]]),
+        btn('MHU-restfout naar voorstel',update(next=>{next.awaOff=Math.round((next.awaOff+alignment)*10)/10;}),false,{disabled:proposed.alignment.length<3||!fin(alignment)||Math.abs(alignment)<.05}),
+        h('h4',{},'2 · TWA-tabel uit de TWD-sprong'),help('Δ TWD en Δ TWS zijn bakboord min stuurboord. De tabelcorrectie is de helft van de resterende TWD-sprong. Beide kolommen gebruiken de windband van het actieve log.'));
+      if(proposed.bands.length){
+        result.append(table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','TWD P25–P75','Δ TWS voorstel','Extra TWA',''],proposed.bands.map(g=>{
+          const old=live.bands.find(b=>b.band===g.band&&b.mode===g.mode);
+          const residual=med(g.errors)/2,tws=BAND_TWS[g.band];
+          return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.errors.length,summary(old?.errors),summary(g.errors),degrees(SL.quant(g.errors,.25))+' / '+degrees(SL.quant(g.errors,.75)),f1(med(g.speeds),2)+' kn',degrees(residual),
+            btn('Naar tabel bij '+tws+' kn',update(next=>{
+              const rows=next.twa.length?next.twa:BAND_TWS.map(t=>({tws:t,up:0,dn:0}));
+              next.twa=SL.addTableResidual(rows,tws,g.mode,residual);
+            }),false,{disabled:g.errors.length<3||Math.abs(residual)<.05})];
+        })));
+      }else result.append(help('Geen paren met voldoende TWD- en TWS-metingen in deze windbanden.'));
+      const extremes=refs.phases.map(w=>D===A.D?w:SL.windowPhase(D,{start:w.t,end:iT(w.i1)})).filter(w=>w&&(w.mode==='Upwind'&&Math.abs(w.v.TWA)<=60||w.mode==='Downwind'&&Math.abs(w.v.TWA)>=120));
+      const tws=SL.calWind(extremes).twsDn,qualified=tws&&fin(tws.pct)&&tws.pct>-100&&Math.abs(tws.pct)>Math.max(3,2*tws.se);
+      result.append(h('h4',{},'3 · TWS aandewinds en voor de wind'));
+      if(tws){
+        const adjusted=Math.round(1000*((1+(cfg.twsDnPct||0)/100)/(1+tws.pct/100)-1))/10;
+        result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(tws.pct,1)+'% (standaardfout '+f1(tws.se,1)+'%). Vergelijk rakken in dezelfde omstandigheden.'),
+          btn('TWS downwind naar voorstel',update(next=>{next.twsDnPct=adjusted;}),false,{disabled:!qualified}));
+      }else result.append(help('Voor de TWS-vergelijking zijn goedgekeurde aandewindse én voor-de-windse vensters nodig, met dekking op beide boegen. De absolute AWS-schaal vraagt een onafhankelijke referentie.'));
+      if(pairs.length){
+        const rows=pairs.filter(r=>r.before&&r.after).map(({pair,before,after})=>{
+          const [p,s]=before.tack==='Port'?[before.v,after.v]:[after.v,before.v];
+          return [tstr(pair.anchor),pair.type,degrees(p.AWA)+' / '+degrees(s.AWA),degrees(p.TWD)+' / '+degrees(s.TWD),degrees(SL.w180(p.TWD-s.TWD)),btn('Bekijk paar',()=>{
+            session.activePairKey=pair.key;session.pairType='Alle';const i=Math.round((pair.anchor-A.raw.t0)/1000);
+            if(!A.D.L.race[i])session.pairRaceOnly=false;
+            A.cur=i;session.viewport=[Math.max(A.D.i0,i-150),Math.min(A.D.i1,i+150)];session.selections.analysis=null;show('pairreview');
+          })];
+        });
+        result.append(h('details',{},h('summary',{},'Meetwaarden per goedgekeurd paar'),table(['Tijd','Type','AWA BB / SB','TWD BB / SB','Δ TWD',''],rows)));
+      }
+      result.append(help('De hoekcorrecties zijn medianen. Overnemen kan vanaf drie bruikbare paren per hoekschatting. Na een wijziging rekent SailLens de restfout op het voorstel opnieuw uit. Met Voorstel toepassen maak je de correcties actief.'));
+    }
+    const recalc=()=>{try{render();message.textContent='';}catch(e){result.replaceChildren();message.textContent=e.message;}};
+    panel.insertBefore(btn('Bereken restfout opnieuw',recalc),result);recalc();
+    c.addEventListener('input',e=>{if(e.target.id.startsWith('draft-')||e.target.matches('[aria-label^="TWA "]'))message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';},{signal:windListeners.signal});
+  }
+  let windListeners;
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
+    windListeners?.abort();windListeners=new AbortController();
     const refs=SL.calibrationReferences(A.D,session), ps = refs.phases, draft = session.draft ||= SL.copy(A.calib || SL.CAL0);
     const approvedMans = A.D.mans.filter(m => SL.allowed(SL.reviewed(A.D, m, 'manoeuvre', session.reviews), 'calibration'));
     const pairAllowed = (a, b) => approvedMans.some(m => iT(m.i) > a.t && iT(m.i) < b.t);
@@ -339,12 +398,19 @@ const WF = (() => {
     c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Controleer. Vergelijk. Pas toe.'), help(`${ps.length} goedgekeurde fases · ${refs.pairs.length} goedgekeurde vensterparen. Alle correcties zijn ten opzichte van het oorspronkelijke log.`)), btn('Sessie opslaan & analyseren', safe(()=>STUDIO.publish()), true)));
     if (!ps.length) c.append(notice('Keur eerst stabiele fases goed bij Beoordelen. Je kunt al een handmatig voorstel bekijken; de modellen wachten op referenties.'), btn('Referenties beoordelen', () => show('review')));
     if (session.calibrationChanged) c.append(notice('De instrumentkalibratie is tijdens deze sessie gewijzigd. Eén correctie voor de hele sessie is dan niet betrouwbaar. Maak aparte sessies met een constant instrumentprofiel; toepassen is hier geblokkeerd.'));
+    windReview(c,refs,draft);
     const form = h('div', { class: 'form' });
     for (const [k, label, step] of [['bspK', 'BSP factor ×', .001], ['hdgOff', 'Heading offset °', .1], ['awaOff', 'AWA / MHU offset °', .1], ['awsK', 'AWS factor ×', .001], ['twsDnPct', 'TWS downwind %', .1], ['leewayGain', 'Leeway factor ×', .05], ['heelOff', 'Heel offset °', .1], ['rudOff', 'Rudder offset °', .1]]) form.append(field(label, h('input', { id: 'draft-' + k, type: 'number', step, value: draft[k], oninput: e => { draft[k] = +e.target.value; session.preview = false; touch(); } })));
     const cell = (r, key) => h('input', { type: 'number', step: .1, value: r[key], 'aria-label': 'TWA ' + key + ' bij ' + r.tws, oninput: e => { r[key] = +e.target.value; session.preview = false; touch(); } });
     c.append(card('Voorstel — nog niet actief', form, h('h4', {}, 'TWA-correctie per windsnelheid'), table(['TWS kn', 'Upwind °', 'Downwind °', ''], draft.twa.map((r, i) => [cell(r, 'tws'), cell(r, 'up'), cell(r, 'dn'), btn('Verwijder', () => { draft.twa.splice(i, 1); session.preview = false; show('cal'); })])),
       bar(btn('TWA-rij toevoegen', () => { draft.twa.push({ tws: (draft.twa.at(-1)?.tws || 4) + 2, up: 0, dn: 0 }); show('cal'); }),
-        btn('Modelsuggesties naar voorstel', () => { const active = A.calib; try { A.calib = SL.copy(active || SL.CAL0); const found = calibSuggest(model); session.draft = SL.copy(A.calib); session.preview = false; show('cal'); banner(found.length ? found.join(' · ') : 'Geen voldoende onderbouwde correctie gevonden.'); } finally { A.calib = active; } }),
+        btn('Modelsuggesties naar voorstel', () => {
+          const proposed=SL.copy(A.calib||SL.CAL0);
+          if(!proposed.twa?.length)proposed.twa=BAND_TWS.map(tws=>({tws,up:0,dn:0}));
+          const found=calibSuggest(model,proposed);
+          if(found.length){session.draft=proposed;session.preview=false;touch();show('cal');}
+          banner(found.length?found.join(' · '):'Geen voldoende onderbouwde correctie gevonden.');
+        }),
         btn('Voorstel vergelijken', safe(() => { validateCalib(draft); session.preview = true; show('cal'); }), true),
         btn('Voorstel toepassen', safe(() => applyCalibration(draft)), false, { disabled: session.calibrationChanged }),
         btn('Voorstel wissen', () => { session.draft = SL.copy(SL.CAL0); session.preview = false; show('cal'); })),

@@ -75,8 +75,8 @@ R.sails = () => {
 /* ---------------- Calibration file ---------------- */
 const BAND_TWS = [6, 8, 10, 12.5, 16, 20];
 function calibEnsure() { if (!A.calib) A.calib = { app: 'SailLens', type: 'calibration', name: '', ...SL.CAL0, twa: BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })) }; if (!A.calib.twa || !A.calib.twa.length) A.calib.twa = BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })); return A.calib; }
-function calibSuggest(r) { // add what the models found on top of what is already applied
-  const cb = calibEnsure(), done = [], r1 = v => Math.round(v * 10) / 10;
+function calibSuggest(r, cb=calibEnsure()) { // add what the models found on top of what is already applied
+  const done = [], r1 = v => Math.round(v * 10) / 10;
   if (!r.bsp.err) { if ((r.bsp.kLo > 1 || r.bsp.kHi < 1) && Math.abs(r.bsp.k - 1) > 0.007) { cb.bspK = Math.round(cb.bspK * r.bsp.k * 1000) / 1000; done.push('BSP factor ' + cb.bspK); } if ((r.bsp.dLo > 0 || r.bsp.dHi < 0) && Math.abs(r.bsp.delta) > 1) { cb.hdgOff = r1(cb.hdgOff + r.bsp.delta); done.push('heading ' + cb.hdgOff + '°'); } }
   if (r.cur && !r.cur.err && r.cur.hasLee && (r.cur.lLo > 1 || r.cur.lHi < 1) && Math.abs(r.cur.lam - 1) > 0.15) { cb.leewayGain = Math.round((cb.leewayGain ?? 1) * r.cur.lam * 100) / 100; done.push('leeway ×' + cb.leewayGain); }
   if (!r.awa.err && Math.abs(r.awa.read) > 0.5 && Math.abs(r.awa.read) > 2 * r.awa.se) { cb.awaOff = r1(cb.awaOff - r.awa.read); done.push('AWA ' + cb.awaOff + '°'); }

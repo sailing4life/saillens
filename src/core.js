@@ -69,19 +69,27 @@ function parseLog(text, nativeWindow) {
     }
   }
   if(nativeWindow){
-    const points=[];
+    const points=[],series=nativeWindow.channels?new Map(nativeWindow.channels.map(k=>[k,[]])):null;
     for(const row of records()){
       if(!fin(row.t)||row.t<nativeWindow.start||row.t>=nativeWindow.end)continue;
       const add=(key,value)=>{
-        if(key!==nativeWindow.channel||!String(value??'').trim())return;
+        if(series?!series.has(key):key!==nativeWindow.channel)return;
         const number=csvNumber(value);
-        if(fin(number))points.push([row.t,number]);
+        if(fin(number))(series?series.get(key):points).push([row.t,number]);
       };
       if(expedition){
         for(let j=row.start;j<row.p.length-1;j+=2){
           if(row.p[j]!=='0')add(row.hasIds?row.ids[row.p[j]]:row.keys[+row.p[j]+1],row.p[j+1]);
         }
       }else row.keys.forEach((key,j)=>add(key,row.p[j]));
+    }
+    if(series){
+      const result=new Map();
+      for(const [k,rows] of series){
+        rows.sort((a,b)=>a[0]-b[0]);
+        result.set(k,{times:Float64Array.from(rows,p=>p[0]),values:Float64Array.from(rows,p=>p[1])});
+      }
+      return result;
     }
     return points.sort((a,b)=>a[0]-b[0]);
   }

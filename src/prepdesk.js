@@ -12,6 +12,43 @@ const PrepDesk = (() => {
     d.onclick=e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.remove();}};
     return d;
   }
+  const sampleCache=new WeakMap();
+  function lowerBound(times,t){
+    let a=0,b=times.length;
+    while(a<b){const mid=Math.floor((a+b)/2);if(times[mid]<t)a=mid+1;else b=mid;}
+    return a;
+  }
+  function loggedTraces(session,keys,t0,lo,hi,columns=Infinity){
+    const traces=new Map(),mappings=new Map((session.profile.channels||[]).map(m=>[m.target,m]));
+    for(const src of session.sources){
+      if(src.kind!=='log'||!src.text||src.end<=t0+lo*1000||src.start>=t0+hi*1000)continue;
+      const selected=keys.map(k=>({k,m:mappings.get(k)})).filter(({k,m})=>(src.channels||[]).includes(m?.source||k));
+      if(!selected.length)continue;
+      let cache=sampleCache.get(src);if(!cache){cache=new Map();sampleCache.set(src,cache);}
+      const missing=[...new Set(selected.map(({k,m})=>m?.source||k))].filter(k=>!cache.has(k));
+      if(missing.length){
+        if(cache.size+missing.length>12)cache.clear();
+        const wanted=selected.map(({k,m})=>m?.source||k).filter(k=>!cache.has(k));
+        for(const [k,data] of SL.parseLog(src.text,{channels:[...new Set(wanted)]}))cache.set(k,data);
+      }
+      for(const {k,m} of selected){
+        if(!traces.has(k))traces.set(k,[]);
+        const {times,values}=cache.get(m?.source||k),end=lowerBound(times,t0+hi*1000);
+        const start=lowerBound(times,t0+lo*1000),points=traces.get(k);
+        const add=i=>points.push([(times[i]-t0)/1000,values[i]*(m?.factor??1)+(m?.offset??0)]);
+        if(end-start<=columns*3){for(let i=start;i<end;i++)add(i);continue;}
+        // At wide zoom retain both extremes in every screen column, never an average.
+        const span=(hi-lo)*1000/columns,origin=t0+lo*1000;
+        for(let i=start;i<end;){
+          const boundary=origin+(Math.floor((times[i]-origin)/span)+1)*span;
+          let min=i,max=i,j=i+1;
+          while(j<end&&times[j]<boundary){if(values[j]<values[min])min=j;if(values[j]>values[max])max=j;j++;}
+          add(min);if(max!==min)add(max);i=j;
+        }
+      }
+    }
+    return traces;
+  }
   function mount(container,title,options={}){
     const D=A.D,s=WF.session,g=mapGeom(D),pair=options.pair;
     const view=s.deskMap||=( {z:1,x:0,y:0} );
@@ -39,18 +76,26 @@ const PrepDesk = (() => {
     const timeControls=bar(button('−1 s',()=>nudge(-1)),button('+1 s',()=>nudge(1)),field('Kanaal',sel('desk-channel',varList(),key,v=>{s.plotVariable=v;show(A.tab);})),rangeLabel,
       button('Tijdvak',()=>dialog('Tijdvak instellen',WF.selectionBar())),
       button('Zoom op selectie',()=>{if(!s.selections.analysis)return banner('Sleep eerst een tijdvak in de tijdgrafiek.');s.viewport=WF.rangeIndices();view.x=view.y=0;view.z=1;show(A.tab);}),
-      button('Hele log',()=>{s.viewport=null;s.selections.analysis=null;view.x=view.y=0;view.z=1;show(A.tab);}));
+      button('Hele log',()=>{s.viewport=pair?[D.i0,D.i1]:null;s.selections.analysis=null;view.x=view.y=0;view.z=1;show(A.tab);}));
     const desk=h('div',{class:'prep-desk'+(pair?' desk-pair':'')},h('section',{class:'desk-spatial'},status,mapBox),side,h('section',{class:'desk-time'},timeControls,stripBox));
     const mobileToggle=button('',()=>{s.deskList=!s.deskList;mobile();schedule();},{class:'desk-mobile-toggle'});
     function mobile(){desk.classList.toggle('desk-list-open',!!s.deskList);mobileToggle.textContent=s.deskList?'Kaart tonen':title+' tonen';}
     mobile();container.append(mobileToggle,desk);
     if(g&&s.viewport){const bx=[Infinity,-Infinity],by=[Infinity,-Infinity];for(let i=lo;i<hi;i++)if(fin(g.x[i])&&fin(g.y[i])){bx[0]=Math.min(bx[0],g.x[i]);bx[1]=Math.max(bx[1],g.x[i]);by[0]=Math.min(by[0],g.y[i]);by[1]=Math.max(by[1],g.y[i]);}if(fin(bx[0]))bounds={bx,by};}
     const channels=pair?[...new Set([key,'AWA','TWD','Heel'])].filter(k=>D.ch[k]):[key];
+    const sourceMode=pair&&(s.sources||[]).some(f=>f.kind==='log'&&f.text);
+    if(pair){
+      const picker=sel('pair-trace-mode',sourceMode?['Logsamples','Analyse 1 Hz']:['Analyse 1 Hz'],sourceMode&&s.pairTraceMode!=='Analyse 1 Hz'?'Logsamples':'Analyse 1 Hz',v=>{s.pairTraceMode=v;WF.touch();show(A.tab);});
+      timeControls.prepend(field('Weergave',picker));
+    }
+    const native=sourceMode&&s.pairTraceMode!=='Analyse 1 Hz'?loggedTraces(s,channels,D.raw.t0,lo,hi,Math.max(256,stripBox.clientWidth||1200)):new Map();
     const series=channels.map(k=>{
-      const step=Math.max(1,Math.floor(dt/2200)),pts=[],ref=k==='TWD'?SL.cmean(D.ch[k].subarray(lo,hi)):NaN;
+      const samples=native.get(k),pts=[],ref=k==='TWD'?SL.cmean(D.ch[k].subarray(lo,hi)):NaN;
       let min=Infinity,max=-Infinity;
-      for(let i=lo;i<hi;i+=step){const a=D.ch[k]?.[i],v=fin(ref)?ref+SL.w180(a-ref):a;pts.push([i,v]);if(fin(v)){min=Math.min(min,v);max=Math.max(max,v);}}
-      return {k,pts,min,max};
+      const add=(i,a)=>{const v=fin(ref)?ref+SL.w180(a-ref):a;pts.push([i,v]);if(fin(v)){min=Math.min(min,v);max=Math.max(max,v);}};
+      if(samples){for(const [i,v] of samples)add(i,v);}
+      else {const step=pair?1:Math.max(1,Math.floor(dt/2200));for(let i=lo;i<hi;i+=step)add(i,D.ch[k]?.[i]);}
+      return {k,pts,min,max,logged:!!samples};
     });
     const lanes=[];
     if(!pair){
@@ -84,11 +129,12 @@ const PrepDesk = (() => {
         for(const [a,b,name]of runs){const width=X(b)-X(a);c.fillStyle=alpha(css(color),.4);c.fillRect(X(a),y+1,width,laneHeight-2);
           if(width>name.length*7+8){c.fillStyle=css('--ink');c.fillText(name,X(a)+4,y+laneHeight/2);}}
       });
-      series.forEach(({k,pts,min,max},j)=>{
+      series.forEach(({k,pts,min,max,logged},j)=>{
         const y=3+j*row;c.strokeStyle=css('--line');c.beginPath();c.moveTo(left,y+row);c.lineTo(W-right,y+row);c.stroke();
-        c.fillStyle=css('--ink2');c.fillText(k,5,y+row*.3);if(fin(min))c.fillText(f1(min,1)+'–'+f1(max,1),5,y+row*.72);
+        c.fillStyle=css('--ink2');c.fillText(pair?k+' · '+(logged?'log':'1 Hz'):k,5,y+row*.3);if(fin(min))c.fillText(f1(min,1)+'–'+f1(max,1),5,y+row*.72);
         c.strokeStyle=SER(j);c.lineWidth=1.6;c.beginPath();let on=false;
-        for(const [i,v]of pts){if(!fin(v)){on=false;continue;}const py=y+row-4-(max===min?.5:(v-min)/(max-min))*(row-8);if(on)c.lineTo(X(i),py);else c.moveTo(X(i),py);on=true;}c.stroke();
+        c.fillStyle=SER(j);
+        for(const [i,v]of pts){if(!fin(v)){on=false;continue;}const py=y+row-4-(max===min?.5:(v-min)/(max-min))*(row-8);if(logged)c.fillRect(X(i)-.8,py-.8,1.6,1.6);else if(on)c.lineTo(X(i),py);else c.moveTo(X(i),py);on=true;}c.stroke();
       });
       if(!pair){c.fillStyle=css('--s2');for(const e of D.L.list)if(e.i>=lo&&e.i<hi)c.fillRect(X(e.i)-1,1,3,8);}
       if(pair)for(const r of [pair.before,pair.after])for(const t of [r.start,r.end]){c.fillStyle=css('--ink2');c.fillRect(X(idx(t)),3,1,H-26);}
@@ -122,5 +168,5 @@ const PrepDesk = (() => {
     draw();if(window.ResizeObserver){observer=new ResizeObserver(schedule);observer.observe(mapBox);observer.observe(stripBox);}
     return {side,toolbar,draw};
   }
-  return {mount,dialog,leave,button};
+  return {mount,dialog,leave,button,loggedTraces};
 })();

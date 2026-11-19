@@ -38,13 +38,51 @@
       for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sailState?.[i]!==D.L.sailState?.[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
       if(D.mans.some(m=>m.i>=w.i&&m.i<w.i1))errors.push(label+': bevat nog een manoeuvre.');
     }
-    if(before&&after){if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
+    if(before&&after){const anchorRace=D.L.race[Math.round((p.anchor-D.raw.t0)/1000)];
+      if(before.race!==anchorRace||after.race!==anchorRace)errors.push('De vensters en het draaipunt moeten bij hetzelfde racetijdvak horen.');
+      if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
     return {before,after,errors,valid:!errors.length};
   }
   function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
   function calibrationReferences(D,s){const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);const pairs=approvedPairs(D,s).filter(x=>!x.pair.validation&&independent(x.before)&&independent(x.after)),ps=SL.calibrationPhases(D,s.reviews).filter(independent);const all=[...ps,...pairs.flatMap(x=>[x.before,x.after])];return {phases:[...new Map(all.map(p=>[p.i+':'+p.i1,p])).values()],pairs};}
+  // Port and starboard always use the same sign convention, in either turn direction.
+  function windPairEvidence(pairs){
+    const alignment=[],bands=new Map();
+    for(const {pair,before,after,reference} of pairs){
+      if(!before||!after||pair.validation||before.tack===after.tack)continue;
+      const basis=reference||{before,after};
+      const [port,stbd]=basis.before.tack==='Port'?[before,after]:[after,before];
+      const angles=[basis.before,basis.after].map(w=>Math.abs(w.v.TWA));
+      const up=pair.type==='Tack'&&angles.every(a=>a<=60),down=pair.type==='Gybe'&&angles.every(a=>a>=120);
+      if(!up&&!down)continue;
+      const covered=k=>[port,stbd].every(w=>w.coverage[k]>=.95&&finite(w.v[k]));
+      if(up&&covered('AWA')&&port.v.AWA<0&&stbd.v.AWA>0)
+        alignment.push((Math.abs(port.v.AWA)-Math.abs(stbd.v.AWA))/2);
+      if(!covered('TWD')||!covered('TWS'))continue;
+      const tws=(basis.before.v.TWS+basis.after.v.TWS)/2,band=SL.BANDS.findIndex(([lo,hi])=>tws>=lo&&tws<hi);
+      if(band<0)continue;
+      const mode=up?'up':'dn',key=mode+':'+band;
+      if(!bands.has(key))bands.set(key,{mode,band,errors:[],speeds:[]});
+      const group=bands.get(key);
+      group.errors.push(SL.w180(port.v.TWD-stbd.v.TWD));
+      group.speeds.push(port.v.TWS-stbd.v.TWS);
+    }
+    return {alignment,bands:[...bands.values()].sort((a,b)=>a.band-b.band||a.mode.localeCompare(b.mode))};
+  }
+  // Insert a knot on the existing curve without changing the opposite sailing mode.
+  function addTableResidual(rows,tws,mode,residual){
+    const sorted=rows.map(row=>({...row})).sort((a,b)=>a.tws-b.tws);
+    let row=sorted.find(r=>r.tws===tws);
+    if(!row){
+      const lo=sorted.filter(r=>r.tws<tws).at(-1)||sorted[0],hi=sorted.find(r=>r.tws>tws)||lo;
+      const f=lo&&hi.tws!==lo.tws?(tws-lo.tws)/(hi.tws-lo.tws):0;
+      row={tws};for(const k of ['up','dn'])row[k]=lo?lo[k]+(hi[k]-lo[k])*f:0;
+      sorted.push(row);sorted.sort((a,b)=>a.tws-b.tws);
+    }
+    row[mode]=Math.round((row[mode]+residual)*10)/10;return sorted;
+  }
   function versionInput(s) { const {analysisVersions,reportItems,reportTrash,...input}=copy(s); return input; }
   function pendingCalibration(s) { return !!s.draft && JSON.stringify(s.draft)!==JSON.stringify(s.calib); }
   function validatePreparation(s,D) { if(!D)throw new Error('Importeer eerst een log.');if(!s.phaseBuild?.generated)throw new Error('Maak eerst fases met je gekozen criteria.');if(s.phaseBuild.sourceKey!==eventKey(s))throw new Error('De events of broninstellingen zijn gewijzigd. Maak de fases opnieuw.');if(pendingCalibration(s))throw new Error('Er staat een niet-toegepast kalibratievoorstel. Pas het toe of neem de actieve kalibratie over voordat je opslaat.');if(s.calibrationChanged)throw new Error('Splits de sessie eerst op een constante instrumentkalibratie.'); }
-  Object.assign(SL,{phaseDefaults,phaseKeys,eventKey,preparationKey,sampleMatches,windowPhase,phaseBuild,pairKey,defaultPair,inspectPair,approvedPairs,calibrationReferences,versionInput,pendingCalibration,validatePreparation});
+  Object.assign(SL,{windPairEvidence,addTableResidual,phaseDefaults,phaseKeys,eventKey,preparationKey,sampleMatches,windowPhase,phaseBuild,pairKey,defaultPair,inspectPair,approvedPairs,calibrationReferences,versionInput,pendingCalibration,validatePreparation});
 })();

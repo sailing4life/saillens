@@ -276,19 +276,27 @@ function parseLog(text, nativeWindow) {
     }
   }
   if(nativeWindow){
-    const points=[];
+    const points=[],series=nativeWindow.channels?new Map(nativeWindow.channels.map(k=>[k,[]])):null;
     for(const row of records()){
       if(!fin(row.t)||row.t<nativeWindow.start||row.t>=nativeWindow.end)continue;
       const add=(key,value)=>{
-        if(key!==nativeWindow.channel||!String(value??'').trim())return;
+        if(series?!series.has(key):key!==nativeWindow.channel)return;
         const number=csvNumber(value);
-        if(fin(number))points.push([row.t,number]);
+        if(fin(number))(series?series.get(key):points).push([row.t,number]);
       };
       if(expedition){
         for(let j=row.start;j<row.p.length-1;j+=2){
           if(row.p[j]!=='0')add(row.hasIds?row.ids[row.p[j]]:row.keys[+row.p[j]+1],row.p[j+1]);
         }
       }else row.keys.forEach((key,j)=>add(key,row.p[j]));
+    }
+    if(series){
+      const result=new Map();
+      for(const [k,rows] of series){
+        rows.sort((a,b)=>a[0]-b[0]);
+        result.set(k,{times:Float64Array.from(rows,p=>p[0]),values:Float64Array.from(rows,p=>p[1])});
+      }
+      return result;
     }
     return points.sort((a,b)=>a[0]-b[0]);
   }
@@ -1439,15 +1447,53 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
       for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sailState?.[i]!==D.L.sailState?.[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
       if(D.mans.some(m=>m.i>=w.i&&m.i<w.i1))errors.push(label+': bevat nog een manoeuvre.');
     }
-    if(before&&after){if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
+    if(before&&after){const anchorRace=D.L.race[Math.round((p.anchor-D.raw.t0)/1000)];
+      if(before.race!==anchorRace||after.race!==anchorRace)errors.push('De vensters en het draaipunt moeten bij hetzelfde racetijdvak horen.');
+      if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
     return {before,after,errors,valid:!errors.length};
   }
   function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
   function calibrationReferences(D,s){const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);const pairs=approvedPairs(D,s).filter(x=>!x.pair.validation&&independent(x.before)&&independent(x.after)),ps=SL.calibrationPhases(D,s.reviews).filter(independent);const all=[...ps,...pairs.flatMap(x=>[x.before,x.after])];return {phases:[...new Map(all.map(p=>[p.i+':'+p.i1,p])).values()],pairs};}
+  // Port and starboard always use the same sign convention, in either turn direction.
+  function windPairEvidence(pairs){
+    const alignment=[],bands=new Map();
+    for(const {pair,before,after,reference} of pairs){
+      if(!before||!after||pair.validation||before.tack===after.tack)continue;
+      const basis=reference||{before,after};
+      const [port,stbd]=basis.before.tack==='Port'?[before,after]:[after,before];
+      const angles=[basis.before,basis.after].map(w=>Math.abs(w.v.TWA));
+      const up=pair.type==='Tack'&&angles.every(a=>a<=60),down=pair.type==='Gybe'&&angles.every(a=>a>=120);
+      if(!up&&!down)continue;
+      const covered=k=>[port,stbd].every(w=>w.coverage[k]>=.95&&finite(w.v[k]));
+      if(up&&covered('AWA')&&port.v.AWA<0&&stbd.v.AWA>0)
+        alignment.push((Math.abs(port.v.AWA)-Math.abs(stbd.v.AWA))/2);
+      if(!covered('TWD')||!covered('TWS'))continue;
+      const tws=(basis.before.v.TWS+basis.after.v.TWS)/2,band=SL.BANDS.findIndex(([lo,hi])=>tws>=lo&&tws<hi);
+      if(band<0)continue;
+      const mode=up?'up':'dn',key=mode+':'+band;
+      if(!bands.has(key))bands.set(key,{mode,band,errors:[],speeds:[]});
+      const group=bands.get(key);
+      group.errors.push(SL.w180(port.v.TWD-stbd.v.TWD));
+      group.speeds.push(port.v.TWS-stbd.v.TWS);
+    }
+    return {alignment,bands:[...bands.values()].sort((a,b)=>a.band-b.band||a.mode.localeCompare(b.mode))};
+  }
+  // Insert a knot on the existing curve without changing the opposite sailing mode.
+  function addTableResidual(rows,tws,mode,residual){
+    const sorted=rows.map(row=>({...row})).sort((a,b)=>a.tws-b.tws);
+    let row=sorted.find(r=>r.tws===tws);
+    if(!row){
+      const lo=sorted.filter(r=>r.tws<tws).at(-1)||sorted[0],hi=sorted.find(r=>r.tws>tws)||lo;
+      const f=lo&&hi.tws!==lo.tws?(tws-lo.tws)/(hi.tws-lo.tws):0;
+      row={tws};for(const k of ['up','dn'])row[k]=lo?lo[k]+(hi[k]-lo[k])*f:0;
+      sorted.push(row);sorted.sort((a,b)=>a.tws-b.tws);
+    }
+    row[mode]=Math.round((row[mode]+residual)*10)/10;return sorted;
+  }
   function versionInput(s) { const {analysisVersions,reportItems,reportTrash,...input}=copy(s); return input; }
   function pendingCalibration(s) { return !!s.draft && JSON.stringify(s.draft)!==JSON.stringify(s.calib); }
   function validatePreparation(s,D) { if(!D)throw new Error('Importeer eerst een log.');if(!s.phaseBuild?.generated)throw new Error('Maak eerst fases met je gekozen criteria.');if(s.phaseBuild.sourceKey!==eventKey(s))throw new Error('De events of broninstellingen zijn gewijzigd. Maak de fases opnieuw.');if(pendingCalibration(s))throw new Error('Er staat een niet-toegepast kalibratievoorstel. Pas het toe of neem de actieve kalibratie over voordat je opslaat.');if(s.calibrationChanged)throw new Error('Splits de sessie eerst op een constante instrumentkalibratie.'); }
-  Object.assign(SL,{phaseDefaults,phaseKeys,eventKey,preparationKey,sampleMatches,windowPhase,phaseBuild,pairKey,defaultPair,inspectPair,approvedPairs,calibrationReferences,versionInput,pendingCalibration,validatePreparation});
+  Object.assign(SL,{windPairEvidence,addTableResidual,phaseDefaults,phaseKeys,eventKey,preparationKey,sampleMatches,windowPhase,phaseBuild,pairKey,defaultPair,inspectPair,approvedPairs,calibrationReferences,versionInput,pendingCalibration,validatePreparation});
 })();
 
 'use strict';
@@ -2289,8 +2335,8 @@ R.sails = () => {
 /* ---------------- Calibration file ---------------- */
 const BAND_TWS = [6, 8, 10, 12.5, 16, 20];
 function calibEnsure() { if (!A.calib) A.calib = { app: 'SailLens', type: 'calibration', name: '', ...SL.CAL0, twa: BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })) }; if (!A.calib.twa || !A.calib.twa.length) A.calib.twa = BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })); return A.calib; }
-function calibSuggest(r) { // add what the models found on top of what is already applied
-  const cb = calibEnsure(), done = [], r1 = v => Math.round(v * 10) / 10;
+function calibSuggest(r, cb=calibEnsure()) { // add what the models found on top of what is already applied
+  const done = [], r1 = v => Math.round(v * 10) / 10;
   if (!r.bsp.err) { if ((r.bsp.kLo > 1 || r.bsp.kHi < 1) && Math.abs(r.bsp.k - 1) > 0.007) { cb.bspK = Math.round(cb.bspK * r.bsp.k * 1000) / 1000; done.push('BSP factor ' + cb.bspK); } if ((r.bsp.dLo > 0 || r.bsp.dHi < 0) && Math.abs(r.bsp.delta) > 1) { cb.hdgOff = r1(cb.hdgOff + r.bsp.delta); done.push('heading ' + cb.hdgOff + '°'); } }
   if (r.cur && !r.cur.err && r.cur.hasLee && (r.cur.lLo > 1 || r.cur.lHi < 1) && Math.abs(r.cur.lam - 1) > 0.15) { cb.leewayGain = Math.round((cb.leewayGain ?? 1) * r.cur.lam * 100) / 100; done.push('leeway ×' + cb.leewayGain); }
   if (!r.awa.err && Math.abs(r.awa.read) > 0.5 && Math.abs(r.awa.read) > 2 * r.awa.se) { cb.awaOff = r1(cb.awaOff - r.awa.read); done.push('AWA ' + cb.awaOff + '°'); }
@@ -2760,8 +2806,67 @@ const WF = (() => {
     if (!Array.isArray(c.twa) || c.twa.length > 100 || c.twa.some(r => !fin(r.tws) || r.tws <= 0 || !fin(r.up) || !fin(r.dn) || Math.abs(r.up) > 90 || Math.abs(r.dn) > 90) || new Set(c.twa.map(r => r.tws)).size !== c.twa.length) throw new Error('Ongeldige TWA-tabel: unieke positieve TWS en eindige correcties nodig.');
     return c;
   }
+  function windReview(c,refs,draft){
+    const live=SL.windPairEvidence(refs.pairs),result=h('div',{'aria-live':'polite'}),message=h('p',{role:'status'});
+    const panel=card('Windkalibratie uit vensterparen',help('Controleer eerst de MHU met aandewindse tacks. Controleer daarna de resterende TWD-sprong per windband, aandewinds en voor de wind. Een echte windshift, asymmetrische trim of kompasfout kan dezelfde sprong geven.'),result,message);
+    c.append(panel);
+    if(!refs.phases.length){
+      result.append(help('Nog geen bruikbare goedgekeurde paren voor de schatting. Kies stabiele vensters vóór en na een tack of gijp. Controleparen tellen alleen mee voor de toets.'),btn('Manoeuvres beoordelen',()=>show('pairreview')));return;
+    }
+    function render(){
+      const cfg=validateCalib(draft);
+      const D=JSON.stringify(cfg)===JSON.stringify(A.calib)?A.D:process(snapshot(),cfg);
+      const pairs=refs.pairs.map(reference=>({pair:reference.pair,reference,before:SL.windowPhase(D,reference.pair.before),after:SL.windowPhase(D,reference.pair.after)}));
+      const proposed=SL.windPairEvidence(pairs);
+      const signature=JSON.stringify(draft);
+      const med=values=>SL.median(values),degrees=v=>fin(v)?f1(v,1)+'°':'—';
+      const summary=(values,factor=1)=>values?.length?degrees(factor*med(values)):'—';
+      const update=fn=>()=>{if(JSON.stringify(draft)!==signature){message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';return;}
+        try{const next=SL.copy(draft);fn(next);session.draft=validateCalib(next);session.preview=false;touch();show('cal');}catch(e){message.textContent=e.message;}};
+      const alignment=med(proposed.alignment);
+      result.replaceChildren(h('h4',{},'1 · AWA en MHU-uitlijning'),table(['Tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[proposed.alignment.length,summary(live.alignment),degrees(alignment)]]),
+        btn('MHU-restfout naar voorstel',update(next=>{next.awaOff=Math.round((next.awaOff+alignment)*10)/10;}),false,{disabled:proposed.alignment.length<3||!fin(alignment)||Math.abs(alignment)<.05}),
+        h('h4',{},'2 · TWA-tabel uit de TWD-sprong'),help('Δ TWD en Δ TWS zijn bakboord min stuurboord. De tabelcorrectie is de helft van de resterende TWD-sprong. Beide kolommen gebruiken de windband van het actieve log.'));
+      if(proposed.bands.length){
+        result.append(table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','TWD P25–P75','Δ TWS voorstel','Extra TWA',''],proposed.bands.map(g=>{
+          const old=live.bands.find(b=>b.band===g.band&&b.mode===g.mode);
+          const residual=med(g.errors)/2,tws=BAND_TWS[g.band];
+          return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.errors.length,summary(old?.errors),summary(g.errors),degrees(SL.quant(g.errors,.25))+' / '+degrees(SL.quant(g.errors,.75)),f1(med(g.speeds),2)+' kn',degrees(residual),
+            btn('Naar tabel bij '+tws+' kn',update(next=>{
+              const rows=next.twa.length?next.twa:BAND_TWS.map(t=>({tws:t,up:0,dn:0}));
+              next.twa=SL.addTableResidual(rows,tws,g.mode,residual);
+            }),false,{disabled:g.errors.length<3||Math.abs(residual)<.05})];
+        })));
+      }else result.append(help('Geen paren met voldoende TWD- en TWS-metingen in deze windbanden.'));
+      const extremes=refs.phases.map(w=>D===A.D?w:SL.windowPhase(D,{start:w.t,end:iT(w.i1)})).filter(w=>w&&(w.mode==='Upwind'&&Math.abs(w.v.TWA)<=60||w.mode==='Downwind'&&Math.abs(w.v.TWA)>=120));
+      const tws=SL.calWind(extremes).twsDn,qualified=tws&&fin(tws.pct)&&tws.pct>-100&&Math.abs(tws.pct)>Math.max(3,2*tws.se);
+      result.append(h('h4',{},'3 · TWS aandewinds en voor de wind'));
+      if(tws){
+        const adjusted=Math.round(1000*((1+(cfg.twsDnPct||0)/100)/(1+tws.pct/100)-1))/10;
+        result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(tws.pct,1)+'% (standaardfout '+f1(tws.se,1)+'%). Vergelijk rakken in dezelfde omstandigheden.'),
+          btn('TWS downwind naar voorstel',update(next=>{next.twsDnPct=adjusted;}),false,{disabled:!qualified}));
+      }else result.append(help('Voor de TWS-vergelijking zijn goedgekeurde aandewindse én voor-de-windse vensters nodig, met dekking op beide boegen. De absolute AWS-schaal vraagt een onafhankelijke referentie.'));
+      if(pairs.length){
+        const rows=pairs.filter(r=>r.before&&r.after).map(({pair,before,after})=>{
+          const [p,s]=before.tack==='Port'?[before.v,after.v]:[after.v,before.v];
+          return [tstr(pair.anchor),pair.type,degrees(p.AWA)+' / '+degrees(s.AWA),degrees(p.TWD)+' / '+degrees(s.TWD),degrees(SL.w180(p.TWD-s.TWD)),btn('Bekijk paar',()=>{
+            session.activePairKey=pair.key;session.pairType='Alle';const i=Math.round((pair.anchor-A.raw.t0)/1000);
+            if(!A.D.L.race[i])session.pairRaceOnly=false;
+            A.cur=i;session.viewport=[Math.max(A.D.i0,i-150),Math.min(A.D.i1,i+150)];session.selections.analysis=null;show('pairreview');
+          })];
+        });
+        result.append(h('details',{},h('summary',{},'Meetwaarden per goedgekeurd paar'),table(['Tijd','Type','AWA BB / SB','TWD BB / SB','Δ TWD',''],rows)));
+      }
+      result.append(help('De hoekcorrecties zijn medianen. Overnemen kan vanaf drie bruikbare paren per hoekschatting. Na een wijziging rekent SailLens de restfout op het voorstel opnieuw uit. Met Voorstel toepassen maak je de correcties actief.'));
+    }
+    const recalc=()=>{try{render();message.textContent='';}catch(e){result.replaceChildren();message.textContent=e.message;}};
+    panel.insertBefore(btn('Bereken restfout opnieuw',recalc),result);recalc();
+    c.addEventListener('input',e=>{if(e.target.id.startsWith('draft-')||e.target.matches('[aria-label^="TWA "]'))message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';},{signal:windListeners.signal});
+  }
+  let windListeners;
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
+    windListeners?.abort();windListeners=new AbortController();
     const refs=SL.calibrationReferences(A.D,session), ps = refs.phases, draft = session.draft ||= SL.copy(A.calib || SL.CAL0);
     const approvedMans = A.D.mans.filter(m => SL.allowed(SL.reviewed(A.D, m, 'manoeuvre', session.reviews), 'calibration'));
     const pairAllowed = (a, b) => approvedMans.some(m => iT(m.i) > a.t && iT(m.i) < b.t);
@@ -2769,12 +2874,19 @@ const WF = (() => {
     c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Controleer. Vergelijk. Pas toe.'), help(`${ps.length} goedgekeurde fases · ${refs.pairs.length} goedgekeurde vensterparen. Alle correcties zijn ten opzichte van het oorspronkelijke log.`)), btn('Sessie opslaan & analyseren', safe(()=>STUDIO.publish()), true)));
     if (!ps.length) c.append(notice('Keur eerst stabiele fases goed bij Beoordelen. Je kunt al een handmatig voorstel bekijken; de modellen wachten op referenties.'), btn('Referenties beoordelen', () => show('review')));
     if (session.calibrationChanged) c.append(notice('De instrumentkalibratie is tijdens deze sessie gewijzigd. Eén correctie voor de hele sessie is dan niet betrouwbaar. Maak aparte sessies met een constant instrumentprofiel; toepassen is hier geblokkeerd.'));
+    windReview(c,refs,draft);
     const form = h('div', { class: 'form' });
     for (const [k, label, step] of [['bspK', 'BSP factor ×', .001], ['hdgOff', 'Heading offset °', .1], ['awaOff', 'AWA / MHU offset °', .1], ['awsK', 'AWS factor ×', .001], ['twsDnPct', 'TWS downwind %', .1], ['leewayGain', 'Leeway factor ×', .05], ['heelOff', 'Heel offset °', .1], ['rudOff', 'Rudder offset °', .1]]) form.append(field(label, h('input', { id: 'draft-' + k, type: 'number', step, value: draft[k], oninput: e => { draft[k] = +e.target.value; session.preview = false; touch(); } })));
     const cell = (r, key) => h('input', { type: 'number', step: .1, value: r[key], 'aria-label': 'TWA ' + key + ' bij ' + r.tws, oninput: e => { r[key] = +e.target.value; session.preview = false; touch(); } });
     c.append(card('Voorstel — nog niet actief', form, h('h4', {}, 'TWA-correctie per windsnelheid'), table(['TWS kn', 'Upwind °', 'Downwind °', ''], draft.twa.map((r, i) => [cell(r, 'tws'), cell(r, 'up'), cell(r, 'dn'), btn('Verwijder', () => { draft.twa.splice(i, 1); session.preview = false; show('cal'); })])),
       bar(btn('TWA-rij toevoegen', () => { draft.twa.push({ tws: (draft.twa.at(-1)?.tws || 4) + 2, up: 0, dn: 0 }); show('cal'); }),
-        btn('Modelsuggesties naar voorstel', () => { const active = A.calib; try { A.calib = SL.copy(active || SL.CAL0); const found = calibSuggest(model); session.draft = SL.copy(A.calib); session.preview = false; show('cal'); banner(found.length ? found.join(' · ') : 'Geen voldoende onderbouwde correctie gevonden.'); } finally { A.calib = active; } }),
+        btn('Modelsuggesties naar voorstel', () => {
+          const proposed=SL.copy(A.calib||SL.CAL0);
+          if(!proposed.twa?.length)proposed.twa=BAND_TWS.map(tws=>({tws,up:0,dn:0}));
+          const found=calibSuggest(model,proposed);
+          if(found.length){session.draft=proposed;session.preview=false;touch();show('cal');}
+          banner(found.length?found.join(' · '):'Geen voldoende onderbouwde correctie gevonden.');
+        }),
         btn('Voorstel vergelijken', safe(() => { validateCalib(draft); session.preview = true; show('cal'); }), true),
         btn('Voorstel toepassen', safe(() => applyCalibration(draft)), false, { disabled: session.calibrationChanged }),
         btn('Voorstel wissen', () => { session.draft = SL.copy(SL.CAL0); session.preview = false; show('cal'); })),
@@ -2924,22 +3036,47 @@ const STUDIO=(()=>{
    s.phaseBuild?.generated&&s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot())?h('p',{class:'wf-notice'},'Events of broninstellingen gewijzigd — maak fases opnieuw voordat je de sessie afrondt.'):null);
   if(s.phaseBuild?.diagnostics){const d=s.phaseBuild.diagnostics;body.append(help(`Overgeslagen kandidaatvensters: ${d.masked} door selectie, ontbrekende data, manoeuvres of wissels; ${d.stability} door stabiliteit; ${d.target} door polar-/hoekgrenzen. Kandidaten overlappen; dit zijn geen percentages van de vaartijd.`));}const toolbar=c.querySelector('.desk-side > .bar');toolbar.append(button('Fases maken',()=>PrepDesk.dialog('Fases maken',body),true));if(s.phaseBuild?.generated&&s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot()))toolbar.after(help('Events gewijzigd. Maak de fases opnieuw.'));
  }
- function pairs(){const c=pane('pairreview'),s=S(),D=A.D;if(!D)return;const type=s.pairType||'Alle',list=D.mans.filter(m=>type==='Alle'||m.type===type);if(!list.length){const {side}=PrepDesk.mount(c,'Manoeuvres');side.append(help('Geen '+(type==='Alle'?'manoeuvres':type)+' gevonden.'),button('Alle manoeuvres',()=>{s.pairType='Alle';show('pairreview');}),button('Naar events',()=>show('events')),button('Verder naar kalibratie',()=>show('cal')));return;}
+ function pairs(){const c=pane('pairreview'),s=S(),D=A.D;if(!D)return;const type=s.pairType||'Alle';
+  const list=D.mans.filter(m=>(type==='Alle'||m.type===type)&&(!s.pairRaceOnly||D.L.race[m.i]>0));
+  function filters(toolbar){
+    const refresh=()=>{s.selections.analysis=null;WF.touch();show('pairreview');};
+    toolbar.append(field('Type',sel('pair-type',['Alle','Tack','Gybe'],type,v=>{s.pairType=v;refresh();})),
+      h('label',{},h('input',{type:'checkbox',id:'pair-racing',checked:!!s.pairRaceOnly,onchange:e=>{s.pairRaceOnly=e.target.checked;refresh();}}),' Alleen tijdens races'));
+  }
+  if(!list.length){const {side,toolbar}=PrepDesk.mount(c,'Manoeuvres');filters(toolbar);side.append(help(s.pairRaceOnly?'Geen manoeuvres in deze selectie tussen een startschot en finish. Controleer de race-events of zet het filter uit.':'Geen manoeuvres van dit type gevonden.'),button('Naar events',()=>show('events')),button('Verder naar kalibratie',()=>show('cal')));return;}
   let idx=list.findIndex(m=>SL.pairKey(D,m)===s.activePairKey);if(idx<0){idx=0;A.cur=list[0].i;s.viewport=[Math.max(D.i0,list[0].i-150),Math.min(D.i1,list[0].i+150)];}const m=list[idx],key=SL.pairKey(D,m);s.manoeuvrePairs||={};const pair=s.manoeuvrePairs[key]||(s.manoeuvrePairs[key]=RaceTools.suggest(D,m,s));s.activePairKey=key;const check=SL.inspectPair(D,pair,s.phaseBuild?.rules||D.cfg);
-  const go=n=>{const next=list[Math.max(0,Math.min(list.length-1,n))];s.activePairKey=SL.pairKey(D,next);s.deskMap={...s.deskMap,z:1,x:0,y:0};A.cur=next.i;s.viewport=[Math.max(D.i0,next.i-150),Math.min(D.i1,next.i+150)];s.selections.analysis=null;show('pairreview');};
-  if(!s.viewport||m.i<s.viewport[0]||m.i>=s.viewport[1]){A.cur=m.i;s.viewport=[Math.max(D.i0,m.i-150),Math.min(D.i1,m.i+150)];}
-  s.viewport=[Math.max(D.i0,Math.min(s.viewport[0],Math.floor((pair.before.start-D.raw.t0)/1000)-5)),Math.min(D.i1,Math.max(s.viewport[1],Math.ceil((pair.after.end-D.raw.t0)/1000)+5))];
-  const {side,toolbar}=PrepDesk.mount(c,m.type+' '+(idx+1)+' / '+list.length+' · '+tstr(iT(m.i)),{pair});
-  toolbar.append(sel('pair-type',['Alle','Tack','Gybe'],type,v=>{s.pairType=v;s.activePairKey=null;show('pairreview');}),button('Kalibratie →',()=>show('cal')));
-  side.append(card(null,bar(button('Vorige manoeuvre',()=>go(idx-1),false,{disabled:idx===0}),button('Volgende manoeuvre',()=>go(idx+1),false,{disabled:idx===list.length-1}),button('Zoom rond manoeuvre',()=>go(idx)),h('b',{},pair.validation?'Controlepaar':pair.approved?'Goedgekeurd voor kalibratie':pair.reason?'Overgeslagen: '+pair.reason:'Nog te beoordelen')),help('Blauw is vóór de manoeuvre, groen is erna. Sleep een vensterrand om de selectie bij te stellen.')));
-  if(!s.viewport)s.viewport=[Math.max(D.i0,m.i-150),Math.min(D.i1,m.i+150)];
+  const go=n=>{
+    const next=list[Math.max(0,Math.min(list.length-1,n))];
+    s.activePairKey=SL.pairKey(D,next);s.deskMap={...s.deskMap,z:1,x:0,y:0};A.cur=next.i;
+    s.viewport=null;s.selections.analysis=null;show('pairreview');
+  };
+  if(!s.viewport||s.viewportPairKey!==key){
+    const t=(v)=>Math.round((v-D.raw.t0)/1000);
+    s.viewport=s.pairCloseup?[Math.max(D.i0,m.i-30),Math.min(D.i1,m.i+31)]:
+      [Math.max(D.i0,Math.min(m.i-100,t(pair.before.start)-10)),Math.min(D.i1,Math.max(m.i+101,t(pair.after.end)+10))];
+    s.viewportPairKey=key;A.cur=m.i;
+  }
+  const race=D.L.race[m.i],label=m.type+' '+(idx+1)+' / '+list.length+' · '+tstr(iT(m.i))+(race?' · R'+race:'');
+  const {side,toolbar}=PrepDesk.mount(c,label,{pair});
+  filters(toolbar);
+  const reason=h('input',{id:'pair-reason',value:pair.reason||'',placeholder:'Optioneel, bijvoorbeeld windshift'});
+  const last=idx===list.length-1;
+  const decide=approved=>{
+    const previous={approved:!!pair.approved,rejected:!!pair.rejected,validation:!!pair.validation,reason:pair.reason||'',reviewedAt:pair.reviewedAt};
+    Object.assign(pair,{approved,rejected:!approved,validation:false,reason:reason.value.trim(),reviewedAt:Date.now()});
+    s.lastPairDecision={key,previous};WF.touch();go(last?idx:idx+1);
+  };
+  const verdict=q=>q?.validation?'Controlepaar':q?.approved?'Goedgekeurd':q?.rejected||q?.reason?'Afgewezen'+(q.reason?' · '+q.reason:''):'Te beoordelen';
+  const undo=()=>{const prev=s.lastPairDecision;Object.assign(s.manoeuvrePairs[prev.key],prev.previous);s.activePairKey=prev.key;delete s.lastPairDecision;const index=list.findIndex(x=>SL.pairKey(D,x)===prev.key);WF.touch();if(index>=0)go(index);else show('pairreview');};
+  side.append(bar(button(last?'Goedkeuren':'Goedkeuren & volgende',()=>decide(true),true,{disabled:!check.valid}),button(last?'Afwijzen':'Afwijzen & volgende',()=>decide(false)),button('Besluit herstellen',undo,false,{disabled:!s.lastPairDecision})));
+  side.append(card(null,bar(button('Vorige manoeuvre',()=>go(idx-1),false,{disabled:idx===0}),button('Volgende manoeuvre',()=>go(idx+1),false,{disabled:idx===list.length-1}),button(s.pairCloseup?'Beide vensters':'Draaipunt ±30 s',()=>{s.pairCloseup=!s.pairCloseup;go(idx);}),h('b',{},verdict(pair))),help('Blauw is vóór de manoeuvre, groen is erna. Sleep een vensterrand om de selectie bij te stellen.')));
   const extended=h('details',{},h('summary',{},'Controlepaar en brondata'));RaceTools.review(extended,pair,check,true);const form=h('div',{class:'form'}),inputs={};for(const side of ['before','after'])for(const edge of ['start','end']){const id='pair-'+side+'-'+edge;inputs[id]=h('input',{id,type:'datetime-local',step:1,value:local(pair[side][edge])});form.append(field((side==='before'?'Vóór':'Na')+' · '+(edge==='start'?'begin':'einde'),inputs[id]));}
   const update=()=>{const next={...pair,before:{start:fromLocal(inputs['pair-before-start'].value),end:fromLocal(inputs['pair-before-end'].value)},after:{start:fromLocal(inputs['pair-after-start'].value),end:fromLocal(inputs['pair-after-end'].value)},approved:false,validation:false};if(!SL.windowPhase(D,next.before)||!SL.windowPhase(D,next.after))throw new Error('Kies twee geldige vensters van minimaal 5 seconden binnen het log.');s.manoeuvrePairs[key]=next;WF.touch();show('pairreview');};
-  const setRange=side=>{if(!s.selections.analysis)throw new Error('Maak eerst een tijdselectie.');pair[side]=SL.copy(s.selections.analysis);pair.approved=false;pair.validation=false;WF.touch();show('pairreview');};const reason=h('input',{id:'pair-reason',value:pair.reason||'',placeholder:'Bijvoorbeeld windshift of onrustige aanloop'});
+  const setRange=side=>{if(!s.selections.analysis)throw new Error('Maak eerst een tijdselectie.');pair[side]=SL.copy(s.selections.analysis);pair.approved=false;pair.validation=false;WF.touch();show('pairreview');};
   side.append(card('Kalibratievensters',h('details',{},h('summary',{},'Tijden precies instellen'),form,bar(button('Vensters bijwerken',safe(update),true),button('Selectie als vóór',safe(()=>setRange('before'))),button('Selectie als na',safe(()=>setRange('after'))))),
-   check.valid?help('Beide vensters voldoen aan de ingestelde stabiliteit en datadekking. Controleer ook visueel of de omstandigheden vergelijkbaar zijn.'):h('ul',{class:'wf-notice'},check.errors.map(t=>h('li',{},t))),field('Reden / notitie',reason),bar(button('Paar goedkeuren',()=>{pair.approved=true;pair.validation=false;pair.reason=reason.value;pair.reviewedAt=Date.now();WF.touch();show('pairreview');},true,{disabled:!check.valid}),button('Goedkeuren & volgende',()=>{pair.approved=true;pair.validation=false;pair.reason=reason.value;pair.reviewedAt=Date.now();WF.touch();go(idx+1);},false,{disabled:!check.valid||idx===list.length-1}),button('Overslaan voor kalibratie',safe(()=>{if(!reason.value.trim())throw new Error('Vul een reden in.');pair.approved=false;pair.validation=false;pair.reason=reason.value.trim();WF.touch();if(idx<list.length-1)go(idx+1);else show('pairreview');})),button('Goedkeuring intrekken',()=>{pair.approved=false;pair.validation=false;WF.touch();show('pairreview');},false,{disabled:!pair.approved}))),
+   check.valid?help('Beide vensters voldoen aan de ingestelde stabiliteit en datadekking. Controleer ook visueel of de omstandigheden vergelijkbaar zijn.'):h('ul',{class:'wf-notice'},check.errors.map(t=>h('li',{},t))),field('Reden / notitie',reason),button('Opnieuw beoordelen',()=>{Object.assign(pair,{approved:false,validation:false,rejected:false,reason:''});delete pair.reviewedAt;delete s.lastPairDecision;WF.touch();show('pairreview');},false,{disabled:!pair.approved&&!pair.rejected&&!pair.reason})),
    table(['Kanaal','Vóór ± σ','Na ± σ','Δ na − vóór'],['BSP','AWA','TWA','TWD','TWS','HDG','Heel'].filter(k=>D.ch[k]).map(k=>{const a=check.before,b=check.after,v=(a&&b)?((SL.ANG.test(k)||['TWA','AWA'].includes(k))?SL.w180(b.v[k]-a.v[k]):b.v[k]-a.v[k]):NaN;return [k,a?f1(a.v[k],2)+' ± '+f1(a.spread[k],2):'—',b?f1(b.v[k],2)+' ± '+f1(b.spread[k],2):'—',f1(v,2)];})),
-   extended,card('Voortgang',help(`${SL.approvedPairs(D,s).length} bruikbare goedgekeurde paren. Overslaan heeft geen invloed op de manoeuvre-performanceanalyse.`),table(['Tijd','Manoeuvre','Beoordeling',''],list.map((x,i)=>{const q=s.manoeuvrePairs[SL.pairKey(D,x)];return [tstr(iT(x.i)),x.type,q?.approved?(SL.inspectPair(D,q,s.phaseBuild?.rules||D.cfg).valid?(q.validation?'Controlepaar':'Goedgekeurd'):'Opnieuw beoordelen'):q?.reason||'Te beoordelen',button('Open manoeuvre',()=>go(i))];}))));
+   extended,card('Voortgang',help(`${SL.approvedPairs(D,s).length} bruikbare goedgekeurde paren. Overslaan heeft geen invloed op de manoeuvre-performanceanalyse.`),table(['Tijd','Manoeuvre','Beoordeling',''],list.map((x,i)=>{const q=s.manoeuvrePairs[SL.pairKey(D,x)];return [tstr(iT(x.i)),x.type,q?.approved?(SL.inspectPair(D,q,s.phaseBuild?.rules||D.cfg).valid?(q.validation?'Controlepaar':'Goedgekeurd'):'Opnieuw beoordelen'):verdict(q),button('Open manoeuvre',()=>go(i))];}))));
  }
  function daycharts(){const c=pane('daycharts');c.append(h('h1',{},'Day charts'),help('Kaart, tijdlijn en kanalen van de opgeslagen sessie. De gedeelde selectie en filters bepalen welke meetpunten zichtbaar zijn.'));WF.timePanel(c);const channels=S().dayChannels||(S().dayChannels=['BSP','TWA','TWD'].filter(k=>A.D.ch[k]));const D=A.D,[lo,hi]=WF.rangeIndices();
   for(let j=0;j<channels.length;j++){const k=channels[j],cv=h('canvas'),section=card('Tijdreeks · '+k,field('Kanaal '+(j+1),sel('day-channel-'+j,varList(),k,v=>{channels[j]=v;show('daycharts');})),cv);c.append(section);const a=D.ch[k],v=Array.from(a.subarray(lo,hi)).filter(fin),min=SL.quant(v,.01),max=SL.quant(v,.99);const p=plot(cv,{xr:[lo,hi],yr:fin(min)?[min-.2,max+.2]:[0,1],h:200,yl:k,xfmt:i=>tstr(iT(i)),xTickGap:110});const step=Math.max(1,Math.floor((hi-lo)/2000));p.line(Array.from({length:Math.ceil((hi-lo)/step)},(_,n)=>[lo+n*step,a[lo+n*step]]),SER(j));}
@@ -3000,7 +3137,7 @@ const RaceTools = (() => {
         const range={start,end:start+length};
         const check=SL.inspectPair(D,{...base,[side]:range},rules);
         const w=check[side],prefix=side==='before'?'Vóór:':'Na:';
-        if(!w||!['BSP','TWA','TWS'].every(k=>w.coverage[k]>=.95)||check.errors.some(e=>e.startsWith(prefix)))continue;
+        if(!w||w.race!==D.L.race[m.i]||!['BSP','TWA','TWS'].every(k=>w.coverage[k]>=.95)||check.errors.some(e=>e.startsWith(prefix)))continue;
         if(D.mans.some(other=>other!==m && time(D,other.i)>Math.min(start,base.anchor)&&time(D,other.i)<Math.max(range.end,base.anchor)))continue;
         candidates.push({range,w});
       }
@@ -3076,7 +3213,7 @@ const RaceTools = (() => {
     if(check.before&&check.after)panel.append(table(['Δ |AWA|','Δ |TWA|','TWD-sprong na − vóór'],[pairMetrics(check.before,check.after).map(x=>f1(x,2)+'°')]));
     panel.append(action(pair.validation?'Vrijgeven voor model':'Apart houden voor controle',()=>{
       if(!pair.validation&&!check.valid)return banner('Kies eerst twee bruikbare vensters.',true);
-      pair.validation=!pair.validation;pair.approved=pair.validation;WF.touch();show('pairreview');
+      pair.validation=!pair.validation;pair.approved=pair.validation;pair.rejected=false;WF.touch();show('pairreview');
     }));
     nativePanel(panel,D,center);
   }
@@ -3231,6 +3368,43 @@ const PrepDesk = (() => {
     d.onclick=e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.remove();}};
     return d;
   }
+  const sampleCache=new WeakMap();
+  function lowerBound(times,t){
+    let a=0,b=times.length;
+    while(a<b){const mid=Math.floor((a+b)/2);if(times[mid]<t)a=mid+1;else b=mid;}
+    return a;
+  }
+  function loggedTraces(session,keys,t0,lo,hi,columns=Infinity){
+    const traces=new Map(),mappings=new Map((session.profile.channels||[]).map(m=>[m.target,m]));
+    for(const src of session.sources){
+      if(src.kind!=='log'||!src.text||src.end<=t0+lo*1000||src.start>=t0+hi*1000)continue;
+      const selected=keys.map(k=>({k,m:mappings.get(k)})).filter(({k,m})=>(src.channels||[]).includes(m?.source||k));
+      if(!selected.length)continue;
+      let cache=sampleCache.get(src);if(!cache){cache=new Map();sampleCache.set(src,cache);}
+      const missing=[...new Set(selected.map(({k,m})=>m?.source||k))].filter(k=>!cache.has(k));
+      if(missing.length){
+        if(cache.size+missing.length>12)cache.clear();
+        const wanted=selected.map(({k,m})=>m?.source||k).filter(k=>!cache.has(k));
+        for(const [k,data] of SL.parseLog(src.text,{channels:[...new Set(wanted)]}))cache.set(k,data);
+      }
+      for(const {k,m} of selected){
+        if(!traces.has(k))traces.set(k,[]);
+        const {times,values}=cache.get(m?.source||k),end=lowerBound(times,t0+hi*1000);
+        const start=lowerBound(times,t0+lo*1000),points=traces.get(k);
+        const add=i=>points.push([(times[i]-t0)/1000,values[i]*(m?.factor??1)+(m?.offset??0)]);
+        if(end-start<=columns*3){for(let i=start;i<end;i++)add(i);continue;}
+        // At wide zoom retain both extremes in every screen column, never an average.
+        const span=(hi-lo)*1000/columns,origin=t0+lo*1000;
+        for(let i=start;i<end;){
+          const boundary=origin+(Math.floor((times[i]-origin)/span)+1)*span;
+          let min=i,max=i,j=i+1;
+          while(j<end&&times[j]<boundary){if(values[j]<values[min])min=j;if(values[j]>values[max])max=j;j++;}
+          add(min);if(max!==min)add(max);i=j;
+        }
+      }
+    }
+    return traces;
+  }
   function mount(container,title,options={}){
     const D=A.D,s=WF.session,g=mapGeom(D),pair=options.pair;
     const view=s.deskMap||=( {z:1,x:0,y:0} );
@@ -3258,18 +3432,26 @@ const PrepDesk = (() => {
     const timeControls=bar(button('−1 s',()=>nudge(-1)),button('+1 s',()=>nudge(1)),field('Kanaal',sel('desk-channel',varList(),key,v=>{s.plotVariable=v;show(A.tab);})),rangeLabel,
       button('Tijdvak',()=>dialog('Tijdvak instellen',WF.selectionBar())),
       button('Zoom op selectie',()=>{if(!s.selections.analysis)return banner('Sleep eerst een tijdvak in de tijdgrafiek.');s.viewport=WF.rangeIndices();view.x=view.y=0;view.z=1;show(A.tab);}),
-      button('Hele log',()=>{s.viewport=null;s.selections.analysis=null;view.x=view.y=0;view.z=1;show(A.tab);}));
+      button('Hele log',()=>{s.viewport=pair?[D.i0,D.i1]:null;s.selections.analysis=null;view.x=view.y=0;view.z=1;show(A.tab);}));
     const desk=h('div',{class:'prep-desk'+(pair?' desk-pair':'')},h('section',{class:'desk-spatial'},status,mapBox),side,h('section',{class:'desk-time'},timeControls,stripBox));
     const mobileToggle=button('',()=>{s.deskList=!s.deskList;mobile();schedule();},{class:'desk-mobile-toggle'});
     function mobile(){desk.classList.toggle('desk-list-open',!!s.deskList);mobileToggle.textContent=s.deskList?'Kaart tonen':title+' tonen';}
     mobile();container.append(mobileToggle,desk);
     if(g&&s.viewport){const bx=[Infinity,-Infinity],by=[Infinity,-Infinity];for(let i=lo;i<hi;i++)if(fin(g.x[i])&&fin(g.y[i])){bx[0]=Math.min(bx[0],g.x[i]);bx[1]=Math.max(bx[1],g.x[i]);by[0]=Math.min(by[0],g.y[i]);by[1]=Math.max(by[1],g.y[i]);}if(fin(bx[0]))bounds={bx,by};}
     const channels=pair?[...new Set([key,'AWA','TWD','Heel'])].filter(k=>D.ch[k]):[key];
+    const sourceMode=pair&&(s.sources||[]).some(f=>f.kind==='log'&&f.text);
+    if(pair){
+      const picker=sel('pair-trace-mode',sourceMode?['Logsamples','Analyse 1 Hz']:['Analyse 1 Hz'],sourceMode&&s.pairTraceMode!=='Analyse 1 Hz'?'Logsamples':'Analyse 1 Hz',v=>{s.pairTraceMode=v;WF.touch();show(A.tab);});
+      timeControls.prepend(field('Weergave',picker));
+    }
+    const native=sourceMode&&s.pairTraceMode!=='Analyse 1 Hz'?loggedTraces(s,channels,D.raw.t0,lo,hi,Math.max(256,stripBox.clientWidth||1200)):new Map();
     const series=channels.map(k=>{
-      const step=Math.max(1,Math.floor(dt/2200)),pts=[],ref=k==='TWD'?SL.cmean(D.ch[k].subarray(lo,hi)):NaN;
+      const samples=native.get(k),pts=[],ref=k==='TWD'?SL.cmean(D.ch[k].subarray(lo,hi)):NaN;
       let min=Infinity,max=-Infinity;
-      for(let i=lo;i<hi;i+=step){const a=D.ch[k]?.[i],v=fin(ref)?ref+SL.w180(a-ref):a;pts.push([i,v]);if(fin(v)){min=Math.min(min,v);max=Math.max(max,v);}}
-      return {k,pts,min,max};
+      const add=(i,a)=>{const v=fin(ref)?ref+SL.w180(a-ref):a;pts.push([i,v]);if(fin(v)){min=Math.min(min,v);max=Math.max(max,v);}};
+      if(samples){for(const [i,v] of samples)add(i,v);}
+      else {const step=pair?1:Math.max(1,Math.floor(dt/2200));for(let i=lo;i<hi;i+=step)add(i,D.ch[k]?.[i]);}
+      return {k,pts,min,max,logged:!!samples};
     });
     const lanes=[];
     if(!pair){
@@ -3303,11 +3485,12 @@ const PrepDesk = (() => {
         for(const [a,b,name]of runs){const width=X(b)-X(a);c.fillStyle=alpha(css(color),.4);c.fillRect(X(a),y+1,width,laneHeight-2);
           if(width>name.length*7+8){c.fillStyle=css('--ink');c.fillText(name,X(a)+4,y+laneHeight/2);}}
       });
-      series.forEach(({k,pts,min,max},j)=>{
+      series.forEach(({k,pts,min,max,logged},j)=>{
         const y=3+j*row;c.strokeStyle=css('--line');c.beginPath();c.moveTo(left,y+row);c.lineTo(W-right,y+row);c.stroke();
-        c.fillStyle=css('--ink2');c.fillText(k,5,y+row*.3);if(fin(min))c.fillText(f1(min,1)+'–'+f1(max,1),5,y+row*.72);
+        c.fillStyle=css('--ink2');c.fillText(pair?k+' · '+(logged?'log':'1 Hz'):k,5,y+row*.3);if(fin(min))c.fillText(f1(min,1)+'–'+f1(max,1),5,y+row*.72);
         c.strokeStyle=SER(j);c.lineWidth=1.6;c.beginPath();let on=false;
-        for(const [i,v]of pts){if(!fin(v)){on=false;continue;}const py=y+row-4-(max===min?.5:(v-min)/(max-min))*(row-8);if(on)c.lineTo(X(i),py);else c.moveTo(X(i),py);on=true;}c.stroke();
+        c.fillStyle=SER(j);
+        for(const [i,v]of pts){if(!fin(v)){on=false;continue;}const py=y+row-4-(max===min?.5:(v-min)/(max-min))*(row-8);if(logged)c.fillRect(X(i)-.8,py-.8,1.6,1.6);else if(on)c.lineTo(X(i),py);else c.moveTo(X(i),py);on=true;}c.stroke();
       });
       if(!pair){c.fillStyle=css('--s2');for(const e of D.L.list)if(e.i>=lo&&e.i<hi)c.fillRect(X(e.i)-1,1,3,8);}
       if(pair)for(const r of [pair.before,pair.after])for(const t of [r.start,r.end]){c.fillStyle=css('--ink2');c.fillRect(X(idx(t)),3,1,H-26);}
@@ -3341,7 +3524,7 @@ const PrepDesk = (() => {
     draw();if(window.ResizeObserver){observer=new ResizeObserver(schedule);observer.observe(mapBox);observer.observe(stripBox);}
     return {side,toolbar,draw};
   }
-  return {mount,dialog,leave,button};
+  return {mount,dialog,leave,button,loggedTraces};
 })();
 
 'use strict';
