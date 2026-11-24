@@ -472,6 +472,67 @@ const WF = (() => {
     })));
     refresh();return box;
   }
+  function residualPanel(c,kind,phases,bspModel,draft,getProposal){
+    const options=session.diagnosticCurrent ||= {mode:'model',set:null,drift:null};
+    const views=session.diagnosticViews ||= {};
+    const view=views[kind] ||= {};
+    const source=h('select',{id:'cal-current-source'},[
+      ['model','Geschat per kwartier'],['logged','Gelogde Set / Drift'],['manual','Handmatige set en drift']
+    ].map(([value,label])=>h('option',{value,selected:value===options.mode},label)));
+    const manual=h('div',{class:'form'});
+    function number(key,label,max){
+      const input=h('input',{type:'number',id:'cal-current-'+key,step:'any',min:0,max,value:options[key]??''});
+      input.oninput=()=>{options[key]=fin(input.valueAsNumber)?input.valueAsNumber:null;touch();render();};
+      return field(label,input);
+    }
+    manual.append(number('set','Stroom naar (° waar)',360),number('drift','Stroomsnelheid (kn)'));
+    const output=h('div'),status=h('span',{role:'status'}),controls=bar(field('Stroombron',source));
+    const panel=card('Stroomcorrectie',controls,manual,output);
+    c.append(panel);
+    let data=A.D,windows=phases,displayedCal=A.calib,signature=null;
+    const drawProposal=btn('Teken voorstel',safe(()=>{
+      const next=getProposal();
+      const fixed=phases.map(p=>{
+        const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)});
+        return w && {...p,v:w.v,coverage:w.coverage};
+      }).filter(Boolean);
+      data=next;windows=fixed;displayedCal=SL.copy(draft);signature=JSON.stringify(draft);render();
+    }),false,{disabled:!phases.length});
+    const drawActive=btn('Toon actieve kalibratie',()=>{
+      data=A.D;windows=phases;displayedCal=A.calib;signature=null;render();
+    });
+    controls.append(drawProposal,drawActive,status);
+    function sensorAt(row,layout){
+      const {ch,age}=data.raw;
+      if(!ch[layout.selector]||!ch[layout.port]||!ch[layout.starboard])return null;
+      const first=ch[layout.selector][row.i];
+      const side=first===layout.portCode?'port':first===layout.starboardCode?'starboard':null;
+      if(side)for(let i=row.i;i<row.i1;i++){
+        const sensor=layout[side];
+        if(ch[layout.selector][i]!==first||!fin(ch[sensor][i])||ch[sensor][i]<0||data.invalid?.[i]||
+            age?.[layout.selector]?.[i]>data.cfg.maxHold||age?.[sensor]?.[i]>data.cfg.maxHold)return 'Onbekend / wissel';
+      }
+      return side==='port'?'Bakboord':side==='starboard'?'Stuurboord':'Onbekend / wissel';
+    }
+    function updateStatus(){
+      drawActive.hidden=signature===null;
+      status.textContent=signature===null?'Grafiek met actieve kalibratie':signature===JSON.stringify(draft)?'Grafiek met voorstel':'Voorstel gewijzigd. Kies Teken voorstel om de grafiek bij te werken.';
+    }
+    function render(){
+      manual.hidden=options.mode!=='manual';
+      const diagnostic=SL.calibrationResiduals(data,windows,bspModel,kind,options);
+      if(kind==='speed'){
+        const layout=SL.speedoConfig(data.raw.ch,displayedCal?.speedos||session.profile.speedoLayout);
+        for(const row of diagnostic.rows)row.sensor=sensorAt(row,layout);
+      }
+      output.replaceChildren();
+      CalibrationPlots.render(output,diagnostic,view);
+      updateStatus();
+    }
+    source.onchange=()=>{options.mode=source.value;touch();render();};
+    for(const event of ['input','change'])c.addEventListener(event,updateStatus,{signal:windListeners.signal});
+    if(session.preview&&phases.length)drawProposal.click();else render();
+  }
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
     windListeners?.abort();windListeners=new AbortController();
@@ -496,6 +557,16 @@ const WF = (() => {
       draft[k]=e.target.value===''?null:e.target.valueAsNumber;session.preview=false;touch();speedBox?.dispatchEvent(new Event('bsp-factor'));
     }})));
     const speedBox=index===0?speedoEditor(draft,ps,model.bsp):null;if(speedBox)c.append(speedBox);
+    let cachedProposal,cachedKey;
+    function getProposal(){
+      const cfg=validateCalib(draft),key=JSON.stringify(cfg);
+      if(key!==cachedKey){
+        cachedProposal=key===JSON.stringify(A.calib)?A.D:process(snapshot(false),cfg);
+        cachedKey=key;
+      }
+      return cachedProposal;
+    }
+    if(index<2)residualPanel(c,index===0?'speed':'heading',ps,model.bsp,draft,getProposal);
     if(index===1)editor.append(help('Heading en leeway veranderen samen de geschatte stroom. Controleer de fit op goedgekeurde rakken over beide boegen.'),
       table(['Referentie','Uitkomst'],[['Goedgekeurde fases',ps.length],['Heading-offset uit BSP/stroom-fit',model.bsp.err?'Onvoldoende dekking':f1(model.bsp.delta,1)+'°']]));
     if(index===2)editor.append(help('Een positieve offset wordt opgeteld bij de gesigneerde AWA. Gebruik stabiele vensters rond aandewindse tacks.'));
@@ -525,7 +596,7 @@ const WF = (() => {
         btn('Voorstel toepassen', safe(() => applyCalibration(draft)), false, { disabled: session.calibrationChanged }),
         btn('Voorstel wissen', () => { session.draft = SL.copy(SL.CAL0); session.preview = false; show('cal'); })));
     if (session.preview) {
-      try { const s = snapshot(false), original = process(s, null), proposed = process(s, validateCalib(draft));
+      try { const s = snapshot(false), original = process(s, null), proposed = getProposal();
         const references = ps.length ? ps.map(p => [p.i, p.i1]) : [[A.D.i0, A.D.i1]];
         const avg = (D, k) => { const values = []; for (const [lo, hi] of references) for (let i = lo; i < hi; i++) values.push(D.ch[k]?.[i]); return (SL.ANG.test(k) ? SL.cmean : SL.mean)(values); };
         c.append(card('Gelogd · actief · voorstel', help(ps.length ? 'Exact dezelfde goedgekeurde tijdvakken voor alle drie de berekeningen.' : 'Geen goedgekeurde referenties: dit zijn alleen beschrijvende sessiegemiddelden.'), table(['Variabele', 'Gelogd', 'Actief', 'Voorstel'], ['BSP', 'AWA', 'TWA', 'TWS', 'TWD', 'VMG', ...s.profile.formulas.map(d => d.name)].map(k => [k, f1(avg(original, k), 2), f1(avg(A.D, k), 2), f1(avg(proposed, k), 2)]))));

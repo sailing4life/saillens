@@ -311,3 +311,31 @@ test('per-sensor proposal and boat layout survive step navigation and explicit a
   await a.run('WF.persist()');assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });
+
+test('current diagnostics share the session current, sensor mapping and a reversible draft plot',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  a.run(`A.raw.ch['BSP active']=new Float64Array(A.raw.n).fill(1);
+    A.raw.ch['BSP Bsp']=A.raw.ch.BSP.slice();A.raw.ch['BSP Sb']=A.raw.ch.BSP.slice();
+    WF.recompute();STUDIO.generate(SL.phaseDefaults(A.cfg));show('review');`);
+  await a.click('Getoonde selectie goedkeuren');
+  a.run("show('cal')");
+  const box='#cal-delta-speed', sel=name=>a.$(box+' select[aria-label="'+name+'"]');
+  assert.equal(sel('Horizontale as').value,'bsp');
+  assert.match(sel('BSP-sensor').textContent,/Bakboord/);
+  a.fill('#cal-current-source','manual');a.fill('#cal-current-set','90');a.fill('#cal-current-drift','0.7');
+  assert.ok(a.$(box+' input[data-series="corrected"]').checked);
+  const base=a.run('A.D.ch.BSP[200]');
+  a.fill('#draft-bspK','1.05');await a.click('Teken voorstel');
+  assert.match(a.$('#t-cal').textContent,/Grafiek met voorstel/);
+  assert.equal(a.run('A.D.ch.BSP[200]'),base);
+  a.fill('#draft-bspK','1.03');
+  assert.match(a.$('#t-cal').textContent,/Voorstel gewijzigd/);
+  await a.click('Kompas & leeway');
+  assert.equal(a.$('#cal-delta-heading select[aria-label="Horizontale as"]').value,'heading');
+  assert.equal(a.$('#cal-current-source').value,'manual');assert.equal(a.$('#cal-current-set').value,'90');
+  assert.equal(a.$('#cal-current-drift').value,'0.7');
+  a.fill('#cal-current-drift','');assert.equal(a.$('#cal-delta-heading input[data-series="corrected"]').disabled,true);
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});

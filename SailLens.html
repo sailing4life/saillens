@@ -1549,6 +1549,149 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
 })();
 
 'use strict';
+(() => {
+  const {fin, D2R, R2D, w180, w360} = SL;
+  const minimumTrackSpeed = .5; // kn, below this a direction is poorly determined
+  const interval = 15 * 60 * 1000;
+  const scope = phase => phase.sessionId || phase.day || '';
+  const phaseKey = p => JSON.stringify([scope(p), p.t, p.i ?? null, p.i1 ?? null]);
+  const windowKey = p => JSON.stringify([scope(p), Math.floor(p.t / interval)]);
+
+  function vector(set, drift) {
+    if (!fin(drift) || drift < 0) return null;
+    if (drift === 0) return {east:0, north:0};
+    if (!fin(set) || set < 0 || set > 360) return null;
+    return {east:drift * Math.sin(set * D2R), north:drift * Math.cos(set * D2R)};
+  }
+
+  // calBsp timestamps each estimated current with its first contributing phase.
+  // Only the exact windows that went into that fit get a corrected observation.
+  function fittedCurrents(model) {
+    const phases = model?.ratio || [], anchor = new Map(), byWindow = new Map();
+    for (const {p} of phases) {
+      const key = windowKey(p);
+      if (!anchor.has(p.t)) anchor.set(p.t, key);
+      else if (anchor.get(p.t) !== key) anchor.set(p.t, null);
+    }
+    for (const current of model?.cur || []) {
+      const key = anchor.get(current.t), value = vector(current.dir, current.rate);
+      if (key && value) byWindow.set(key, value);
+    }
+    const byPhase = new Map();
+    for (const {p} of phases) {
+      const value = byWindow.get(windowKey(p));
+      if (value) byPhase.set(phaseKey(p), value);
+    }
+    return byPhase;
+  }
+
+  function loggedVector(D, i) {
+    const channels = D.raw?.ch, age = D.raw?.age, limit = D.cfg?.maxHold ?? SL.DEF.maxHold;
+    if (!channels?.Set || !channels.Drift || age?.Drift?.[i] > limit) return null;
+    const drift = channels.Drift[i];
+    if (drift !== 0 && age?.Set?.[i] > limit) return null;
+    return vector(channels.Set[i], drift);
+  }
+
+  // Evaluate the same signed residual twice, over ground and through water.
+  // A zero current leaves SOG usable even if no course was logged.
+  function residual(sog, cog, instrument, flow, headingPlot) {
+    if (!flow || !fin(instrument) || !fin(sog) || sog < 0 || (!headingPlot && instrument < 0)) return NaN;
+    if (!headingPlot && flow.east === 0 && flow.north === 0) return sog - instrument;
+    const ground = vector(cog, sog);
+    if (!ground) return NaN;
+    const east = ground.east - flow.east, north = ground.north - flow.north, speed = Math.hypot(east, north);
+    if (!headingPlot) return speed - instrument;
+    if (sog < minimumTrackSpeed || speed < minimumTrackSpeed) return NaN;
+    return w180(instrument - Math.atan2(east, north) * R2D);
+  }
+
+  const still = {east:0, north:0};
+  function meanResidual(values, expectedCount, headingPlot) {
+    if (!values.length || values.length < .95 * expectedCount) return NaN;
+    if (!headingPlot) return SL.mean(values);
+    let sin = 0, cos = 0;
+    for (const angle of values) {sin += Math.sin(angle * D2R); cos += Math.cos(angle * D2R);}
+    return Math.hypot(sin, cos) > 1e-9 * values.length ? w180(Math.atan2(sin, cos) * R2D) : NaN;
+  }
+
+  function phaseResidual(D, p, mode, current, variation, headingPlot) {
+    const key = headingPlot ? 'HDG' : 'BSP', offset = headingPlot ? variation : 0;
+    if (!D.ch || !Number.isInteger(p.i) || !Number.isInteger(p.i1)) {
+      // Imported summaries have no synchronized samples for a logged-current estimate.
+      const instrument = fin(p.v[key]) ? p.v[key] + offset : NaN;
+      const raw = residual(p.v.SOG, p.v.COG, instrument, still, headingPlot);
+      const corrected = residual(p.v.SOG, p.v.COG, instrument, current, headingPlot);
+      return {raw, corrected, flow:fin(corrected) ? current : null};
+    }
+    const rawValues = [], correctedValues = [];
+    let east = 0, north = 0;
+    for (let i = p.i; i < p.i1; i++) {
+      if (D.invalid?.[i]) continue;
+      const sog = D.ch.SOG?.[i], cog = D.ch.COG?.[i], input = D.ch[key]?.[i];
+      if (!fin(input)) continue;
+      const instrument = input + offset;
+      const raw = residual(sog, cog, instrument, still, headingPlot);
+      if (fin(raw)) rawValues.push(raw);
+      const time = p.t + (i - p.i) * 1000;
+      if (mode === 'model' && Math.floor(time / interval) !== Math.floor(p.t / interval)) continue;
+      const flow = mode === 'logged' ? loggedVector(D, i) : current;
+      const corrected = residual(sog, cog, instrument, flow, headingPlot);
+      if (fin(corrected)) {
+        correctedValues.push(corrected);
+        east += flow.east;
+        north += flow.north;
+      }
+    }
+    const count = p.i1 - p.i;
+    const corrected = meanResidual(correctedValues,count,headingPlot);
+    const flow = fin(corrected) ? {east:east / correctedValues.length, north:north / correctedValues.length} : null;
+    return {raw:meanResidual(rawValues,count,headingPlot), corrected, flow};
+  }
+
+  function calibrationResiduals(D, phases, bspModel, kind, options = {}) {
+    const mode = options.mode ?? 'model', headingPlot = kind === 'heading';
+    const fit = mode === 'model' ? fittedCurrents(bspModel) : null;
+    const manual = mode === 'manual' ? vector(options.set, options.drift) : null;
+    const configured = D.cfg?.magVar;
+    const variation = fin(configured) ? configured : 0, rows = [];
+    for (const p of phases) {
+      if (!fin(p.t)) continue;
+      const {BSP:bsp, Heel:heel, HDG:hdg} = p.v;
+      const heading = fin(hdg) ? w360(hdg + variation) : NaN;
+      const current = mode === 'model' ? fit.get(phaseKey(p)) : manual;
+      const {raw, corrected, flow} = phaseResidual(D,p,mode,current,variation,headingPlot);
+      const currentDrift = flow ? Math.hypot(flow.east, flow.north) : NaN;
+      const currentSet = currentDrift > 1e-9 ? w360(Math.atan2(flow.east, flow.north) * R2D) : NaN;
+      if (fin(raw) || fin(corrected)) rows.push({
+        t:p.t, i:p.i, i1:p.i1, raw, corrected, side:p.tack, source:fin(corrected) ? mode : null,
+        heading, bsp, heel, currentDrift, currentSet
+      });
+    }
+    rows.sort((a, b) => a.t - b.t);
+
+    const notes = [];
+    if (mode === 'model') notes.push('Stroom uit de BSP-fit per kwartier, uitsluitend voor de gebruikte referenties. De fit gebruikt dezelfde GPS- en instrumentmetingen.');
+    if (mode === 'manual' && manual) notes.push('Vaste stroom voor alle getoonde referenties: ' + options.drift + ' kn' + (options.drift ? ' naar ' + options.set + '° waar.' : '.'));
+    if (mode === 'logged') notes.push('Set en Drift uit het log, als stroomrichting waarheen in °T en snelheid in kn. Een fase vereist 95% gepaarde dekking. De logger kan deze stroom zelf uit BSP en GPS afleiden.');
+    if (fin(configured)) notes.push('HDG gebruikt de ingestelde variatie van ' + configured + '° (oost positief).');
+    else notes.push('HDG volgt de noordreferentie van het log. Stel bij magnetische HDG de variatie in bij Setup voor vergelijking met ware GPS-koersen.');
+    if (headingPlot) notes.push('Positief = HDG rechtsom van de referentiekoers. Ook na stroomcorrectie telt leeway mee. Koersen bij minder dan 0,5 kn zijn onzeker.');
+    let issue = '';
+    if (!phases.length) issue = 'Keur stabiele fases of manoeuvrevensters goed om restfouten te vergelijken.';
+    else if (mode === 'manual' && !manual) issue = 'Vul een geldige stroomrichting (0–360° waar) en een niet-negatieve stroomsnelheid in.';
+    else if (!rows.length) issue = headingPlot ? 'Geen bruikbare HDG- en GPS-koers in de gekozen referenties.' : 'Geen bruikbare BSP en SOG in de gekozen referenties.';
+    else if (!rows.some(row => fin(row.corrected))) {
+      if (mode === 'model' && !fit.size) issue = 'De lokale stroomfit heeft onvoldoende referenties met verschillende vaarrichtingen.';
+      else if (mode === 'logged') issue = 'Onvoldoende gelijktijdige geldige GPS- en Set/Drift-metingen voor stroomcorrectie.';
+      else issue = 'Onvoldoende geldige koers- of snelheidsmetingen voor stroomcorrectie.';
+    }
+    return {kind, rows, issue, reference:notes.join(' ')};
+  }
+  SL.calibrationResiduals = calibrationResiduals;
+})();
+
+'use strict';
 const TrackMap=(()=>{
   const limit=85.05112878;
   function geometry(D, raw=false){
@@ -1905,6 +2048,129 @@ function blkCal(c, off) {
     rr.push([{ t: 'Mean', c: 'b' }, { t: f1(m('tws')), c: 'b' }, { t: f1(m('awaP')), c: 'b' }, { t: f1(m('awaS')), c: 'b' }, { t: f1(m('awaP') - m('awaS')), c: 'b' }, { t: f1(m('twaP')), c: 'b' }, { t: f1(m('twaS')), c: 'b' }, { t: f1(m('twaP') - m('twaS')), c: 'b' }, { t: f1(SL.cmean(r.map(x => x.P))), c: 'b' }, { t: f1(SL.cmean(r.map(x => x.S))), c: 'b' }, { t: f1(m('d')), c: 'b' }]);
     g.append(h('div', {}, h('p', { class: 'b' }, lab), table(['Time', 'TWS', 'AWA port', 'AWA stbd', 'ΔAWA', 'TWA port', 'TWA stbd', 'ΔTWA', 'TWD port', 'TWD stbd', 'ΔTWD'], rr, 'num'))); }
 }
+
+'use strict';
+const CalibrationPlots = (() => {
+  function render(container, diagnostic, view = {}) {
+    const speed = diagnostic.kind === 'speed';
+    const variable = speed ? 'SOG − BSP' : 'HDG − COG';
+    const unit = speed ? 'kn' : '°';
+    const signed = value => {
+      if (!fin(value)) return '—';
+      const rounded = Number(value.toFixed(speed ? 2 : 1));
+      return (rounded > 0 ? '+' : '') + rounded.toLocaleString('nl-NL', {
+        minimumFractionDigits: speed ? 2 : 1, maximumFractionDigits: speed ? 2 : 1
+      });
+    };
+    const side = value => ({Port:'BB', Stbd:'SB', Starboard:'SB'})[value] || value || '—';
+    const rows = diagnostic.rows.filter(r => fin(r.t) && (fin(r.raw) || fin(r.corrected)));
+    const source = value => ({model:'Stroommodel', manual:'Handmatig', logged:'Gelogde stroom'})[value] || value || '';
+    const axes = speed
+      ? [{key:'bsp', label:'BSP (kn)'}, {key:'t', label:'Sessietijd'}]
+      : [{key:'heading', label:'Heading (°)'}, {key:'t', label:'Sessietijd'}];
+    if (rows.some(r => fin(r.heel))) axes.push({key:'heel', label:'Helling (°)'});
+    const correctedCount = rows.filter(r => fin(r.corrected)).length;
+    const rawCount = rows.filter(r => fin(r.raw)).length;
+    const panel = card(variable + ' per referentievenster');
+    panel.id = 'cal-delta-' + diagnostic.kind;
+    container.append(panel);
+    if (diagnostic.reference) panel.append(h('p', {class:'muted'}, diagnostic.reference));
+    if (diagnostic.issue) panel.append(h('p', {role:'status'}, diagnostic.issue));
+    if (!rows.length) {
+      if (!diagnostic.issue) panel.append(h('p', {}, 'Keur een stabiele fase of een manoeuvrepaar met ' + variable.replace(' − ', ' en ') + ' goed voor kalibratie.'));
+      return panel;
+    }
+    const cv = h('canvas', {role:'img', 'aria-label': variable + ' per venster in ' + unit + '. De waarden staan in de tabel onder de grafiek.'});
+    const controls = h('div', {class:'legend', role:'group', 'aria-label':'Zichtbare reeksen'});
+    const sets = [
+      {key:'raw', label:'Zonder stroomcorrectie', color:css('--s1'), triangle:false, count:rawCount},
+      {key:'corrected', label:'Met stroomcorrectie', color:css('--s2'), triangle:true, count:correctedCount}
+    ];
+    const availableAxes = axes.filter(axis => rows.some(r => fin(r[axis.key])));
+    const choose = key => e => { view[key] = e.target.value; draw(); };
+    const axis = h('select', {'aria-label':'Horizontale as', onchange:choose('axis')},
+      availableAxes.map(a => h('option', {value:a.key, selected:a.key===view.axis}, a.label)));
+    const sides = [...new Set(rows.map(r => side(r.side)))].filter(s => s !== '—');
+    const tack = h('select', {'aria-label':'Boeg', onchange:choose('tack')},
+      h('option', {value:''}, 'Beide boegen'), sides.map(s => h('option', {value:s, selected:s===view.tack}, s)));
+    const sensors = speed ? [...new Set(rows.map(r => r.sensor).filter(Boolean))] : [];
+    const showSensors = sensors.some(name => name === 'Bakboord' || name === 'Stuurboord');
+    const sensor = h('select', {'aria-label':'BSP-sensor', onchange:choose('sensor')}, h('option', {value:''}, 'Alle sensoren'),
+      sensors.map(name => h('option', {value:name, selected:showSensors && name===view.sensor}, name)));
+    const axesBar = bar(field('Horizontale as', axis), sides.length > 1 ? field('Boeg', tack) : null,
+      showSensors ? field('BSP-sensor', sensor) : null);
+    const status = h('p', {class:'muted', role:'status'});
+    for (const set of sets) {
+      set.input = h('input', {type:'checkbox', 'data-series':set.key, checked:set.count > 0 && view[set.key] !== false,
+        disabled:!set.count, onchange:e=>{view[set.key]=e.target.checked;draw();}});
+      const marker = h('i', {'aria-hidden':'true', class:set.triangle ? 'tri' : '',
+        style: set.triangle ? 'border-bottom-color:' + set.color : 'background:' + set.color + ';border-radius:50%'});
+      set.caption = h('span', {}, set.label);
+      controls.append(h('label', {style:'display:inline-flex;align-items:center;gap:5px;cursor:pointer'}, set.input, marker, set.caption));
+    }
+    panel.append(axesBar, controls, cv, status);
+
+    // Keep the vertical range fixed across filters so the before/after comparison uses the same scale.
+    let limit = speed ? .2 : 2;
+    for (const r of rows) for (const set of sets) {
+      if (fin(r[set.key])) limit = Math.max(limit, Math.abs(r[set.key]) * 1.08);
+    }
+    function selection() {
+      return rows.filter(r => fin(r[axis.value]) && (!tack.value || side(r.side) === tack.value) && (!sensor.value || r.sensor === sensor.value));
+    }
+    function draw() {
+      const selected = selection();
+      for (const set of sets) set.caption.textContent = set.label + ' (' + selected.filter(r => fin(r[set.key])).length + ')';
+      const visible = sets.filter(set => set.input.checked);
+      const hasValue = selected.some(r => visible.some(set => fin(r[set.key])));
+      cv.hidden = !hasValue;
+      // The stylesheet sets every canvas to display:block.
+      cv.style.display = hasValue ? '' : 'none';
+      updateTable();
+      if (!hasValue) {
+        status.textContent = visible.length ? 'Geen meetwaarden voor deze selectie.' : 'Selecteer een reeks om de grafiek te tonen.';
+        return;
+      }
+      status.textContent = speed
+        ? 'Boven nul leest BSP lager dan de gekozen GPS-snelheidsreferentie.'
+        : 'Boven nul ligt de heading met de klok mee ten opzichte van de gekozen koersreferentie. Leeway kan bijdragen aan dit verschil.';
+      const x = axis.value;
+      const label = axes.find(a => a.key === x).label;
+      const values = selected.map(r => r[x]);
+      const min = values.reduce((a,b) => Math.min(a,b)), max = values.reduce((a,b) => Math.max(a,b));
+      const padding = Math.max(x === 't' ? 1000 : .2, (max-min)*.025);
+      const bounds = x === 'heading' ? [0,360] : [x === 'bsp' ? Math.max(0,min-padding) : min-padding, max+padding];
+      const g = plot(cv, {h:225, pl:56, pr:22, xr:bounds, yr:[-limit, limit], xl:label, yl:variable + ' (' + unit + ')',
+        xTickGap:x === 't' ? 85 : 65, xfmt:x === 't' ? t => max-min < 60000 ? tstr(t) : tstr(t).slice(0,5) : undefined});
+      g.zero(0);
+      for (const r of selected) {
+        const tip = [dstr(r.t), side(r.side), x !== 't' ? label + ' ' + f1(r[x],1) : '', showSensors && r.sensor ? 'BSP-sensor '+r.sensor : '', source(r.source),
+          ...visible.filter(set => fin(r[set.key])).map(set => set.label + ' ' + signed(r[set.key]) + ' ' + unit)].filter(Boolean).join(' · ');
+        for (const set of visible) g.dot(r[x], r[set.key], set.color, tip, null, set.triangle, set.triangle ? 3.3 : 4.6);
+      }
+    }
+    const summary = h('summary');
+    const details = h('details', {}, summary);
+    function updateTable() {
+      if (!details.isConnected) return;
+      const selected = selection();
+      summary.textContent = 'Meetwaarden per venster (' + selected.length + ')';
+      if (!details.open) return;
+      const additionalAxis = axes.find(a => a.key === axis.value && a.key !== 't');
+      const hasSource = selected.some(r => r.source);
+      const hasCurrent = selected.some(r => fin(r.currentSet) || fin(r.currentDrift));
+      details.replaceChildren(summary, table(['Sessietijd', 'Boeg', ...(showSensors ? ['BSP-sensor'] : []), ...(additionalAxis ? [additionalAxis.label] : []), ...(hasSource ? ['Stroombron'] : []),
+        ...(hasCurrent ? ['Set (°T)', 'Drift (kn)'] : []), 'Zonder stroomcorrectie (' + unit + ')', 'Met stroomcorrectie (' + unit + ')'],
+        selected.map(r => [dstr(r.t), side(r.side), ...(showSensors ? [r.sensor || '—'] : []), ...(additionalAxis ? [f1(r[axis.value],1)] : []),
+          ...(hasSource ? [source(r.source) || '—'] : []), ...(hasCurrent ? [f1(r.currentSet,0), f1(r.currentDrift,2)] : []), signed(r.raw), signed(r.corrected)])));
+    }
+    details.addEventListener('toggle', updateTable);
+    panel.append(details);
+    draw();
+    return panel;
+  }
+  return {render};
+})();
 
 'use strict';
 /* SailLens tabs (part 1): shell, loading, setup, events, summary, chart, phases, performance, XY, polar. */
@@ -3127,6 +3393,67 @@ const WF = (() => {
     })));
     refresh();return box;
   }
+  function residualPanel(c,kind,phases,bspModel,draft,getProposal){
+    const options=session.diagnosticCurrent ||= {mode:'model',set:null,drift:null};
+    const views=session.diagnosticViews ||= {};
+    const view=views[kind] ||= {};
+    const source=h('select',{id:'cal-current-source'},[
+      ['model','Geschat per kwartier'],['logged','Gelogde Set / Drift'],['manual','Handmatige set en drift']
+    ].map(([value,label])=>h('option',{value,selected:value===options.mode},label)));
+    const manual=h('div',{class:'form'});
+    function number(key,label,max){
+      const input=h('input',{type:'number',id:'cal-current-'+key,step:'any',min:0,max,value:options[key]??''});
+      input.oninput=()=>{options[key]=fin(input.valueAsNumber)?input.valueAsNumber:null;touch();render();};
+      return field(label,input);
+    }
+    manual.append(number('set','Stroom naar (° waar)',360),number('drift','Stroomsnelheid (kn)'));
+    const output=h('div'),status=h('span',{role:'status'}),controls=bar(field('Stroombron',source));
+    const panel=card('Stroomcorrectie',controls,manual,output);
+    c.append(panel);
+    let data=A.D,windows=phases,displayedCal=A.calib,signature=null;
+    const drawProposal=btn('Teken voorstel',safe(()=>{
+      const next=getProposal();
+      const fixed=phases.map(p=>{
+        const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)});
+        return w && {...p,v:w.v,coverage:w.coverage};
+      }).filter(Boolean);
+      data=next;windows=fixed;displayedCal=SL.copy(draft);signature=JSON.stringify(draft);render();
+    }),false,{disabled:!phases.length});
+    const drawActive=btn('Toon actieve kalibratie',()=>{
+      data=A.D;windows=phases;displayedCal=A.calib;signature=null;render();
+    });
+    controls.append(drawProposal,drawActive,status);
+    function sensorAt(row,layout){
+      const {ch,age}=data.raw;
+      if(!ch[layout.selector]||!ch[layout.port]||!ch[layout.starboard])return null;
+      const first=ch[layout.selector][row.i];
+      const side=first===layout.portCode?'port':first===layout.starboardCode?'starboard':null;
+      if(side)for(let i=row.i;i<row.i1;i++){
+        const sensor=layout[side];
+        if(ch[layout.selector][i]!==first||!fin(ch[sensor][i])||ch[sensor][i]<0||data.invalid?.[i]||
+            age?.[layout.selector]?.[i]>data.cfg.maxHold||age?.[sensor]?.[i]>data.cfg.maxHold)return 'Onbekend / wissel';
+      }
+      return side==='port'?'Bakboord':side==='starboard'?'Stuurboord':'Onbekend / wissel';
+    }
+    function updateStatus(){
+      drawActive.hidden=signature===null;
+      status.textContent=signature===null?'Grafiek met actieve kalibratie':signature===JSON.stringify(draft)?'Grafiek met voorstel':'Voorstel gewijzigd. Kies Teken voorstel om de grafiek bij te werken.';
+    }
+    function render(){
+      manual.hidden=options.mode!=='manual';
+      const diagnostic=SL.calibrationResiduals(data,windows,bspModel,kind,options);
+      if(kind==='speed'){
+        const layout=SL.speedoConfig(data.raw.ch,displayedCal?.speedos||session.profile.speedoLayout);
+        for(const row of diagnostic.rows)row.sensor=sensorAt(row,layout);
+      }
+      output.replaceChildren();
+      CalibrationPlots.render(output,diagnostic,view);
+      updateStatus();
+    }
+    source.onchange=()=>{options.mode=source.value;touch();render();};
+    for(const event of ['input','change'])c.addEventListener(event,updateStatus,{signal:windListeners.signal});
+    if(session.preview&&phases.length)drawProposal.click();else render();
+  }
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
     windListeners?.abort();windListeners=new AbortController();
@@ -3151,6 +3478,16 @@ const WF = (() => {
       draft[k]=e.target.value===''?null:e.target.valueAsNumber;session.preview=false;touch();speedBox?.dispatchEvent(new Event('bsp-factor'));
     }})));
     const speedBox=index===0?speedoEditor(draft,ps,model.bsp):null;if(speedBox)c.append(speedBox);
+    let cachedProposal,cachedKey;
+    function getProposal(){
+      const cfg=validateCalib(draft),key=JSON.stringify(cfg);
+      if(key!==cachedKey){
+        cachedProposal=key===JSON.stringify(A.calib)?A.D:process(snapshot(false),cfg);
+        cachedKey=key;
+      }
+      return cachedProposal;
+    }
+    if(index<2)residualPanel(c,index===0?'speed':'heading',ps,model.bsp,draft,getProposal);
     if(index===1)editor.append(help('Heading en leeway veranderen samen de geschatte stroom. Controleer de fit op goedgekeurde rakken over beide boegen.'),
       table(['Referentie','Uitkomst'],[['Goedgekeurde fases',ps.length],['Heading-offset uit BSP/stroom-fit',model.bsp.err?'Onvoldoende dekking':f1(model.bsp.delta,1)+'°']]));
     if(index===2)editor.append(help('Een positieve offset wordt opgeteld bij de gesigneerde AWA. Gebruik stabiele vensters rond aandewindse tacks.'));
@@ -3180,7 +3517,7 @@ const WF = (() => {
         btn('Voorstel toepassen', safe(() => applyCalibration(draft)), false, { disabled: session.calibrationChanged }),
         btn('Voorstel wissen', () => { session.draft = SL.copy(SL.CAL0); session.preview = false; show('cal'); })));
     if (session.preview) {
-      try { const s = snapshot(false), original = process(s, null), proposed = process(s, validateCalib(draft));
+      try { const s = snapshot(false), original = process(s, null), proposed = getProposal();
         const references = ps.length ? ps.map(p => [p.i, p.i1]) : [[A.D.i0, A.D.i1]];
         const avg = (D, k) => { const values = []; for (const [lo, hi] of references) for (let i = lo; i < hi; i++) values.push(D.ch[k]?.[i]); return (SL.ANG.test(k) ? SL.cmean : SL.mean)(values); };
         c.append(card('Gelogd · actief · voorstel', help(ps.length ? 'Exact dezelfde goedgekeurde tijdvakken voor alle drie de berekeningen.' : 'Geen goedgekeurde referenties: dit zijn alleen beschrijvende sessiegemiddelden.'), table(['Variabele', 'Gelogd', 'Actief', 'Voorstel'], ['BSP', 'AWA', 'TWA', 'TWS', 'TWD', 'VMG', ...s.profile.formulas.map(d => d.name)].map(k => [k, f1(avg(original, k), 2), f1(avg(A.D, k), 2), f1(avg(proposed, k), 2)]))));
