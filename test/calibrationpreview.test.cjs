@@ -41,3 +41,60 @@ test('preview falls back when a plotted value depends on boat formulas',()=>{
  active.formulaDiagnostics=[{name:'SOG'}];assert.equal(SL.speedPlotPreview(active,phases,c),null);
  active.formulaDiagnostics=[{name:'MWA'}];assert.equal(SL.windPlotPreview(active,phases,c),null);
 });
+
+test('dual BSP gaps use the selected unscaled sensor for the wind baseline, in session and preview',()=>{
+  const t0=Date.UTC(2026,10,10), n=8;
+  const col=values=>Float64Array.from(values), filled=value=>new Float64Array(n).fill(value);
+  const ch={
+    BSP:col([5,NaN,99,NaN,NaN,NaN,NaN,0]), port:filled(6), stbd:filled(7),
+    index:col([1,1,2,0,2,1,2,0]), HDG:filled(355), AWA:filled(37), AWS:filled(12),
+    TWA:col([42,NaN,48,43,NaN,44,45,46]), TWS:col([10,11,NaN,10,NaN,10,10,10]),
+    TWD:col([4,7,NaN,9,NaN,9,9,10])
+  };
+  const raw={n,t0,ch,age:{BSP:col([0,0,6,0,0,0,0,0]),stbd:col([0,0,0,0,6,0,0,0]),index:col([0,0,0,0,0,0,6,0])}};
+  const settings={cfg:{maxHold:2},skipPhases:true,invalidRanges:[{start:t0+5000,end:t0+6000}]};
+  const calib={...SL.CAL0,bspK:1.05,speedos:{enabled:true,port:'port',starboard:'stbd',selector:'index',
+    portCode:1,starboardCode:2,portK:.9,starboardK:1.12}};
+  const active=SL.analyse(raw,{...settings,calib:SL.CAL0}), proposed=SL.analyse(raw,{...settings,calib});
+  const windows=[{i:0,i1:n}], wind=SL.windPlotPreview(active,windows,calib);
+  const speed=SL.speedPlotPreview(active,windows,calib).data;
+  const close=(actual,expected)=>assert.ok(Math.abs(actual-expected)<1e-9,`${actual} vs ${expected}`);
+  for (const [i,baseline,scaled] of [[0,5,6*.9*1.05],[1,6,6*.9*1.05],[2,7,7*1.12*1.05],[7,0,0]]) {
+    const original=SL.trueWind(37,12,baseline), corrected=SL.trueWind(37,12,scaled);
+    const delta=SL.w180(corrected.twa-original.twa);
+    const twa=Number.isFinite(ch.TWA[i]) ? SL.w180(ch.TWA[i]+delta) : corrected.twa;
+    const tws=Number.isFinite(ch.TWS[i]) ? ch.TWS[i]*corrected.tws/original.tws : corrected.tws;
+    const twd=Number.isFinite(ch.TWD[i]) ? SL.w360(ch.TWD[i]+delta) : SL.w360(ch.HDG[i]+twa);
+    close(proposed.ch.BSP[i],scaled);close(speed.ch.BSP[i],scaled);
+    for (const [key,expected] of [['TWA',twa],['TWS',tws],['TWD',twd]]) {
+      close(proposed.ch[key][i],expected);close(wind.ch[key][i],expected);
+    }
+  }
+  for (const i of [3,4,5,6]) {
+    assert.ok(Number.isNaN(proposed.ch.BSP[i]));
+    assert.ok(Number.isNaN(speed.ch.BSP[i]));
+    for (const key of ['TWA','TWS','TWD']) {
+      const expected=i===5?NaN:ch[key][i];
+      assert.equal(proposed.ch[key][i],expected);assert.equal(wind.ch[key][i],expected);
+    }
+  }
+  assert.deepEqual(Array.from(raw.ch.BSP),[5,NaN,99,NaN,NaN,NaN,NaN,0]);
+  assert.ok(Number.isNaN(raw.ch.TWA[1]) && Number.isNaN(raw.ch.TWS[2]) && Number.isNaN(raw.ch.TWD[2]));
+});
+
+test('TWD follows the actual TWA table correction at head to wind and dead downwind',()=>{
+  const col=values=>Float64Array.from(values);
+  const raw={n:4,t0:0,ch:{BSP:col([6,6,6,6]),TWS:col([10,10,10,10]),TWA:col([-2,2,-178,178]),TWD:col([359,1,1,359])}};
+  const calib={...SL.CAL0,twa:[{tws:10,up:-10,dn:10}]};
+  const D=SL.analyse(raw,{cfg:{},skipPhases:true,calib});
+  assert.deepEqual(Array.from(D.ch.TWA,Math.abs),[0,0,180,180]);
+  assert.deepEqual(Array.from(D.ch.TWD),[1,359,359,1]);
+});
+
+test('a gap in logged TWS can be recomputed even when the original wind speed was zero',()=>{
+  const col=values=>Float64Array.from(values);
+  const raw={n:2,t0:0,ch:{BSP:col([6,6]),AWA:col([0,0]),AWS:col([6,6]),TWS:col([NaN,1.2])}};
+  const D=SL.analyse(raw,{cfg:{},skipPhases:true,calib:{...SL.CAL0,bspK:1.1}});
+  assert.ok(Math.abs(D.ch.TWS[0]-.6)<1e-9);
+  assert.equal(D.ch.TWS[1],1.2);
+});

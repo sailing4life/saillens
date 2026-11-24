@@ -289,6 +289,52 @@ test('paired MHU action recomputes the draft on fixed windows and leaves active 
   assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });
+test('a BSP draft updates wind diagnostics on approved windows and becomes the active wind on apply',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  a.run("STUDIO.generate(SL.phaseDefaults(A.cfg));show('review')");
+  await a.click('Getoonde selectie goedkeuren');
+  a.run(`const pair=A.D.mans.filter(m=>m.type==='Tack').map(m=>RaceTools.suggest(A.D,m,WF.session)).find(p=>p.suggested);
+    WF.session.manoeuvrePairs[pair.key]={...pair,approved:true};show('cal');`);
+  const ranges=()=>a.run('JSON.stringify([WF.session.phaseBuild.ranges,WF.session.manoeuvrePairs])');
+  const windows=ranges();
+  const readTable=(name)=>{
+    const section=[...a.w.document.querySelectorAll('#windplot-twa details')].find(d=>d.querySelector('summary').textContent.startsWith(name));
+    assert.ok(section,name);
+    section.open=true;section.dispatchEvent(new a.w.Event('toggle'));
+    const table=section.querySelector('table'),heads=[...table.tHead.rows[0].cells].map(cell=>cell.textContent);
+    return [...table.tBodies[0].rows].map(row=>Object.fromEntries([...row.cells].map((cell,i)=>[heads[i],cell.textContent])));
+  };
+  await a.click('TWA / TWD');
+  const initialPair=readTable('Meetwaarden per manoeuvrepaar')[0];
+  const initialPhase=readTable('Meetwaarden per fase')[0];
+  const getPair=()=>readTable('Meetwaarden per manoeuvrepaar').find(row=>row.Tijd===initialPair.Tijd);
+  const getPhase=()=>readTable('Meetwaarden per fase').find(row=>row.Tijd===initialPhase.Tijd);
+  await a.click('BSP-sensoren');a.fill('#draft-bspK','1.08');
+  await a.click('AWA / MHU');await a.click('TWA / TWD');
+  assert.equal(a.$('#windplot-twa-series').value,'proposed');
+  const proposedPair=getPair(),proposedPhase=getPhase();
+  for(const heading of ['TWD BB','TWD SB']){
+    assert.notEqual(proposedPair[heading],initialPair[heading],heading);
+  }
+  for(const [active,draft] of [['TWS actief (kn)','TWS voorstel (kn)'],['|TWA| actief','|TWA| voorstel']]){
+    assert.equal(proposedPhase[active],initialPhase[active]);
+    assert.ok(parseFloat(proposedPhase[draft])>=0,draft);
+    assert.notEqual(proposedPhase[draft],proposedPhase[active],draft);
+  }
+  a.fill('#windplot-twa-series','active');
+  for(const heading of ['TWD BB','TWD SB'])assert.equal(getPair()[heading],initialPair[heading]);
+  assert.equal(a.run('A.calib.bspK'),1);
+  await a.click('Voorstel toepassen');
+  assert.equal(a.run('A.calib.bspK'),1.08);
+  assert.equal(ranges(),windows);
+  const appliedPair=getPair(),appliedPhase=getPhase();
+  for(const heading of ['TWD BB','TWD SB'])assert.equal(appliedPair[heading],proposedPair[heading],heading);
+  assert.equal(appliedPhase['|TWA| actief'],proposedPhase['|TWA| voorstel']);
+  assert.equal(appliedPhase['TWS actief (kn)'],proposedPhase['TWS voorstel (kn)']);
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});
 test('Mercator map keeps the track continuous across the dateline and registers rotated tiles',async()=>{
  const a=await app();try{
   const result=JSON.parse(a.run(`(()=>{const g=TrackMap.geometry({ch:{Lat:Float64Array.of(0,0,NaN),Lon:Float64Array.of(179,-179,NaN)},i0:0,i1:3,n:3});

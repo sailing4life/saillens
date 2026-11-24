@@ -502,7 +502,7 @@ function selectedSpeed(ch, d, i) {
   return fin(value) && value >= 0 ? value * d[side+'K'] : NaN;
 }
 function calibActive(c) { if (!c) return false; return !!c.speedos?.enabled || (fin(c.bspK) && c.bspK > 0 && c.bspK !== 1) || !!c.hdgOff || !!c.awaOff || (fin(c.awsK) && c.awsK > 0 && c.awsK !== 1) || !!c.heelOff || !!c.rudOff || !!c.twsDnPct || (fin(c.leewayGain) && c.leewayGain >= 0 && c.leewayGain !== 1) || (c.twa || []).some(r => r.up || r.dn); }
-function applyCalib(ch, n, c) {
+function applyCalib(ch, n, c, loggedTws) {
   if (!calibActive(c)) return false;
   const tw = (c.twa || []).filter(r => fin(r.tws)).sort((a, b) => a.tws - b.tws);
   const itp = (w, key) => { if (!tw.length) return 0; if (w <= tw[0].tws) return tw[0][key] || 0; for (let i = 1; i < tw.length; i++) if (w <= tw[i].tws) { const f = (w - tw[i - 1].tws) / (tw[i].tws - tw[i - 1].tws); return (tw[i - 1][key] || 0) + f * ((tw[i][key] || 0) - (tw[i - 1][key] || 0)); } return tw[tw.length - 1][key] || 0; };
@@ -517,9 +517,23 @@ function applyCalib(ch, n, c) {
     const sensor = dual ? selectedSpeed(inputs, dual, i) : NaN;
     const speed = (fin(sensor) ? sensor : B0?.[i]) * k;
     let dT = 0;
-    if (app && TWA && TWS && fin(A0[i]) && fin(S0[i]) && fin(B0[i])) { const o = trueWind(A0[i], S0[i], B0[i]), q = trueWind(A0[i] + ao, S0[i] * ak, speed); dT = w180(q.twa - o.twa); if (fin(TWA[i])) TWA[i] = w180(TWA[i] + dT); if (o.tws > 0.3 && fin(TWS[i])) TWS[i] *= q.tws / o.tws; }
+    if (app && TWA && TWS && fin(A0[i]) && fin(S0[i]) && fin(B0[i])) {
+      const o = trueWind(A0[i], S0[i], B0[i]), q = trueWind(A0[i] + ao, S0[i] * ak, speed);
+      dT = w180(q.twa - o.twa);
+      if (fin(TWA[i])) TWA[i] = w180(TWA[i] + dT);
+      if (!fin(loggedTws?.[i])) TWS[i] = q.tws;
+      else if (o.tws > 0.3) TWS[i] *= q.tws / o.tws;
+    }
     if (BSP) BSP[i] = speed; if (AWA) AWA[i] = w180(A0[i] + ao); if (AWS) AWS[i] = S0[i] * ak;
-    if (TWA && TWS && fin(TWA[i]) && fin(TWS[i])) { const a = Math.abs(TWA[i]), wd = Math.max(0, Math.min(1, (a - 60) / 60)), e = (1 - wd) * itp(TWS[i], 'up') + wd * itp(TWS[i], 'dn'), s = TWA[i] < 0 ? -1 : 1; if (e) { TWA[i] = s * Math.max(0, Math.min(180, a + e)); dT += s * e; } if (dn) TWS[i] *= 1 + dn / 100 * wd; }
+    if (TWA && TWS && fin(TWA[i]) && fin(TWS[i])) {
+      const before = TWA[i], a = Math.abs(before), wd = Math.max(0, Math.min(1, (a - 60) / 60));
+      const e = (1 - wd) * itp(TWS[i], 'up') + wd * itp(TWS[i], 'dn');
+      if (e) {
+        TWA[i] = (before < 0 ? -1 : 1) * Math.max(0, Math.min(180, a + e));
+        dT += TWA[i] - before;
+      }
+      if (dn) TWS[i] *= 1 + dn / 100 * wd;
+    }
     if (HDG) HDG[i] = w360(HDG[i] + ho); if (CSE) CSE[i] = w360(CSE[i] + ho);
     if (TWD && fin(TWD[i])) TWD[i] = w360(TWD[i] + ho + dT);
   }
@@ -534,6 +548,11 @@ function process(raw, opt) {
   validateConfig(cfg);
   // Derived channels always get their own arrays, including names also present in the source.
   const need = k => (ch[k] = new Float64Array(n).fill(NaN));
+  const writableGaps = k => {
+    if (!ch[k]) return need(k);
+    if (!ch[k].every(fin)) return (ch[k] = Float64Array.from(ch[k]));
+    return null;
+  };
   const warn = [];
   for (const k of Object.keys(ch)) if (raw.age && raw.age[k]) { ch[k] = Float64Array.from(ch[k]); for (let i = 0; i < n; i++) if (raw.age[k][i] > cfg.maxHold) ch[k][i] = NaN; }
   if (raw.diagnostics) {
@@ -553,18 +572,35 @@ function process(raw, opt) {
   const L = applyEvents(raw, opt.events, cfg);
   for (const k in L.manual) ch[k] = L.manual[k];
   if (invalid.some(Boolean)) for (const k of Object.keys(ch)) { ch[k] = Float64Array.from(ch[k]); for (let i = 0; i < n; i++) if (invalid[i]) ch[k][i] = NaN; }
-  if (!ch.BSP && opt.calib?.speedos?.enabled) {
+  const loggedBsp = ch.BSP;
+  if (opt.calib?.speedos?.enabled && (!loggedBsp || !loggedBsp.every(fin))) {
     const d = opt.calib.speedos;
     checkSpeedos(d,ch);
     const neutral = {...d,portK:1,starboardK:1};
-    ch.BSP = Float64Array.from({length:n}, (_,i) => selectedSpeed(ch,neutral,i));
+    // The original wind vector needs the unscaled speed at each missing sample.
+    ch.BSP = Float64Array.from({length:n}, (_,i) =>
+      fin(loggedBsp?.[i]) ? loggedBsp[i] : selectedSpeed(ch,neutral,i));
   }
-  // Complete missing wind inputs before applying a TWA correction table.
-  // true wind if missing
-  if ((!ch.TWA || !ch.TWS) && ch.AWA && ch.AWS && ch.BSP) { const missing = ['TWA', 'TWS'].filter(k => !ch[k]), twa = !ch.TWA ? need('TWA') : null, tws = !ch.TWS ? need('TWS') : null; for (let i = 0; i < n; i++) { const a = ch.AWA[i] * D2R, x = ch.AWS[i] * Math.cos(a) - ch.BSP[i], y = ch.AWS[i] * Math.sin(a); if (twa) twa[i] = Math.atan2(y, x) * R2D; if (tws) tws[i] = Math.hypot(x, y); } warn.push(missing.join('/') + ' missing; computed from AWA, AWS and BSP.'); }
-  const calibrated = applyCalib(ch, n, opt.calib);
+  // Fill the baseline before applying instrument corrections and the TWA table.
+  const loggedTws = ch.TWS;
+  if (ch.AWA && ch.AWS && ch.BSP) {
+    const missing = ['TWA','TWS'].filter(k => !ch[k]);
+    const twa = writableGaps('TWA'), tws = writableGaps('TWS');
+    if (twa || tws) for (let i = 0; i < n; i++) {
+      if (fin(ch.TWA[i]) && fin(ch.TWS[i])) continue;
+      if (!fin(ch.AWA[i]) || !fin(ch.AWS[i]) || !fin(ch.BSP[i])) continue;
+      const wind = trueWind(ch.AWA[i], ch.AWS[i], ch.BSP[i]);
+      if (twa && !fin(twa[i])) twa[i] = wind.twa;
+      if (tws && !fin(tws[i])) tws[i] = wind.tws;
+    }
+    if (missing.length) warn.push(missing.join('/') + ' missing; computed from AWA, AWS and BSP.');
+  }
+  const calibrated = applyCalib(ch, n, opt.calib, loggedTws);
   for (const k of ['BSP', 'TWA', 'TWS']) if (!ch[k]) { need(k); warn.push(k + ' ontbreekt: bijbehorende analyses zijn niet beschikbaar. Koppel een kanaal bij bootinstellingen.'); }
-  if (!ch.TWD && ch.HDG) { const d = need('TWD'); for (let i = 0; i < n; i++) d[i] = w360(ch.HDG[i] + ch.TWA[i]); }
+  if (ch.HDG) {
+    const d = writableGaps('TWD');
+    if (d) for (let i = 0; i < n; i++) if (!fin(d[i])) d[i] = w360(ch.HDG[i] + ch.TWA[i]);
+  }
   const BSP = ch.BSP, TWA = ch.TWA, TWS = ch.TWS;
   let i0 = 0, i1 = n;
   if (cfg.tStart != null) i0 = Math.max(0, Math.round((cfg.tStart - raw.t0) / 1000)); else if (L.dayStart != null) i0 = Math.max(0, L.dayStart);
