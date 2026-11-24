@@ -270,7 +270,21 @@ test('paired MHU action recomputes the draft on fixed windows and leaves active 
   assert.ok(eligible.length>=3);
   const expected=Math.round(a.run('SL.median(SL.windPairEvidence(SL.calibrationReferences(A.D,WF.session).pairs).alignment)')*10)/10;
   await a.click('MHU-restfout naar voorstel');assert.equal(a.run('WF.session.draft.awaOff'),expected);assert.equal(a.run('A.calib.awaOff'),0);
-  assert.match(a.$('#t-cal').textContent,/Meetwaarden per goedgekeurd paar/);
+  assert.match(a.$('#t-cal').textContent,/Meetwaarden per manoeuvrepaar/);
+  const selectWind=()=>a.$('#windplot-mhu-series').value;
+  assert.equal(selectWind(),'proposed');
+  const row=()=>a.$('#windplot-mhu .windplot-row');
+  const tipBefore=row().getAttribute('title');
+  a.fill('#draft-awaOff',String(expected+1));await pause(300);
+  assert.notEqual(row().getAttribute('title'),tipBefore);assert.equal(a.run('A.calib.awaOff'),0);
+  await a.click('TWA / TWD');
+  assert.ok(a.$('#windplot-twa .windplot-row'));
+  const firstTwd=a.$('#windplot-twa .windplot-row').getAttribute('title');
+  await a.click('TWA-rij toevoegen');
+  const cells=[...a.w.document.querySelectorAll('[aria-label^="TWA up bij "]')];
+  for(const cell of cells){cell.value='1';cell.dispatchEvent(new a.w.Event('input',{bubbles:true}));}
+  await pause(300);
+  assert.notEqual(a.$('#windplot-twa .windplot-row').getAttribute('title'),firstTwd);
   await a.click('Voorstel vergelijken');assert.ok(a.$('#t-cal').textContent.includes('Gelogd · actief · voorstel'));
   assert.deepEqual(a.errors,[]);
  }finally{a.close();}
@@ -326,7 +340,15 @@ test('current diagnostics share the session current, sensor mapping and a revers
   a.fill('#cal-current-source','manual');a.fill('#cal-current-set','90');a.fill('#cal-current-drift','0.7');
   assert.ok(a.$(box+' input[data-series="corrected"]').checked);
   const base=a.run('A.D.ch.BSP[200]');
-  a.fill('#draft-bspK','1.05');await a.click('Teken voorstel');
+  const readSpeed=async()=>{
+    const det=a.$(box+' details');det.open=true;det.dispatchEvent(new a.w.Event('toggle'));
+    const cells=det.querySelector('tbody tr').cells;
+    return Number(cells[cells.length-2].textContent.replace(',','.'));
+  };
+  const originalDelta=await readSpeed();
+  a.fill('#draft-bspK','1.05');await pause(300);
+  assert.ok(await readSpeed()<originalDelta-.10);
+  assert.ok(a.$(box+' canvas[data-axis="bsp"]'));assert.ok(a.$(box+' canvas[data-axis="heel"]'));
   assert.match(a.$('#t-cal').textContent,/Grafiek met voorstel/);
   assert.equal(a.run('A.D.ch.BSP[200]'),base);
   a.fill('#draft-bspK','1.03');

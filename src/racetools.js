@@ -49,8 +49,8 @@ const RaceTools = (() => {
     })));
   }
 
-  function pairMetrics(a,b){
-    return [Math.abs(b.v.AWA)-Math.abs(a.v.AWA),Math.abs(b.v.TWA)-Math.abs(a.v.TWA),SL.w180(b.v.TWD-a.v.TWD)];
+  function pairMetrics(a,b,vmgToVmg=true){
+    return [vmgToVmg ? Math.abs(b.v.AWA)-Math.abs(a.v.AWA) : NaN,vmgToVmg ? Math.abs(b.v.TWA)-Math.abs(a.v.TWA) : NaN,SL.w180(b.v.TWD-a.v.TWD)];
   }
   function review(c,pair,check,compact=false){
     const D=A.D,s=WF.session;
@@ -101,7 +101,7 @@ const RaceTools = (() => {
         const band=2*Math.floor((before.v.TWS+after.v.TWS)/4);
         const key=[pair.type,before.sails,band+'–'+(band+2)+' kn',before.tack+' → '+after.tack].join(' · ');
         if(!groups.has(key))groups.set(key,[]);
-        groups.get(key).push(pairMetrics(before,after));
+        groups.get(key).push(pairMetrics(before,after,pair.vmgToVmg));
       }
       const reserved=all.filter(x=>x.pair.validation);
       const panel=card('Wind over de manoeuvre',table(['Manoeuvre · zeil · TWS · richting','Paren','Mediaan Δ |AWA|','Mediaan Δ |TWA|','Mediaan Δ TWD'],Array.from(groups,([k,g])=>[k,g.length,...[0,1,2].map(i=>f1(SL.median(g.map(row=>row[i])),2)+'°')])));
@@ -112,7 +112,7 @@ const RaceTools = (() => {
             const next=WF.process(WF.snapshot(),s.draft);
             result.replaceChildren(table(['Controlepaar','|Δ TWD| actief','|Δ TWD| voorstel','|Δ abs(AWA)| actief','|Δ abs(AWA)| voorstel'],reserved.map(({pair,before,after})=>{
               const a=SL.windowPhase(next,pair.before),b=SL.windowPhase(next,pair.after);
-              const old=pairMetrics(before,after),v=pairMetrics(a,b);
+              const old=pairMetrics(before,after,pair.vmgToVmg),v=pairMetrics(a,b,pair.vmgToVmg);
               return [tstr(pair.anchor),...[old[2],v[2],old[0],v[0]].map(n=>f1(Math.abs(n),2)+'°')];
             })));
           }catch(e){banner(e.message,true);}

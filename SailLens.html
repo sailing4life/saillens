@@ -196,6 +196,27 @@ button,input,select{min-height:36px}button:focus-visible,input:focus-visible,sel
 .desk-maptools{max-width:calc(100% - 16px);flex-wrap:wrap}.desk-maptools label{white-space:nowrap;cursor:pointer;font-size:12px}
 .prep-desk{grid-template-rows:minmax(0,1fr) clamp(170px,22vh,210px)}.prep-desk.desk-pair{grid-template-rows:minmax(0,1fr) clamp(200px,29vh,290px)}
 @media(max-width:850px){.prep-desk,.prep-desk.desk-pair{grid-template-rows:minmax(0,1fr) minmax(155px,30%)}.desk-phase-legend{font-size:10px}.desk-replay{padding:1px 4px}}
+.windplot-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.windplot-frame{margin:0;min-width:0;border:1px solid var(--line);border-radius:5px;padding:8px 10px;background:var(--surface)}
+.windplot-frame h4{margin:0 0 5px}.windplot-frame p,.windplot-panel p{margin:5px 0;font-size:12px}
+.windplot-panel>.form{margin:8px 0}.windplot-panel input[type=number]{width:6em}
+.windplot-meta,.windplot-pager{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:12px;color:var(--ink2)}
+.windplot-pager button{padding:1px 7px;font-size:12px}.windplot-bars{margin:5px 0}
+.windplot-axis,.windplot-row{display:grid;grid-template-columns:6.3em minmax(30px,1fr) 4.4em;align-items:center;gap:5px;font-size:12px;font-variant-numeric:tabular-nums}
+.windplot-axis{color:var(--muted);font-size:11px}.windplot-scale{display:flex;justify-content:space-between;grid-column:2}
+.windplot-row{border:0;border-radius:0;background:transparent;color:var(--ink);padding:2px 0;width:100%;text-align:left;min-height:21px}
+button.windplot-row:hover,button.windplot-row:focus-visible{background:var(--surface2)}
+.windplot-row>span:last-child{text-align:right}.windplot-track{display:block;position:relative;background:var(--surface2);height:15px}
+.windplot-track::before,.windplot-median{position:absolute;height:100%;top:0;border-left:1px solid var(--ink2);left:50%;content:''}
+.windplot-bar{position:absolute;top:3px;height:9px;min-width:1px}.windplot-median{border-left:2px dashed var(--ink);z-index:1}
+.windplot-panel .legend{margin:7px 0}.windplot-panel details{margin-top:7px}.windplot-panel details .scroll{max-height:280px;overflow:auto}
+@media(max-width:720px){.windplot-grid{grid-template-columns:minmax(0,1fr)}.windplot-panel .form{gap:6px}}
+.windcal-layout{display:grid;grid-template-columns:minmax(195px,245px) minmax(0,1fr);gap:12px;align-items:start}
+.windcal-layout>.card{margin:0;min-width:0}.windcal-layout .windplot-workspace{min-width:0}
+.windcal-layout>.card input[type=number]{max-width:100%;width:5.5em}
+.windcal-layout>.card table input[type=number]{width:3.8em}
+@media(max-width:900px){.windcal-layout{grid-template-columns:1fr}}
+
 </style>
 </head>
 <body>
@@ -319,7 +340,7 @@ function parseLog(text, nativeWindow) {
   const put = (i, k, value) => {
     if (!k || !String(value ?? '').trim()) return;
     const v = csvNumber(value); if (!fin(v)) { diagnostics.invalidValues++; return; }
-    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA|MWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
     if (c.discrete) {
       if (c.count[i] && c.sum[i] !== v) c.sum[i] = NaN;
       else if (!c.count[i]) c.sum[i] = v;
@@ -1505,7 +1526,16 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
     return {before,after,errors,valid:!errors.length};
   }
   function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
-  function calibrationReferences(D,s){const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);const pairs=approvedPairs(D,s).filter(x=>!x.pair.validation&&independent(x.before)&&independent(x.after)),ps=SL.calibrationPhases(D,s.reviews).filter(independent);const all=[...ps,...pairs.flatMap(x=>[x.before,x.after])];return {phases:[...new Map(all.map(p=>[p.i+':'+p.i1,p])).values()],pairs};}
+  function calibrationReferences(D,s){
+    const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);
+    const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);
+    const reviewed=approvedPairs(D,s);
+    const validationPairs=reviewed.filter(x=>x.pair.validation);
+    const pairs=reviewed.filter(x=>!x.pair.validation&&independent(x.before)&&independent(x.after));
+    const stablePhases=SL.calibrationPhases(D,s.reviews).filter(independent);
+    const windows=[...stablePhases,...pairs.flatMap(x=>[x.before,x.after])];
+    return {phases:[...new Map(windows.map(w=>[w.i+':'+w.i1,w])).values()],stablePhases,pairs,validationPairs};
+  }
   // Port and starboard always use the same sign convention, in either turn direction.
   function windPairEvidence(pairs){
     const alignment=[],bands=new Map();
@@ -1517,7 +1547,7 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
       const up=pair.type==='Tack'&&angles.every(a=>a<=60),down=pair.type==='Gybe'&&angles.every(a=>a>=120);
       if(!up&&!down)continue;
       const covered=k=>[port,stbd].every(w=>w.coverage[k]>=.95&&finite(w.v[k]));
-      if(up&&covered('AWA')&&port.v.AWA<0&&stbd.v.AWA>0)
+      if(up&&pair.vmgToVmg!==false&&covered('AWA')&&port.v.AWA<0&&stbd.v.AWA>0)
         alignment.push((Math.abs(port.v.AWA)-Math.abs(stbd.v.AWA))/2);
       if(!covered('TWD')||!covered('TWS'))continue;
       const tws=(basis.before.v.TWS+basis.after.v.TWS)/2,band=SL.BANDS.findIndex(([lo,hi])=>tws>=lo&&tws<hi);
@@ -1689,6 +1719,183 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
     return {kind, rows, issue, reference:notes.join(' ')};
   }
   SL.calibrationResiduals = calibrationResiduals;
+})();
+
+'use strict';
+(() => {
+  // The calibration math is sample-local. Run the same engine on the union of
+  // approved seconds, keeping logged gaps, event overrides and physical inputs.
+  // Discard its synthetic timeline: reference IDs and any time-dependent
+  // information (race, sail, tack, fit windows) always come from the session.
+  function preview(D, phases, calib, outputs) {
+    const dual = calib.speedos?.enabled ? calib.speedos : null;
+    const keys = new Set(['BSP','Heel','HDG', ...outputs]);
+    if (outputs.includes('TWA')) for (const k of ['AWA','AWS','TWD','TWA','TWS']) keys.add(k);
+    if (dual) for (const k of [dual.port,dual.starboard,dual.selector]) keys.add(k);
+    // A crew-defined graph channel may depend on other instruments and the full
+    // formula graph. Its ordinary session pipeline is authoritative.
+    if (D.formulaDiagnostics?.some(f=>keys.has(f.name))) return null;
+    if (!D.raw?.ch || !Number.isInteger(D.n)) return null;
+
+    const ordered=phases.slice().sort((a,b)=>a.i-b.i);
+    const ranges=[];
+    for (const {i,i1} of ordered) {
+      if (!Number.isInteger(i)||!Number.isInteger(i1)||i<D.i0||i1>D.i1||i1<=i) return null;
+      const last=ranges.at(-1);
+      if (last && i<=last.end) last.end=Math.max(last.end,i1);
+      else ranges.push({start:i,end:i1});
+    }
+    if (!ranges.length) return D;
+    const n=ranges.reduce((sum,r)=>sum+r.end-r.start,0), ch=Object.create(null);
+    for (const key of keys) {
+      const manual=D.L?.manual?.[key], source=manual||D.raw.ch[key];
+      if (!source) continue;
+      const values=new Float64Array(n), age=!manual&&D.raw.age?.[key];
+      let j=0;
+      for (const {start,end} of ranges) {
+        for (let i=start;i<end;i++,j++) {
+          values[j]=D.invalid?.[i] || (age && age[i]>D.cfg.maxHold) ? NaN : source[i];
+        }
+      }
+      ch[key]=values;
+    }
+    const compact=SL.analyse({n,t0:D.raw.t0,ch},{
+      cfg:{...D.cfg,tStart:null,tEnd:null},calib,skipPhases:true
+    });
+    // Only the requested channels are recomputed. Arrays retain the original
+    // sample numbering so a held-out pair can be plotted at its logged times.
+    const projected={...D.ch};
+    for (const key of outputs) {
+      if (!compact.ch[key]) { delete projected[key]; continue; }
+      const values=new Float64Array(D.n).fill(NaN);
+      let j=0;
+      for (const {start,end} of ranges) {
+        values.set(compact.ch[key].subarray(j,j+end-start),start);
+        j+=end-start;
+      }
+      projected[key]=values;
+    }
+    return {...D,ch:projected};
+  }
+
+  SL.windPlotPreview=(D,phases,calib)=>preview(D,phases,calib,['AWA','MWA','TWA','TWS','TWD']);
+  SL.speedPlotPreview=(D,phases,calib)=>{
+    const data=preview(D,phases,calib,['BSP','Heel','HDG','SOG','COG']);
+    if (!data) return null;
+    const windows=phases.map(p=>{
+      const v={...p.v};
+      for (const key of ['BSP','Heel','HDG']) {
+        const values=data.ch[key]?.subarray(p.i,p.i1);
+        v[key]=values ? (key==='HDG'?SL.cmean:SL.mean)(values) : NaN;
+      }
+      return {...p,v};
+    });
+    return {data,windows};
+  };
+})();
+
+'use strict';
+(() => {
+  const channels = ['TWA','AWA','MWA'];
+  const metrics = [...channels,'TWD'];
+  const {fin,D2R,R2D,w180,w360} = SL;
+
+  function windowMeans(D, w) {
+    // Wind angle and wind speed must represent the same seconds. Wrap vane
+    // angles as well as TWD (some loggers encode port as 0..360 degrees).
+    const out = {}, speed = D.ch.TWS, count = w.i1-w.i;
+    let sum=0, n=0;
+    for(let i=w.i;i<w.i1;i++)if(!D.invalid?.[i] && fin(speed?.[i]) && speed[i]>=0){sum+=speed[i];n++;}
+    out.TWS=n>=.95*count ? sum/n : NaN;
+    for(const key of metrics){
+      let sin=0,cos=0,joint=0,onSide=0;
+      const a=D.ch[key];
+      if(a)for(let i=w.i;i<w.i1;i++){
+        const v=a[i];
+        if(D.invalid?.[i]||!fin(speed?.[i])||speed[i]<0||!fin(v)||Math.abs(v)>360)continue;
+        sin+=Math.sin(v*D2R);cos+=Math.cos(v*D2R);joint++;
+        if(key==='AWA' && (w.tack==='Port'?w180(v)<0:w180(v)>0) && Math.abs(w180(v))<180)onSide++;
+      }
+      const angle=joint>=.95*count && Math.hypot(sin,cos)>1e-8*joint ? Math.atan2(sin,cos)*R2D : NaN;
+      out[key]=key==='TWD' ? w360(angle) : Math.abs(w180(angle));
+      if(key==='AWA')out.awaOnSide=fin(angle) && onSide===joint;
+    }
+    return out;
+  }
+
+  function difference(port,stbd,alignment){
+    const out={portTWD:port.TWD,stbdTWD:stbd.TWD,portTWA:port.TWA,stbdTWA:stbd.TWA};
+    for(const key of channels)out[key]=port[key]-stbd[key];
+    out.TWD=w180(port.TWD-stbd.TWD);
+    out.TWS=port.TWS-stbd.TWS;
+    out.mhuResidual=alignment&&port.awaOnSide&&stbd.awaOnSide ? out.AWA/2 : NaN;
+    return out;
+  }
+
+  function windPlotData(D, refs, proposal=D) {
+    proposal ||= D;
+    const phases=[], pairs=[], cache=new Map(), seenPairs=new Set();
+    const labels=(D.L.sailConfigs||[]).map(s=>s.split(';').map(t=>t.trim()).filter(Boolean).join(' / ')||'Geen zeilen');
+    const eligible=(refs.pairs||[]).concat(refs.validationPairs||[]).filter(x=>
+      x?.before && x.after && x.pair && x.valid!==false && x.pair.approved!==false && !x.pair.rejected);
+    const control=new Uint8Array(D.n), occupied=new Uint8Array(D.n), tactical=new Uint8Array(D.n);
+    for(const x of eligible)if(x.pair.vmgToVmg===false)for(const w of [x.before,x.after])tactical.fill(1,w.i,w.i1);
+    for(const x of eligible)if(x.pair.validation)for(const w of [x.before,x.after])control.fill(1,w.i,w.i1);
+
+    function observation(w){
+      const {i,i1}=w,key=i+':'+i1;
+      if(cache.has(key))return cache.get(key);
+      cache.set(key,null);
+      if(!Number.isInteger(i)||!Number.isInteger(i1)||i<D.i0||i1>D.i1||i1<=i)return null;
+      const state=D.L.sailState||D.L.sail, side=w.tack;
+      if(!['Port','Stbd'].includes(side))return null;
+      for(let j=i;j<i1;j++){
+        if(D.invalid?.[j]||D.L.motor?.[j]||state?.[j]!==state?.[i])return null;
+        const twa=D.ch.TWA?.[j];
+        if(fin(twa) && Math.abs(twa)<=360 && (w180(twa)<0?'Port':'Stbd')!==side && Math.abs(w180(twa))!==180)return null;
+      }
+      const active=windowMeans(D,w);
+      if(!fin(active.TWA)||!fin(active.TWS))return null;
+      const sailId=state?.[i], rawConfig=D.L.sailConfigs?.[sailId];
+      let sail=rawConfig!==undefined ? labels[sailId] : w.sails;
+      if(rawConfig!==undefined && labels.indexOf(sail)!==labels.lastIndexOf(sail))sail=rawConfig;
+      if(!sail||sail==='-')sail='Onbekend';
+      const mode=w.mode==='Upwind'?'up':w.mode==='Downwind'?'dn':null;
+      const point={i,i1,t:D.raw.t0+i*1000,side,sail,sailId,mode,tws:active.TWS,active,
+        proposed:proposal===D?active:windowMeans(proposal,w)};
+      cache.set(key,point);return point;
+    }
+
+    // Prioritise explicit phase approvals. A short approved manoeuvre window
+    // can supply a phase point if its seconds have not been used already.
+    function addPhase(w,source){
+      const p=observation(w);
+      if(!p?.mode || control.subarray(p.i,p.i1).some(Boolean) || occupied.subarray(p.i,p.i1).some(Boolean))return;
+      phases.push({...p,source,vmgToVmg:!tactical.subarray(p.i,p.i1).some(Boolean)});occupied.fill(1,p.i,p.i1);
+    }
+    for(const w of refs.stablePhases||refs.phases||[])addPhase(w,'phase');
+    for(const {pair,before,after} of eligible){
+      if(seenPairs.has(pair.key))continue;
+      const a=observation(before),b=observation(after);
+      if(!a||!b||a.side===b.side||a.sailId!==b.sailId||a.sail!==b.sail)continue;
+      if(!pair.validation && [a,b].some(w=>control.subarray(w.i,w.i1).some(Boolean)))continue;
+      const up=pair.type==='Tack' && a.active.TWA<90 && b.active.TWA<90;
+      const down=pair.type==='Gybe' && a.active.TWA>90 && b.active.TWA>90;
+      if(!up && !down)continue;
+      const [port,stbd]=a.side==='Port'?[a,b]:[b,a];
+      const pure=up ? Math.max(a.active.TWA,b.active.TWA)<=60 : Math.min(a.active.TWA,b.active.TWA)>=120;
+      const tableEligible=pure && !pair.validation;
+      const alignment=up && tableEligible && pair.vmgToVmg!==false;
+      pairs.push({key:pair.key,t:pair.anchor,type:pair.type,mode:up?'up':'dn',sail:a.sail,
+        tws:(a.tws+b.tws)/2,tableEligible,vmgToVmg:pair.vmgToVmg!==false,validation:!!pair.validation,active:difference(port.active,stbd.active,alignment),
+        proposed:difference(port.proposed,stbd.proposed,alignment)});
+      seenPairs.add(pair.key);
+      if(!pair.validation){addPhase(before,'pair');addPhase(after,'pair');}
+    }
+    phases.sort((a,b)=>a.t-b.t);pairs.sort((a,b)=>a.t-b.t);
+    return {channels:channels.filter(k=>D.ch[k]),phases,pairs,hasProposal:proposal!==D};
+  }
+  SL.windPlotData=windPlotData;
 })();
 
 'use strict';
@@ -2068,7 +2275,8 @@ const CalibrationPlots = (() => {
     const axes = speed
       ? [{key:'bsp', label:'BSP (kn)'}, {key:'t', label:'Sessietijd'}]
       : [{key:'heading', label:'Heading (°)'}, {key:'t', label:'Sessietijd'}];
-    if (rows.some(r => fin(r.heel))) axes.push({key:'heel', label:'Helling (°)'});
+    const heelAxis = {key:'heel', label:'Helling (°)'};
+    if (!speed && rows.some(r => fin(r.heel))) axes.push(heelAxis);
     const correctedCount = rows.filter(r => fin(r.corrected)).length;
     const rawCount = rows.filter(r => fin(r.raw)).length;
     const panel = card(variable + ' per referentievenster');
@@ -2080,7 +2288,18 @@ const CalibrationPlots = (() => {
       if (!diagnostic.issue) panel.append(h('p', {}, 'Keur een stabiele fase of een manoeuvrepaar met ' + variable.replace(' − ', ' en ') + ' goed voor kalibratie.'));
       return panel;
     }
-    const cv = h('canvas', {role:'img', 'aria-label': variable + ' per venster in ' + unit + '. De waarden staan in de tabel onder de grafiek.'});
+    const charts = h('div', speed ? {
+      style:'display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:12px'
+    } : {});
+    function makeChart() {
+      const title = h('h4', {hidden:!speed});
+      const canvas = h('canvas', {role:'img'});
+      const empty = h('p', {class:'muted', hidden:true});
+      charts.append(h('div', {style:'min-width:0'}, title, canvas, empty));
+      return {title, canvas, empty};
+    }
+    const mainChart = makeChart();
+    const heelChart = speed ? makeChart() : null;
     const controls = h('div', {class:'legend', role:'group', 'aria-label':'Zichtbare reeksen'});
     const sets = [
       {key:'raw', label:'Zonder stroomcorrectie', color:css('--s1'), triangle:false, count:rawCount},
@@ -2097,7 +2316,7 @@ const CalibrationPlots = (() => {
     const showSensors = sensors.some(name => name === 'Bakboord' || name === 'Stuurboord');
     const sensor = h('select', {'aria-label':'BSP-sensor', onchange:choose('sensor')}, h('option', {value:''}, 'Alle sensoren'),
       sensors.map(name => h('option', {value:name, selected:showSensors && name===view.sensor}, name)));
-    const axesBar = bar(field('Horizontale as', axis), sides.length > 1 ? field('Boeg', tack) : null,
+    const axesBar = bar(field(speed ? 'Hoofdgrafiek' : 'Horizontale as', axis), sides.length > 1 ? field('Boeg', tack) : null,
       showSensors ? field('BSP-sensor', sensor) : null);
     const status = h('p', {class:'muted', role:'status'});
     for (const set of sets) {
@@ -2108,7 +2327,7 @@ const CalibrationPlots = (() => {
       set.caption = h('span', {}, set.label);
       controls.append(h('label', {style:'display:inline-flex;align-items:center;gap:5px;cursor:pointer'}, set.input, marker, set.caption));
     }
-    panel.append(axesBar, controls, cv, status);
+    panel.append(axesBar, controls, charts, status);
 
     // Keep the vertical range fixed across filters so the before/after comparison uses the same scale.
     let limit = speed ? .2 : 2;
@@ -2116,16 +2335,15 @@ const CalibrationPlots = (() => {
       if (fin(r[set.key])) limit = Math.max(limit, Math.abs(r[set.key]) * 1.08);
     }
     function selection() {
-      return rows.filter(r => fin(r[axis.value]) && (!tack.value || side(r.side) === tack.value) && (!sensor.value || r.sensor === sensor.value));
+      return rows.filter(r => (!tack.value || side(r.side) === tack.value) && (!sensor.value || r.sensor === sensor.value));
     }
     function draw() {
       const selected = selection();
       for (const set of sets) set.caption.textContent = set.label + ' (' + selected.filter(r => fin(r[set.key])).length + ')';
       const visible = sets.filter(set => set.input.checked);
       const hasValue = selected.some(r => visible.some(set => fin(r[set.key])));
-      cv.hidden = !hasValue;
-      // The stylesheet sets every canvas to display:block.
-      cv.style.display = hasValue ? '' : 'none';
+      drawChart(mainChart, axes.find(a => a.key === axis.value), selected, visible);
+      if (heelChart) drawChart(heelChart, heelAxis, selected, visible);
       updateTable();
       if (!hasValue) {
         status.textContent = visible.length ? 'Geen meetwaarden voor deze selectie.' : 'Selecteer een reeks om de grafiek te tonen.';
@@ -2134,16 +2352,33 @@ const CalibrationPlots = (() => {
       status.textContent = speed
         ? 'Boven nul leest BSP lager dan de gekozen GPS-snelheidsreferentie.'
         : 'Boven nul ligt de heading met de klok mee ten opzichte van de gekozen koersreferentie. Leeway kan bijdragen aan dit verschil.';
-      const x = axis.value;
-      const label = axes.find(a => a.key === x).label;
-      const values = selected.map(r => r[x]);
+    }
+    function drawChart(chart, dimension, selected, visible) {
+      const {key:x, label} = dimension;
+      const cv = chart.canvas;
+      cv.dataset.axis = x;
+      cv.setAttribute('aria-label', variable+' ('+unit+') tegen '+label+'. Meetwaarden staan in de venstertabel.');
+      chart.title.textContent = 'Restfout tegen '+({bsp:'bootsnelheid',t:'sessietijd',heel:'helling',heading:'heading'})[x];
+      const points = selected.filter(r => fin(r[x]) && visible.some(set => fin(r[set.key])));
+      cv.hidden = !points.length;
+      chart.empty.hidden = points.length > 0 || !visible.length || !selected.length;
+      if (!points.length) {
+        chart.empty.textContent = x === 'heel' ? 'Geen hellingmeting met een zichtbare restfout in deze vensters.' : 'Geen meetpunten voor deze as en reeks.';
+        return;
+      }
+      const values = points.map(r => r[x]);
       const min = values.reduce((a,b) => Math.min(a,b)), max = values.reduce((a,b) => Math.max(a,b));
       const padding = Math.max(x === 't' ? 1000 : .2, (max-min)*.025);
       const bounds = x === 'heading' ? [0,360] : [x === 'bsp' ? Math.max(0,min-padding) : min-padding, max+padding];
+      if (x === 'heel') {
+        const extent = Math.max(1,Math.abs(min),Math.abs(max))+padding;
+        bounds[0] = -extent;
+        bounds[1] = extent;
+      }
       const g = plot(cv, {h:225, pl:56, pr:22, xr:bounds, yr:[-limit, limit], xl:label, yl:variable + ' (' + unit + ')',
         xTickGap:x === 't' ? 85 : 65, xfmt:x === 't' ? t => max-min < 60000 ? tstr(t) : tstr(t).slice(0,5) : undefined});
       g.zero(0);
-      for (const r of selected) {
+      for (const r of points) {
         const tip = [dstr(r.t), side(r.side), x !== 't' ? label + ' ' + f1(r[x],1) : '', showSensors && r.sensor ? 'BSP-sensor '+r.sensor : '', source(r.source),
           ...visible.filter(set => fin(r[set.key])).map(set => set.label + ' ' + signed(r[set.key]) + ' ' + unit)].filter(Boolean).join(' · ');
         for (const set of visible) g.dot(r[x], r[set.key], set.color, tip, null, set.triangle, set.triangle ? 3.3 : 4.6);
@@ -2157,15 +2392,186 @@ const CalibrationPlots = (() => {
       summary.textContent = 'Meetwaarden per venster (' + selected.length + ')';
       if (!details.open) return;
       const additionalAxis = axes.find(a => a.key === axis.value && a.key !== 't');
+      const showHeel = speed && selected.some(r => fin(r.heel));
       const hasSource = selected.some(r => r.source);
       const hasCurrent = selected.some(r => fin(r.currentSet) || fin(r.currentDrift));
-      details.replaceChildren(summary, table(['Sessietijd', 'Boeg', ...(showSensors ? ['BSP-sensor'] : []), ...(additionalAxis ? [additionalAxis.label] : []), ...(hasSource ? ['Stroombron'] : []),
+      details.replaceChildren(summary, table(['Sessietijd', 'Boeg', ...(showSensors ? ['BSP-sensor'] : []), ...(additionalAxis ? [additionalAxis.label] : []), ...(showHeel ? [heelAxis.label] : []), ...(hasSource ? ['Stroombron'] : []),
         ...(hasCurrent ? ['Set (°T)', 'Drift (kn)'] : []), 'Zonder stroomcorrectie (' + unit + ')', 'Met stroomcorrectie (' + unit + ')'],
-        selected.map(r => [dstr(r.t), side(r.side), ...(showSensors ? [r.sensor || '—'] : []), ...(additionalAxis ? [f1(r[axis.value],1)] : []),
+        selected.map(r => [dstr(r.t), side(r.side), ...(showSensors ? [r.sensor || '—'] : []), ...(additionalAxis ? [f1(r[axis.value],1)] : []), ...(showHeel ? [f1(r.heel,1)] : []),
           ...(hasSource ? [source(r.source) || '—'] : []), ...(hasCurrent ? [f1(r.currentSet,0), f1(r.currentDrift,2)] : []), signed(r.raw), signed(r.corrected)])));
     }
     details.addEventListener('toggle', updateTable);
     panel.append(details);
+    draw();
+    return panel;
+  }
+  return {render};
+})();
+
+'use strict';
+const WindPlots = (() => {
+  const fmt=(v,d=1)=>fin(v)?v.toLocaleString('nl-NL',{minimumFractionDigits:d,maximumFractionDigits:d}):'—';
+  const deg=v=>fin(v)?fmt(v)+'°':'—';
+  const signed=v=>fin(v)?(v>=.05?'+':'')+deg(v):'—';
+  const sailLabel=s=>s&&s!=='-'?s:'Onbekend zeil';
+  const pageSize=7;
+
+  function barChart(grid,type,pairs,key,series,limit,onOpenPair) {
+    const rows=pairs.filter(p=>p.type===type&&fin(p[series][key]));
+    const fit=rows.filter(p=>!p.validation).map(p=>p[series][key]);
+    const median=SL.median(fit), title=type==='Tack'?'Tacks':'Gijpen';
+    const frame=h('section',{class:'windplot-frame'},h('h4',{},title+' · '+(key==='TWD'?'ΔTWD':'Δ|'+key+'|')));
+    grid.append(frame);
+    if(!rows.length){frame.append(h('p',{class:'muted'},'Geen '+title.toLowerCase()+' met bruikbare '+key+' in deze selectie.'));return;}
+    frame.append(h('div',{class:'windplot-meta'},'Mediaan '+signed(median)+' · '+fit.length+' paren (excl. controle)'));
+    const bars=h('div',{class:'windplot-bars'}),pager=h('div',{class:'windplot-pager'});
+    frame.append(h('div',{class:'windplot-axis','aria-hidden':'true'},h('span',{class:'windplot-scale'},['−'+fmt(limit,0)+'°','0°','+'+fmt(limit,0)+'°'].map(v=>h('span',{},v)))),bars,pager);
+    let page=0;
+    function display(){
+      const start=page*pageSize;
+      bars.replaceChildren();
+      for(const row of rows.slice(start,start+pageSize)){
+        const value=row[series][key],fraction=50*value/limit;
+        const description=title+' · '+dstr(row.t)+' · '+sailLabel(row.sail)+' · '+signed(value)+(row.validation?' · Controlepaar':'');
+        const attrs={class:'windplot-row',title:description,'aria-label':description+(onOpenPair?' · Open paar':'')};
+        const track=h('span',{class:'windplot-track','aria-hidden':'true'},
+          h('span',{class:'windplot-bar',style:'left:'+Math.min(50,50+fraction)+'%;width:'+Math.abs(fraction)+'%;background:var('+(value<0?'--stbd':'--port')+')'}),
+          fin(median)?h('i',{class:'windplot-median',style:'left:'+(50+50*median/limit)+'%'}):null);
+        bars.append(h(onOpenPair?'button':'div',onOpenPair?{...attrs,type:'button',onclick:()=>onOpenPair(row.key)}:attrs,
+          h('span',{},tstr(row.t)+(row.validation?' *':'')),track,h('span',{},signed(value))));
+      }
+      pager.replaceChildren();
+      if(rows.length>pageSize){
+        const move=(label,offset,disabled)=>h('button',{type:'button',disabled,'aria-label':label+' '+title.toLowerCase(),
+          onclick:()=>{page+=offset;display();}},label);
+        pager.append(move('Vorige',-1,page===0),h('span',{'aria-live':'polite'},(start+1)+'–'+Math.min(rows.length,start+pageSize)+' van '+rows.length),move('Volgende',1,start+pageSize>=rows.length));
+      }
+    }
+    display();
+  }
+
+  function scatter(grid,mode,phases,channel,series,xr,colorBySail,colorForSail){
+    const points=phases.filter(p=>p.mode===mode&&fin(p[series].TWS)&&fin(p[series][channel]));
+    const heading=(mode==='up'?'Aandewindse':'Voor-de-windse')+' fases · |'+channel+'|';
+    const frame=h('section',{class:'windplot-frame'},h('h4',{},heading));
+    grid.append(frame);
+    if(!points.length){frame.append(h('p',{class:'muted'},'Geen fases met bruikbare '+channel+' en TWS in deze selectie.'));return;}
+    const canvas=h('canvas',{role:'img','aria-label':heading+' tegen TWS. Waarden staan in de fasetabel hieronder.'});
+    frame.append(canvas);
+    const angle=p=>p[series][channel];
+    const yr=[Math.max(0,Math.floor(SL.quant(points.map(angle),0))-2),Math.min(180,Math.ceil(SL.quant(points.map(angle),1))+2)];
+    const groups=new Map();
+    for(const p of points){
+      const k=JSON.stringify([p.sail,p.side]);
+      if(!groups.has(k))groups.set(k,[]);
+      groups.get(k).push(p);
+    }
+    const tint=p=>colorBySail?colorForSail(p.sail):css(p.side==='Port'?'--port':'--stbd');
+    const fits=[];
+    for(const group of groups.values()){
+      if(group.length<4)continue;
+      const xs=group.map(p=>p[series].TWS);
+      if(SL.quant(xs,1)-SL.quant(xs,0)<1||new Set(xs).size<3)continue;
+      fits.push([SL.fitTrend(xs,group.map(angle),'Straight line',2),tint(group[0]),group[0].side]);
+    }
+    function paint(){
+      const g=plot(canvas,{w:canvas.clientWidth||undefined,h:183,xr,yr,xl:'TWS (kn)',yl:'|'+channel+'| (°)',pl:47,xTickGap:55});
+      for(const [line,color,tack] of fits){
+        g.c.setLineDash(colorBySail&&tack==='Stbd'?[4,3]:[]);
+        g.line(line,color,1.4);
+      }
+      g.c.setLineDash([]);
+      for(const p of points)g.dot(p[series].TWS,angle(p),tint(p),
+        [dstr(p.t),sailLabel(p.sail),p.side==='Port'?'BB':'SB',fmt(p[series].TWS)+' kn',deg(angle(p))].join(' · '),null,p.side==='Stbd',3);
+    }
+    paint();
+    if(typeof ResizeObserver==='function'){
+      let width=frame.clientWidth;
+      const observer=new ResizeObserver(()=>{
+        if(!frame.isConnected){observer.disconnect();return;}
+        if(frame.clientWidth>0&&frame.clientWidth!==width){width=frame.clientWidth;paint();}
+      });
+      observer.observe(frame);
+    }
+  }
+
+  function expandable(parent,label,head,rows,toCells){
+    const summary=h('summary',{},label+' ('+rows.length+')'),details=h('details',{},summary);
+    parent.append(details);
+    details.addEventListener('toggle',()=>{
+      if(!details.open||details.childElementCount>1)return;
+      details.append(table(head,rows.map(toCells)));
+    });
+  }
+
+  function render(container,data,view={},onOpenPair=null,onSelectionChange=null){
+    const mhu=data.kind==='mhu',id='windplot-'+(mhu?'mhu':'twa');
+    const panel=card(mhu?'MHU-symmetrie':'TWA en TWD per boeg');
+    panel.classList.add('windplot-panel');panel.id=id;container.append(panel);
+    const controls=h('div',{class:'form'}),note=h('p',{class:'muted'}),plots=h('div');
+    panel.append(controls,note,plots);
+    const changed=(k,value)=>{view[k]=value;draw();};
+    const select=(k,label,values,chosen)=>{
+      const s=h('select',{id:id+'-'+k,onchange:e=>changed(k,e.target.value)},values.map(([value,text])=>h('option',{value,selected:value===chosen},text)));
+      controls.append(field(label,s));return s;
+    };
+    if(!data.pairs.length&&!data.phases.length)panel.append(h('p',{class:'muted'},'Keur stabiele fases en vensters vóór en na een tack of gijp goed voor kalibratie.'));
+    const channels=['AWA','TWA','MWA'].filter(k=>data.channels.includes(k));
+    const angle=mhu?select('channel','Windhoek',(channels.length?channels:['AWA']).map(k=>[k,k]),view.channel||channels[0]):null;
+    const series=select('series','Kalibratie',data.hasProposal?[['active','Actief'],['proposed','Voorstel']]:[['active','Actief']],view.series||(data.hasProposal?'proposed':'active'));
+    const sails=[...new Set([...data.phases,...data.pairs].map(p=>p.sail))].sort((a,b)=>sailLabel(a).localeCompare(sailLabel(b),'nl'));
+    const sail=select('sail','Zeilset',[['','Alle zeilsets'],...sails.map(s=>[s,sailLabel(s)])],view.sail||'');
+    function bound(k,label){
+      const input=h('input',{type:'number',id:id+'-'+k,min:0,step:'any',placeholder:'Vrij',value:view[k]??'',
+        oninput:e=>changed(k,e.target.value===''?null:e.target.valueAsNumber)});
+      controls.append(field(label,input));return input;
+    }
+    const lo=bound('min','Actieve TWS vanaf (kn)'),hi=bound('max','Actieve TWS t/m (kn)');
+    const color=select('color','Puntkleur',[['side','Boeg'],['sail','Zeilset']],view.color||'side');
+    const checks=h('input',{type:'checkbox',id:id+'-validation',checked:view.validation,onchange:e=>changed('validation',e.target.checked)});
+    if(data.pairs.some(p=>p.validation))controls.append(field('Toon controleparen (*)',checks));
+    function draw(){
+      const channel=mhu?angle.value:'TWA',metric=mhu?channel:'TWD',version=series.value;
+      const minTws=lo.value===''?null:lo.valueAsNumber,maxTws=hi.value===''?null:hi.valueAsNumber;
+      const invalid=!lo.validity.valid||!hi.validity.valid||(minTws!==null&&maxTws!==null&&minTws>maxTws);
+      function selected(p){
+        return !invalid&&(!mhu||p.vmgToVmg!==false)&&(!sail.value||p.sail===sail.value)&&(minTws===null||(fin(p.tws)&&p.tws>=minTws))&&(maxTws===null||(fin(p.tws)&&p.tws<=maxTws));
+      }
+      const phases=data.phases.filter(selected),pairs=data.pairs.filter(selected);
+      note.textContent=invalid?'Vul een geldige TWS-onder- en bovengrens in.':mhu?
+        'Per paar: |'+channel+'| bakboord min stuurboord. Positief betekent een ruimere hoek op bakboord. Het MHU-voorstel gebruikt AWA uit aandewindse tacks.':
+        'Per paar: TWD bakboord min stuurboord, via de kortste hoek. Positief betekent dat TWD op bakboord verder rechtsom ligt.';
+      const display=pairs.filter(p=>!p.validation||checks.checked);
+      const bars=display.map(p=>Math.abs(p[version][metric])).filter(fin);
+      const limit=Math.max(1,Math.ceil(bars.reduce((a,b)=>Math.max(a,b),0)));
+      const grid=h('div',{class:'windplot-grid'}),legend=h('div',{class:'legend'});
+      plots.replaceChildren(legend,grid);
+      barChart(grid,'Tack',display,metric,version,limit,onOpenPair);
+      barChart(grid,'Gybe',display,metric,version,limit,onOpenPair);
+      const colorBySail=color.value==='sail';
+      const sailColor=s=>css('--s'+(Math.max(0,sails.indexOf(s))%8+1));
+      legend.append(h('span',{},'● Bakboord'),h('span',{},'▲ Stuurboord'));
+      if(colorBySail){
+        const used=new Set(phases.map(p=>p.sail));
+        for(const s of sails.filter(s=>used.has(s)))legend.append(h('span',{},h('i',{style:'background:'+sailColor(s)}),sailLabel(s)));
+      }else{
+        legend.firstChild.style.color='var(--port)';legend.lastChild.style.color='var(--stbd)';
+      }
+      const xs=phases.flatMap(p=>[p.active.TWS,p.proposed.TWS]).filter(fin);
+      const xr=xs.length?[Math.max(0,Math.floor(SL.quant(xs,0))-.25),Math.ceil(SL.quant(xs,1))+.25]:[0,1];
+      scatter(grid,'up',phases,channel,version,xr,colorBySail,sailColor);
+      scatter(grid,'dn',phases,channel,version,xr,colorBySail,sailColor);
+      if(display.length||xs.length)plots.append(h('p',{class:'muted'},'Streeplijn = mediaan zonder controleparen. Fasetrends per zeilset en boeg vanaf vier vensters en 1 kn TWS-spreiding.'));
+      if(display.length){
+        const cols=['Tijd','Manoeuvre','Gebruik','Zeilset','TWS (kn)',...(mhu?[]:['TWD BB','TWD SB']),'Δ actief',...(data.hasProposal?['Δ voorstel']:[]),''];
+        expandable(plots,'Meetwaarden per manoeuvrepaar',cols,display,p=>[tstr(p.t),p.type,p.validation?'Controle':p.tableEligible===false?'Diagnostisch':'Kalibratie',sailLabel(p.sail),fmt(p.tws),
+          ...(mhu?[]:[deg(p[version].portTWD),deg(p[version].stbdTWD)]),signed(p.active[metric]),...(data.hasProposal?[signed(p.proposed[metric])]:[]),
+          onOpenPair?h('button',{type:'button',onclick:()=>onOpenPair(p.key),'aria-label':'Open paar '+tstr(p.t)},'Open paar'):'']);
+      }
+      if(phases.length)expandable(plots,'Meetwaarden per fase',['Tijd','Koers','Boeg','Zeilset','TWS actief (kn)',...(data.hasProposal?['TWS voorstel (kn)']:[]),'|'+channel+'| actief',...(data.hasProposal?['|'+channel+'| voorstel']:[])],
+        phases,p=>[tstr(p.t),p.mode==='up'?'Aandewinds':'Voor de wind',p.side==='Port'?'BB':'SB',sailLabel(p.sail),fmt(p.active.TWS),...(data.hasProposal?[fmt(p.proposed.TWS)]:[]),deg(p.active[channel]),...(data.hasProposal?[deg(p.proposed[channel])]:[])]);
+      onSelectionChange?.({pairs:pairs.filter(p=>!p.validation),phases,channel,sail:sail.value,minTws,maxTws,series:version});
+    }
     draw();
     return panel;
   }
@@ -3252,68 +3658,103 @@ const WF = (() => {
     SL.checkSpeedos(c.speedos,A.D.raw.ch);
     return c;
   }
-  function windReview(c,refs,draft,step){
-    const live=SL.windPairEvidence(refs.pairs),result=h('div',{'aria-live':'polite'}),message=h('p',{role:'status'});
-    const panel=card('Windkalibratie uit vensterparen',help('Controleer eerst de MHU met aandewindse tacks. Controleer daarna de resterende TWD-sprong per windband, aandewinds en voor de wind. Een echte windshift, asymmetrische trim of kompasfout kan dezelfde sprong geven.'),result,message);
-    c.append(panel);
-    if(!refs.phases.length){
-      result.append(help('Nog geen bruikbare goedgekeurde paren voor de schatting. Kies stabiele vensters vóór en na een tack of gijp. Controleparen tellen alleen mee voor de toets.'),btn('Manoeuvres beoordelen',()=>show('pairreview')));return;
+  function watchDraft(container,draft,refresh,pending){
+    let previous=JSON.stringify(draft),timer;
+    const signal=windListeners.signal;
+    function changed(){
+      const key=JSON.stringify(draft);
+      if(key===previous)return;
+      previous=key;clearTimeout(timer);pending();
+      timer=setTimeout(()=>{if(!signal.aborted && A.tab==='cal' && container.isConnected)refresh();},150);
     }
-    function render(){
-      const cfg=validateCalib(draft);
-      const D=JSON.stringify(cfg)===JSON.stringify(A.calib)?A.D:process(snapshot(false),cfg);
-      const pairs=refs.pairs.map(reference=>({pair:reference.pair,reference,before:SL.windowPhase(D,reference.pair.before),after:SL.windowPhase(D,reference.pair.after)}));
-      const proposed=SL.windPairEvidence(pairs);
-      const signature=JSON.stringify(draft);
-      const med=values=>SL.median(values),degrees=v=>fin(v)?f1(v,1)+'°':'—';
-      const summary=(values,factor=1)=>values?.length?degrees(factor*med(values)):'—';
-      const update=fn=>()=>{if(JSON.stringify(draft)!==signature){message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';return;}
-        try{const next=SL.copy(draft);fn(next);session.draft=validateCalib(next);session.preview=false;touch();show('cal');}catch(e){message.textContent=e.message;}};
-      const alignment=med(proposed.alignment);
-      result.replaceChildren();
-      if(step===2)result.append(h('h4',{},'1 · AWA en MHU-uitlijning'),table(['Tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[proposed.alignment.length,summary(live.alignment),degrees(alignment)]]),
-        btn('MHU-restfout naar voorstel',update(next=>{next.awaOff=Math.round((next.awaOff+alignment)*10)/10;}),false,{disabled:proposed.alignment.length<3||!fin(alignment)||Math.abs(alignment)<.05}));
-      if(step===3){
-        result.append(
-        h('h4',{},'2 · TWA-tabel uit de TWD-sprong'),help('Δ TWD en Δ TWS zijn bakboord min stuurboord. De tabelcorrectie is de helft van de resterende TWD-sprong. Beide kolommen gebruiken de windband van het actieve log.'));
-        if(proposed.bands.length){
-          result.append(table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','TWD P25–P75','Δ TWS voorstel','Extra TWA',''],proposed.bands.map(g=>{
-            const old=live.bands.find(b=>b.band===g.band&&b.mode===g.mode);
-            const residual=med(g.errors)/2,tws=BAND_TWS[g.band];
-            return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.errors.length,summary(old?.errors),summary(g.errors),degrees(SL.quant(g.errors,.25))+' / '+degrees(SL.quant(g.errors,.75)),f1(med(g.speeds),2)+' kn',degrees(residual),
-              btn('Naar tabel bij '+tws+' kn',update(next=>{
-                const rows=next.twa.length?next.twa:BAND_TWS.map(t=>({tws:t,up:0,dn:0}));
-                next.twa=SL.addTableResidual(rows,tws,g.mode,residual);
-              }),false,{disabled:g.errors.length<3||Math.abs(residual)<.05})];
-          })));
-        }else result.append(help('Geen paren met voldoende TWD- en TWS-metingen in deze windbanden.'));
-      }
-      if(step===4){
-        const extremes=refs.phases.map(w=>D===A.D?w:SL.windowPhase(D,{start:w.t,end:iT(w.i1)})).filter(w=>w&&(w.mode==='Upwind'&&Math.abs(w.v.TWA)<=60||w.mode==='Downwind'&&Math.abs(w.v.TWA)>=120));
-        const tws=SL.calWind(extremes).twsDn,qualified=tws&&fin(tws.pct)&&tws.pct>-100&&Math.abs(tws.pct)>Math.max(3,2*tws.se);
-        result.append(h('h4',{},'3 · TWS aandewinds en voor de wind'));
-        if(tws){
-          const adjusted=Math.round(1000*((1+(cfg.twsDnPct||0)/100)/(1+tws.pct/100)-1))/10;
-          result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(tws.pct,1)+'% (standaardfout '+f1(tws.se,1)+'%). Vergelijk rakken in dezelfde omstandigheden.'),
-            btn('TWS downwind naar voorstel',update(next=>{next.twsDnPct=adjusted;}),false,{disabled:!qualified}));
-        }else result.append(help('Voor de TWS-vergelijking zijn goedgekeurde aandewindse én voor-de-windse vensters nodig, met dekking op beide boegen. De absolute AWS-schaal vraagt een onafhankelijke referentie.'));
-      }
-      if(pairs.length && step!==4){
-        const rows=pairs.filter(r=>r.before&&r.after).map(({pair,before,after})=>{
-          const [p,s]=before.tack==='Port'?[before.v,after.v]:[after.v,before.v];
-          return [tstr(pair.anchor),pair.type,degrees(p.AWA)+' / '+degrees(s.AWA),degrees(p.TWD)+' / '+degrees(s.TWD),degrees(SL.w180(p.TWD-s.TWD)),btn('Bekijk paar',()=>{
-            session.activePairKey=pair.key;session.pairType='Alle';const i=Math.round((pair.anchor-A.raw.t0)/1000);
-            if(!A.D.L.race[i])session.pairRaceOnly=false;
-            A.cur=i;session.viewport=[Math.max(A.D.i0,i-150),Math.min(A.D.i1,i+150)];session.selections.analysis=null;show('pairreview');
-          })];
+    for(const name of ['input','change'])container.addEventListener(name,changed,{signal});
+    signal.addEventListener('abort',()=>clearTimeout(timer),{once:true});
+  }
+
+  function windAngleReview(host,c,refs,draft,kind,getProposal){
+    const plots=h('div'),evidence=h('section',{class:'card'}),message=h('p',{role:'status',class:'muted'});
+    const view=(session.windPlotViews||={})[kind]||={};
+    const referenceWindows=[...refs.phases,...(refs.validationPairs||[]).flatMap(r=>[r.before,r.after])];
+    let signature;
+    host.append(plots,evidence,message);
+    function openPair(key){
+      const pair=session.manoeuvrePairs[key];if(!pair)return;
+      session.activePairKey=key;session.pairType='Alle';
+      const i=Math.round((pair.anchor-A.raw.t0)/1000);
+      if(!A.D.L.race[i])session.pairRaceOnly=false;
+      A.cur=i;session.viewport=[Math.max(A.D.i0,i-150),Math.min(A.D.i1,i+150)];session.selections.analysis=null;show('pairreview');
+    }
+    const deg=v=>fin(v)?f1(v,1)+'°':'–';
+    const applyChange=fn=>safe(()=>{
+      if(signature!==JSON.stringify(draft))return;
+      const next=SL.copy(draft);fn(next);
+      session.draft=validateCalib(next);session.preview=false;touch();show('cal');
+    });
+    function explain({pairs,sail}){
+      evidence.replaceChildren();
+      if(kind==='mhu'){
+        const residuals=pairs.map(p=>p.proposed.mhuResidual).filter(fin),delta=SL.median(residuals);
+        evidence.append(h('h4',{},'MHU-offset uit aandewindse tacks'),
+          table(['Bruikbare tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[residuals.length,deg(SL.median(pairs.map(p=>p.active.mhuResidual))),deg(delta)]]),
+          btn('MHU-restfout naar voorstel',applyChange(next=>{next.awaOff=Math.round(10*(next.awaOff+delta))/10;}),false,{disabled:residuals.length<3||!fin(delta)||Math.abs(delta)<.05}),
+          help('De extra offset is de mediaan van de halve AWA-verschillen uit vergelijkbare tackparen. Overnemen kan vanaf drie paren.'));
+      }else{
+        const groups=new Map();
+        for(const pair of pairs){
+          if(!pair.tableEligible||!fin(pair.proposed.TWD)||!fin(pair.active.TWD))continue;
+          const band=SL.BANDS.findIndex(([lo,hi])=>pair.tws>=lo&&pair.tws<hi);if(band<0)continue;
+          const key=band+pair.mode;
+          if(!groups.has(key))groups.set(key,{band,mode:pair.mode,old:[],next:[],speed:[]});
+          const g=groups.get(key);g.old.push(pair.active.TWD);g.next.push(pair.proposed.TWD);g.speed.push(pair.proposed.TWS);
+        }
+        const rows=[...groups.values()].sort((a,b)=>a.band-b.band||a.mode.localeCompare(b.mode)).map(g=>{
+          const delta=SL.median(g.next),extra=delta/2,tws=BAND_TWS[g.band];
+          return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.next.length,deg(SL.median(g.old)),deg(delta),deg(SL.quant(g.next,.25))+' / '+deg(SL.quant(g.next,.75)),f1(SL.median(g.speed),2),deg(extra),
+            btn('Naar tabel bij '+tws+' kn',applyChange(next=>{
+              const knots=next.twa.length?next.twa:BAND_TWS.map(tws=>({tws,up:0,dn:0}));
+              next.twa=SL.addTableResidual(knots,tws,g.mode,extra);
+            }),false,{disabled:g.next.length<3||Math.abs(extra)<.05})];
         });
-        result.append(h('details',{},h('summary',{},'Meetwaarden per goedgekeurd paar'),table(['Tijd','Type','AWA BB / SB','TWD BB / SB','Δ TWD',''],rows)));
+        evidence.append(h('h4',{},'TWA-tabel uit de TWD-sprong'),rows.length?
+          table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','P25 / P75','Δ TWS (kn)','Extra TWA',''],rows):
+          help('Geen geschikte paren in deze selectie. Beide zijden moeten bij een tack maximaal 60° TWA of bij een gijp minimaal 120° TWA varen.'),
+          help('Een tabelwijziging werkt op de sessie. '+(sail?'De schatting gebruikt alleen de gekozen zeilset. ':'')+'Overnemen kan vanaf drie paren per windband en koers.'));
       }
-      result.append(help('De hoekcorrecties zijn medianen. Overnemen kan vanaf drie bruikbare paren per hoekschatting. Na een wijziging rekent SailLens de restfout op het voorstel opnieuw uit. Met Voorstel toepassen maak je de correcties actief.'));
     }
-    const recalc=()=>{try{render();message.textContent='';}catch(e){result.replaceChildren();message.textContent=e.message;}};
-    panel.insertBefore(btn('Bereken restfout opnieuw',recalc),result);recalc();
-    c.addEventListener('input',e=>{if(e.target.id.startsWith('draft-')||e.target.matches('[aria-label^="TWA "]'))message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';},{signal:windListeners.signal});
+    function refresh(){
+      try{
+        const cfg=validateCalib(draft),same=JSON.stringify(cfg)===JSON.stringify(A.calib);
+        const proposed=same||!referenceWindows.length?A.D:SL.windPlotPreview(A.D,referenceWindows,cfg)||getProposal();
+        const data=SL.windPlotData(A.D,refs,proposed);
+        signature=JSON.stringify(draft);plots.replaceChildren();message.textContent='';
+        WindPlots.render(plots,{...data,kind},view,openPair,explain);
+        if(!referenceWindows.length)message.append(btn('Manoeuvres beoordelen',()=>show('pairreview')));
+      }catch(e){plots.replaceChildren();evidence.replaceChildren();message.textContent=e.message;}
+    }
+    refresh();watchDraft(c,draft,refresh,()=>{message.textContent='Voorstel wordt doorgerekend…';});
+  }
+
+  function windSpeedReview(c,refs,draft,getProposal){
+    const result=card('TWS aandewinds en voor de wind'),message=h('p',{role:'status'});
+    c.append(result,message);
+    function refresh(){
+      try{
+        const D=getProposal(),values=refs.phases.map(p=>D===A.D?p:SL.windowPhase(D,{start:p.t,end:iT(p.i1)}));
+        const extremes=values.filter(p=>p&&(p.mode==='Upwind'&&Math.abs(p.v.TWA)<=60||p.mode==='Downwind'&&Math.abs(p.v.TWA)>=120));
+        const fit=SL.calWind(extremes).twsDn;
+        result.replaceChildren(h('h3',{},'TWS aandewinds en voor de wind'));
+        message.textContent='';
+        if(!fit){result.append(help('Keur aandewindse en voor-de-windse vensters op beide boegen goed om TWS te vergelijken.'));return;}
+        const signature=JSON.stringify(draft),qualified=fin(fit.pct)&&fit.pct>-100&&Math.abs(fit.pct)>Math.max(3,2*fit.se);
+        result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(fit.pct,1)+'% (standaardfout '+f1(fit.se,1)+'%).'),
+          btn('TWS downwind naar voorstel',safe(()=>{
+            if(JSON.stringify(draft)!==signature)return;
+            const next=SL.copy(draft);next.twsDnPct=Math.round(1000*((1+(next.twsDnPct||0)/100)/(1+fit.pct/100)-1))/10;
+            session.draft=validateCalib(next);session.preview=false;touch();show('cal');
+          }),false,{disabled:!qualified}));
+      }catch(e){result.replaceChildren();message.textContent=e.message;}
+    }
+    refresh();watchDraft(c,draft,refresh,()=>{message.textContent='Voorstel wordt doorgerekend…';});
   }
   let windListeners;
   function speedoEditor(draft, phases, bspModel) {
@@ -3411,14 +3852,22 @@ const WF = (() => {
     const panel=card('Stroomcorrectie',controls,manual,output);
     c.append(panel);
     let data=A.D,windows=phases,displayedCal=A.calib,signature=null;
-    const drawProposal=btn('Teken voorstel',safe(()=>{
-      const next=getProposal();
-      const fixed=phases.map(p=>{
-        const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)});
-        return w && {...p,v:w.v,coverage:w.coverage};
-      }).filter(Boolean);
-      data=next;windows=fixed;displayedCal=SL.copy(draft);signature=JSON.stringify(draft);render();
-    }),false,{disabled:!phases.length});
+    function plotDraft(){
+      try{
+        const cfg=validateCalib(draft);
+        const quick=kind==='speed'&&SL.speedPlotPreview(A.D,phases,cfg);
+        const next=quick?quick.data:getProposal();
+        const fixed=quick?quick.windows:phases.map(p=>{
+          const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)});
+          return w && {...p,v:w.v,coverage:w.coverage};
+        }).filter(Boolean);
+        data=next;windows=fixed;displayedCal=SL.copy(draft);signature=JSON.stringify(draft);render();
+      }catch(e){
+        output.replaceChildren();signature=undefined;
+        drawActive.hidden=false;status.textContent=e.message;
+      }
+    }
+    const drawProposal=btn('Teken voorstel',plotDraft,false,{disabled:!phases.length});
     const drawActive=btn('Toon actieve kalibratie',()=>{
       data=A.D;windows=phases;displayedCal=A.calib;signature=null;render();
     });
@@ -3451,8 +3900,8 @@ const WF = (() => {
       updateStatus();
     }
     source.onchange=()=>{options.mode=source.value;touch();render();};
-    for(const event of ['input','change'])c.addEventListener(event,updateStatus,{signal:windListeners.signal});
-    if(session.preview&&phases.length)drawProposal.click();else render();
+    if(phases.length)watchDraft(c,draft,plotDraft,()=>{status.textContent='Voorstel gewijzigd. Grafieken worden bijgewerkt…';});
+    if(phases.length&&JSON.stringify(draft)!==JSON.stringify(A.calib))plotDraft();else render();
   }
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
@@ -3498,7 +3947,12 @@ const WF = (() => {
         table(['TWS kn','Upwind °','Downwind °',''],draft.twa.map((r,i)=>[cell(r,'tws'),cell(r,'up'),cell(r,'dn'),btn('Verwijder',()=>{draft.twa.splice(i,1);session.preview=false;show('cal');})])),
         btn('TWA-rij toevoegen',()=>{draft.twa.push({tws:(draft.twa.at(-1)?.tws||4)+2,up:0,dn:0});session.preview=false;show('cal');}));
     }
-    if(index>=2&&index<=4)windReview(c,refs,draft,index);
+    if(index===2||index===3){
+      const host=h('div',{class:'windplot-workspace'}),layout=h('div',{class:'windcal-layout'});
+      c.append(layout);layout.append(editor,host);
+      windAngleReview(host,c,refs,draft,index===2?'mhu':'twa',getProposal);
+    }
+    if(index===4)windSpeedReview(c,refs,draft,getProposal);
     if(index===5)editor.append(table(['Instelling','Actief','Voorstel'],fields.flat().map(([k,label])=>[label,A.calib[k],draft[k]])),
       help('Vergelijk de instellingen op dezelfde tijdvakken. Pas het voorstel toe om de sessie met deze correcties te analyseren.'));
     if(index===5 && (A.calib.speedos?.enabled || draft.speedos?.enabled)){
@@ -3697,6 +4151,9 @@ const STUDIO=(()=>{
   const undo=()=>{const prev=s.lastPairDecision;Object.assign(s.manoeuvrePairs[prev.key],prev.previous);s.activePairKey=prev.key;delete s.lastPairDecision;const index=list.findIndex(x=>SL.pairKey(D,x)===prev.key);WF.touch();if(index>=0)go(index);else show('pairreview');};
   side.append(bar(button(last?'Goedkeuren':'Goedkeuren & volgende',()=>decide(true),true,{disabled:!check.valid}),button(last?'Afwijzen':'Afwijzen & volgende',()=>decide(false)),button('Besluit herstellen',undo,false,{disabled:!s.lastPairDecision})));
   side.append(card(null,bar(button('Vorige manoeuvre',()=>go(idx-1),false,{disabled:idx===0}),button('Volgende manoeuvre',()=>go(idx+1),false,{disabled:idx===list.length-1}),button(s.pairCloseup?'Beide vensters':'Draaipunt ±30 s',()=>{s.pairCloseup=!s.pairCloseup;go(idx);}),h('b',{},verdict(pair))),help('Blauw is vóór de manoeuvre, groen is erna. Sleep een vensterrand om de selectie bij te stellen.')));
+  const vmg=h('input',{type:'checkbox',id:'pair-vmg',checked:pair.vmgToVmg!==false,
+    onchange:e=>{pair.vmgToVmg=e.target.checked;WF.touch();}});
+  side.append(h('label',{},vmg,' VMG vóór en na de manoeuvre'),help('Vink uit bij een tactische in- of uitvaart. Een goedgekeurd paar telt dan alleen voor de TWD-sprong in de windkalibratie.'));
   const extended=h('details',{},h('summary',{},'Controlepaar en brondata'));RaceTools.review(extended,pair,check,true);const form=h('div',{class:'form'}),inputs={};for(const side of ['before','after'])for(const edge of ['start','end']){const id='pair-'+side+'-'+edge;inputs[id]=h('input',{id,type:'datetime-local',step:1,value:local(pair[side][edge])});form.append(field((side==='before'?'Vóór':'Na')+' · '+(edge==='start'?'begin':'einde'),inputs[id]));}
   const update=()=>{const next={...pair,before:{start:fromLocal(inputs['pair-before-start'].value),end:fromLocal(inputs['pair-before-end'].value)},after:{start:fromLocal(inputs['pair-after-start'].value),end:fromLocal(inputs['pair-after-end'].value)},approved:false,validation:false};if(!SL.windowPhase(D,next.before)||!SL.windowPhase(D,next.after))throw new Error('Kies twee geldige vensters van minimaal 5 seconden binnen het log.');s.manoeuvrePairs[key]=next;WF.touch();show('pairreview');};
   const setRange=side=>{if(!s.selections.analysis)throw new Error('Maak eerst een tijdselectie.');pair[side]=SL.copy(s.selections.analysis);pair.approved=false;pair.validation=false;WF.touch();show('pairreview');};
@@ -3801,8 +4258,8 @@ const RaceTools = (() => {
     })));
   }
 
-  function pairMetrics(a,b){
-    return [Math.abs(b.v.AWA)-Math.abs(a.v.AWA),Math.abs(b.v.TWA)-Math.abs(a.v.TWA),SL.w180(b.v.TWD-a.v.TWD)];
+  function pairMetrics(a,b,vmgToVmg=true){
+    return [vmgToVmg ? Math.abs(b.v.AWA)-Math.abs(a.v.AWA) : NaN,vmgToVmg ? Math.abs(b.v.TWA)-Math.abs(a.v.TWA) : NaN,SL.w180(b.v.TWD-a.v.TWD)];
   }
   function review(c,pair,check,compact=false){
     const D=A.D,s=WF.session;
@@ -3853,7 +4310,7 @@ const RaceTools = (() => {
         const band=2*Math.floor((before.v.TWS+after.v.TWS)/4);
         const key=[pair.type,before.sails,band+'–'+(band+2)+' kn',before.tack+' → '+after.tack].join(' · ');
         if(!groups.has(key))groups.set(key,[]);
-        groups.get(key).push(pairMetrics(before,after));
+        groups.get(key).push(pairMetrics(before,after,pair.vmgToVmg));
       }
       const reserved=all.filter(x=>x.pair.validation);
       const panel=card('Wind over de manoeuvre',table(['Manoeuvre · zeil · TWS · richting','Paren','Mediaan Δ |AWA|','Mediaan Δ |TWA|','Mediaan Δ TWD'],Array.from(groups,([k,g])=>[k,g.length,...[0,1,2].map(i=>f1(SL.median(g.map(row=>row[i])),2)+'°')])));
@@ -3864,7 +4321,7 @@ const RaceTools = (() => {
             const next=WF.process(WF.snapshot(),s.draft);
             result.replaceChildren(table(['Controlepaar','|Δ TWD| actief','|Δ TWD| voorstel','|Δ abs(AWA)| actief','|Δ abs(AWA)| voorstel'],reserved.map(({pair,before,after})=>{
               const a=SL.windowPhase(next,pair.before),b=SL.windowPhase(next,pair.after);
-              const old=pairMetrics(before,after),v=pairMetrics(a,b);
+              const old=pairMetrics(before,after,pair.vmgToVmg),v=pairMetrics(a,b,pair.vmgToVmg);
               return [tstr(pair.anchor),...[old[2],v[2],old[0],v[0]].map(n=>f1(Math.abs(n),2)+'°')];
             })));
           }catch(e){banner(e.message,true);}

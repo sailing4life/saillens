@@ -44,7 +44,16 @@
     return {before,after,errors,valid:!errors.length};
   }
   function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
-  function calibrationReferences(D,s){const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);const pairs=approvedPairs(D,s).filter(x=>!x.pair.validation&&independent(x.before)&&independent(x.after)),ps=SL.calibrationPhases(D,s.reviews).filter(independent);const all=[...ps,...pairs.flatMap(x=>[x.before,x.after])];return {phases:[...new Map(all.map(p=>[p.i+':'+p.i1,p])).values()],pairs};}
+  function calibrationReferences(D,s){
+    const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);
+    const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);
+    const reviewed=approvedPairs(D,s);
+    const validationPairs=reviewed.filter(x=>x.pair.validation);
+    const pairs=reviewed.filter(x=>!x.pair.validation&&independent(x.before)&&independent(x.after));
+    const stablePhases=SL.calibrationPhases(D,s.reviews).filter(independent);
+    const windows=[...stablePhases,...pairs.flatMap(x=>[x.before,x.after])];
+    return {phases:[...new Map(windows.map(w=>[w.i+':'+w.i1,w])).values()],stablePhases,pairs,validationPairs};
+  }
   // Port and starboard always use the same sign convention, in either turn direction.
   function windPairEvidence(pairs){
     const alignment=[],bands=new Map();
@@ -56,7 +65,7 @@
       const up=pair.type==='Tack'&&angles.every(a=>a<=60),down=pair.type==='Gybe'&&angles.every(a=>a>=120);
       if(!up&&!down)continue;
       const covered=k=>[port,stbd].every(w=>w.coverage[k]>=.95&&finite(w.v[k]));
-      if(up&&covered('AWA')&&port.v.AWA<0&&stbd.v.AWA>0)
+      if(up&&pair.vmgToVmg!==false&&covered('AWA')&&port.v.AWA<0&&stbd.v.AWA>0)
         alignment.push((Math.abs(port.v.AWA)-Math.abs(stbd.v.AWA))/2);
       if(!covered('TWD')||!covered('TWS'))continue;
       const tws=(basis.before.v.TWS+basis.after.v.TWS)/2,band=SL.BANDS.findIndex(([lo,hi])=>tws>=lo&&tws<hi);

@@ -331,68 +331,103 @@ const WF = (() => {
     SL.checkSpeedos(c.speedos,A.D.raw.ch);
     return c;
   }
-  function windReview(c,refs,draft,step){
-    const live=SL.windPairEvidence(refs.pairs),result=h('div',{'aria-live':'polite'}),message=h('p',{role:'status'});
-    const panel=card('Windkalibratie uit vensterparen',help('Controleer eerst de MHU met aandewindse tacks. Controleer daarna de resterende TWD-sprong per windband, aandewinds en voor de wind. Een echte windshift, asymmetrische trim of kompasfout kan dezelfde sprong geven.'),result,message);
-    c.append(panel);
-    if(!refs.phases.length){
-      result.append(help('Nog geen bruikbare goedgekeurde paren voor de schatting. Kies stabiele vensters vóór en na een tack of gijp. Controleparen tellen alleen mee voor de toets.'),btn('Manoeuvres beoordelen',()=>show('pairreview')));return;
+  function watchDraft(container,draft,refresh,pending){
+    let previous=JSON.stringify(draft),timer;
+    const signal=windListeners.signal;
+    function changed(){
+      const key=JSON.stringify(draft);
+      if(key===previous)return;
+      previous=key;clearTimeout(timer);pending();
+      timer=setTimeout(()=>{if(!signal.aborted && A.tab==='cal' && container.isConnected)refresh();},150);
     }
-    function render(){
-      const cfg=validateCalib(draft);
-      const D=JSON.stringify(cfg)===JSON.stringify(A.calib)?A.D:process(snapshot(false),cfg);
-      const pairs=refs.pairs.map(reference=>({pair:reference.pair,reference,before:SL.windowPhase(D,reference.pair.before),after:SL.windowPhase(D,reference.pair.after)}));
-      const proposed=SL.windPairEvidence(pairs);
-      const signature=JSON.stringify(draft);
-      const med=values=>SL.median(values),degrees=v=>fin(v)?f1(v,1)+'°':'—';
-      const summary=(values,factor=1)=>values?.length?degrees(factor*med(values)):'—';
-      const update=fn=>()=>{if(JSON.stringify(draft)!==signature){message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';return;}
-        try{const next=SL.copy(draft);fn(next);session.draft=validateCalib(next);session.preview=false;touch();show('cal');}catch(e){message.textContent=e.message;}};
-      const alignment=med(proposed.alignment);
-      result.replaceChildren();
-      if(step===2)result.append(h('h4',{},'1 · AWA en MHU-uitlijning'),table(['Tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[proposed.alignment.length,summary(live.alignment),degrees(alignment)]]),
-        btn('MHU-restfout naar voorstel',update(next=>{next.awaOff=Math.round((next.awaOff+alignment)*10)/10;}),false,{disabled:proposed.alignment.length<3||!fin(alignment)||Math.abs(alignment)<.05}));
-      if(step===3){
-        result.append(
-        h('h4',{},'2 · TWA-tabel uit de TWD-sprong'),help('Δ TWD en Δ TWS zijn bakboord min stuurboord. De tabelcorrectie is de helft van de resterende TWD-sprong. Beide kolommen gebruiken de windband van het actieve log.'));
-        if(proposed.bands.length){
-          result.append(table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','TWD P25–P75','Δ TWS voorstel','Extra TWA',''],proposed.bands.map(g=>{
-            const old=live.bands.find(b=>b.band===g.band&&b.mode===g.mode);
-            const residual=med(g.errors)/2,tws=BAND_TWS[g.band];
-            return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.errors.length,summary(old?.errors),summary(g.errors),degrees(SL.quant(g.errors,.25))+' / '+degrees(SL.quant(g.errors,.75)),f1(med(g.speeds),2)+' kn',degrees(residual),
-              btn('Naar tabel bij '+tws+' kn',update(next=>{
-                const rows=next.twa.length?next.twa:BAND_TWS.map(t=>({tws:t,up:0,dn:0}));
-                next.twa=SL.addTableResidual(rows,tws,g.mode,residual);
-              }),false,{disabled:g.errors.length<3||Math.abs(residual)<.05})];
-          })));
-        }else result.append(help('Geen paren met voldoende TWD- en TWS-metingen in deze windbanden.'));
-      }
-      if(step===4){
-        const extremes=refs.phases.map(w=>D===A.D?w:SL.windowPhase(D,{start:w.t,end:iT(w.i1)})).filter(w=>w&&(w.mode==='Upwind'&&Math.abs(w.v.TWA)<=60||w.mode==='Downwind'&&Math.abs(w.v.TWA)>=120));
-        const tws=SL.calWind(extremes).twsDn,qualified=tws&&fin(tws.pct)&&tws.pct>-100&&Math.abs(tws.pct)>Math.max(3,2*tws.se);
-        result.append(h('h4',{},'3 · TWS aandewinds en voor de wind'));
-        if(tws){
-          const adjusted=Math.round(1000*((1+(cfg.twsDnPct||0)/100)/(1+tws.pct/100)-1))/10;
-          result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(tws.pct,1)+'% (standaardfout '+f1(tws.se,1)+'%). Vergelijk rakken in dezelfde omstandigheden.'),
-            btn('TWS downwind naar voorstel',update(next=>{next.twsDnPct=adjusted;}),false,{disabled:!qualified}));
-        }else result.append(help('Voor de TWS-vergelijking zijn goedgekeurde aandewindse én voor-de-windse vensters nodig, met dekking op beide boegen. De absolute AWS-schaal vraagt een onafhankelijke referentie.'));
-      }
-      if(pairs.length && step!==4){
-        const rows=pairs.filter(r=>r.before&&r.after).map(({pair,before,after})=>{
-          const [p,s]=before.tack==='Port'?[before.v,after.v]:[after.v,before.v];
-          return [tstr(pair.anchor),pair.type,degrees(p.AWA)+' / '+degrees(s.AWA),degrees(p.TWD)+' / '+degrees(s.TWD),degrees(SL.w180(p.TWD-s.TWD)),btn('Bekijk paar',()=>{
-            session.activePairKey=pair.key;session.pairType='Alle';const i=Math.round((pair.anchor-A.raw.t0)/1000);
-            if(!A.D.L.race[i])session.pairRaceOnly=false;
-            A.cur=i;session.viewport=[Math.max(A.D.i0,i-150),Math.min(A.D.i1,i+150)];session.selections.analysis=null;show('pairreview');
-          })];
+    for(const name of ['input','change'])container.addEventListener(name,changed,{signal});
+    signal.addEventListener('abort',()=>clearTimeout(timer),{once:true});
+  }
+
+  function windAngleReview(host,c,refs,draft,kind,getProposal){
+    const plots=h('div'),evidence=h('section',{class:'card'}),message=h('p',{role:'status',class:'muted'});
+    const view=(session.windPlotViews||={})[kind]||={};
+    const referenceWindows=[...refs.phases,...(refs.validationPairs||[]).flatMap(r=>[r.before,r.after])];
+    let signature;
+    host.append(plots,evidence,message);
+    function openPair(key){
+      const pair=session.manoeuvrePairs[key];if(!pair)return;
+      session.activePairKey=key;session.pairType='Alle';
+      const i=Math.round((pair.anchor-A.raw.t0)/1000);
+      if(!A.D.L.race[i])session.pairRaceOnly=false;
+      A.cur=i;session.viewport=[Math.max(A.D.i0,i-150),Math.min(A.D.i1,i+150)];session.selections.analysis=null;show('pairreview');
+    }
+    const deg=v=>fin(v)?f1(v,1)+'°':'–';
+    const applyChange=fn=>safe(()=>{
+      if(signature!==JSON.stringify(draft))return;
+      const next=SL.copy(draft);fn(next);
+      session.draft=validateCalib(next);session.preview=false;touch();show('cal');
+    });
+    function explain({pairs,sail}){
+      evidence.replaceChildren();
+      if(kind==='mhu'){
+        const residuals=pairs.map(p=>p.proposed.mhuResidual).filter(fin),delta=SL.median(residuals);
+        evidence.append(h('h4',{},'MHU-offset uit aandewindse tacks'),
+          table(['Bruikbare tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[residuals.length,deg(SL.median(pairs.map(p=>p.active.mhuResidual))),deg(delta)]]),
+          btn('MHU-restfout naar voorstel',applyChange(next=>{next.awaOff=Math.round(10*(next.awaOff+delta))/10;}),false,{disabled:residuals.length<3||!fin(delta)||Math.abs(delta)<.05}),
+          help('De extra offset is de mediaan van de halve AWA-verschillen uit vergelijkbare tackparen. Overnemen kan vanaf drie paren.'));
+      }else{
+        const groups=new Map();
+        for(const pair of pairs){
+          if(!pair.tableEligible||!fin(pair.proposed.TWD)||!fin(pair.active.TWD))continue;
+          const band=SL.BANDS.findIndex(([lo,hi])=>pair.tws>=lo&&pair.tws<hi);if(band<0)continue;
+          const key=band+pair.mode;
+          if(!groups.has(key))groups.set(key,{band,mode:pair.mode,old:[],next:[],speed:[]});
+          const g=groups.get(key);g.old.push(pair.active.TWD);g.next.push(pair.proposed.TWD);g.speed.push(pair.proposed.TWS);
+        }
+        const rows=[...groups.values()].sort((a,b)=>a.band-b.band||a.mode.localeCompare(b.mode)).map(g=>{
+          const delta=SL.median(g.next),extra=delta/2,tws=BAND_TWS[g.band];
+          return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.next.length,deg(SL.median(g.old)),deg(delta),deg(SL.quant(g.next,.25))+' / '+deg(SL.quant(g.next,.75)),f1(SL.median(g.speed),2),deg(extra),
+            btn('Naar tabel bij '+tws+' kn',applyChange(next=>{
+              const knots=next.twa.length?next.twa:BAND_TWS.map(tws=>({tws,up:0,dn:0}));
+              next.twa=SL.addTableResidual(knots,tws,g.mode,extra);
+            }),false,{disabled:g.next.length<3||Math.abs(extra)<.05})];
         });
-        result.append(h('details',{},h('summary',{},'Meetwaarden per goedgekeurd paar'),table(['Tijd','Type','AWA BB / SB','TWD BB / SB','Δ TWD',''],rows)));
+        evidence.append(h('h4',{},'TWA-tabel uit de TWD-sprong'),rows.length?
+          table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','P25 / P75','Δ TWS (kn)','Extra TWA',''],rows):
+          help('Geen geschikte paren in deze selectie. Beide zijden moeten bij een tack maximaal 60° TWA of bij een gijp minimaal 120° TWA varen.'),
+          help('Een tabelwijziging werkt op de sessie. '+(sail?'De schatting gebruikt alleen de gekozen zeilset. ':'')+'Overnemen kan vanaf drie paren per windband en koers.'));
       }
-      result.append(help('De hoekcorrecties zijn medianen. Overnemen kan vanaf drie bruikbare paren per hoekschatting. Na een wijziging rekent SailLens de restfout op het voorstel opnieuw uit. Met Voorstel toepassen maak je de correcties actief.'));
     }
-    const recalc=()=>{try{render();message.textContent='';}catch(e){result.replaceChildren();message.textContent=e.message;}};
-    panel.insertBefore(btn('Bereken restfout opnieuw',recalc),result);recalc();
-    c.addEventListener('input',e=>{if(e.target.id.startsWith('draft-')||e.target.matches('[aria-label^="TWA "]'))message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';},{signal:windListeners.signal});
+    function refresh(){
+      try{
+        const cfg=validateCalib(draft),same=JSON.stringify(cfg)===JSON.stringify(A.calib);
+        const proposed=same||!referenceWindows.length?A.D:SL.windPlotPreview(A.D,referenceWindows,cfg)||getProposal();
+        const data=SL.windPlotData(A.D,refs,proposed);
+        signature=JSON.stringify(draft);plots.replaceChildren();message.textContent='';
+        WindPlots.render(plots,{...data,kind},view,openPair,explain);
+        if(!referenceWindows.length)message.append(btn('Manoeuvres beoordelen',()=>show('pairreview')));
+      }catch(e){plots.replaceChildren();evidence.replaceChildren();message.textContent=e.message;}
+    }
+    refresh();watchDraft(c,draft,refresh,()=>{message.textContent='Voorstel wordt doorgerekend…';});
+  }
+
+  function windSpeedReview(c,refs,draft,getProposal){
+    const result=card('TWS aandewinds en voor de wind'),message=h('p',{role:'status'});
+    c.append(result,message);
+    function refresh(){
+      try{
+        const D=getProposal(),values=refs.phases.map(p=>D===A.D?p:SL.windowPhase(D,{start:p.t,end:iT(p.i1)}));
+        const extremes=values.filter(p=>p&&(p.mode==='Upwind'&&Math.abs(p.v.TWA)<=60||p.mode==='Downwind'&&Math.abs(p.v.TWA)>=120));
+        const fit=SL.calWind(extremes).twsDn;
+        result.replaceChildren(h('h3',{},'TWS aandewinds en voor de wind'));
+        message.textContent='';
+        if(!fit){result.append(help('Keur aandewindse en voor-de-windse vensters op beide boegen goed om TWS te vergelijken.'));return;}
+        const signature=JSON.stringify(draft),qualified=fin(fit.pct)&&fit.pct>-100&&Math.abs(fit.pct)>Math.max(3,2*fit.se);
+        result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(fit.pct,1)+'% (standaardfout '+f1(fit.se,1)+'%).'),
+          btn('TWS downwind naar voorstel',safe(()=>{
+            if(JSON.stringify(draft)!==signature)return;
+            const next=SL.copy(draft);next.twsDnPct=Math.round(1000*((1+(next.twsDnPct||0)/100)/(1+fit.pct/100)-1))/10;
+            session.draft=validateCalib(next);session.preview=false;touch();show('cal');
+          }),false,{disabled:!qualified}));
+      }catch(e){result.replaceChildren();message.textContent=e.message;}
+    }
+    refresh();watchDraft(c,draft,refresh,()=>{message.textContent='Voorstel wordt doorgerekend…';});
   }
   let windListeners;
   function speedoEditor(draft, phases, bspModel) {
@@ -490,14 +525,22 @@ const WF = (() => {
     const panel=card('Stroomcorrectie',controls,manual,output);
     c.append(panel);
     let data=A.D,windows=phases,displayedCal=A.calib,signature=null;
-    const drawProposal=btn('Teken voorstel',safe(()=>{
-      const next=getProposal();
-      const fixed=phases.map(p=>{
-        const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)});
-        return w && {...p,v:w.v,coverage:w.coverage};
-      }).filter(Boolean);
-      data=next;windows=fixed;displayedCal=SL.copy(draft);signature=JSON.stringify(draft);render();
-    }),false,{disabled:!phases.length});
+    function plotDraft(){
+      try{
+        const cfg=validateCalib(draft);
+        const quick=kind==='speed'&&SL.speedPlotPreview(A.D,phases,cfg);
+        const next=quick?quick.data:getProposal();
+        const fixed=quick?quick.windows:phases.map(p=>{
+          const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)});
+          return w && {...p,v:w.v,coverage:w.coverage};
+        }).filter(Boolean);
+        data=next;windows=fixed;displayedCal=SL.copy(draft);signature=JSON.stringify(draft);render();
+      }catch(e){
+        output.replaceChildren();signature=undefined;
+        drawActive.hidden=false;status.textContent=e.message;
+      }
+    }
+    const drawProposal=btn('Teken voorstel',plotDraft,false,{disabled:!phases.length});
     const drawActive=btn('Toon actieve kalibratie',()=>{
       data=A.D;windows=phases;displayedCal=A.calib;signature=null;render();
     });
@@ -530,8 +573,8 @@ const WF = (() => {
       updateStatus();
     }
     source.onchange=()=>{options.mode=source.value;touch();render();};
-    for(const event of ['input','change'])c.addEventListener(event,updateStatus,{signal:windListeners.signal});
-    if(session.preview&&phases.length)drawProposal.click();else render();
+    if(phases.length)watchDraft(c,draft,plotDraft,()=>{status.textContent='Voorstel gewijzigd. Grafieken worden bijgewerkt…';});
+    if(phases.length&&JSON.stringify(draft)!==JSON.stringify(A.calib))plotDraft();else render();
   }
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
@@ -577,7 +620,12 @@ const WF = (() => {
         table(['TWS kn','Upwind °','Downwind °',''],draft.twa.map((r,i)=>[cell(r,'tws'),cell(r,'up'),cell(r,'dn'),btn('Verwijder',()=>{draft.twa.splice(i,1);session.preview=false;show('cal');})])),
         btn('TWA-rij toevoegen',()=>{draft.twa.push({tws:(draft.twa.at(-1)?.tws||4)+2,up:0,dn:0});session.preview=false;show('cal');}));
     }
-    if(index>=2&&index<=4)windReview(c,refs,draft,index);
+    if(index===2||index===3){
+      const host=h('div',{class:'windplot-workspace'}),layout=h('div',{class:'windcal-layout'});
+      c.append(layout);layout.append(editor,host);
+      windAngleReview(host,c,refs,draft,index===2?'mhu':'twa',getProposal);
+    }
+    if(index===4)windSpeedReview(c,refs,draft,getProposal);
     if(index===5)editor.append(table(['Instelling','Actief','Voorstel'],fields.flat().map(([k,label])=>[label,A.calib[k],draft[k]])),
       help('Vergelijk de instellingen op dezelfde tijdvakken. Pas het voorstel toe om de sessie met deze correcties te analyseren.'));
     if(index===5 && (A.calib.speedos?.enabled || draft.speedos?.enabled)){

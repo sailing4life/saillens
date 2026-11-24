@@ -104,7 +104,7 @@ function parseLog(text, nativeWindow) {
   const put = (i, k, value) => {
     if (!k || !String(value ?? '').trim()) return;
     const v = csvNumber(value); if (!fin(v)) { diagnostics.invalidValues++; return; }
-    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA|MWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
     if (c.discrete) {
       if (c.count[i] && c.sum[i] !== v) c.sum[i] = NaN;
       else if (!c.count[i]) c.sum[i] = v;
