@@ -50,7 +50,7 @@ const PrepDesk = (() => {
     return traces;
   }
   function mount(container,title,options={}){
-    const D=A.D,s=WF.session,g=mapGeom(D),pair=options.pair;
+    const D=A.D,s=WF.session,g=mapGeom(D,s.rawTrack),pair=options.pair;
     const view=s.deskMap||=( {z:1,x:0,y:0} );
     const toolbar=bar(h('h3',{},title)),side=h('section',{class:'desk-side'},toolbar);
     const map=h('canvas',{'aria-label':'GPS-track. Klik voor tijdcursor, sleep om te pannen.',class:'desk-map'});
@@ -89,7 +89,8 @@ const PrepDesk = (() => {
     const credits=h('div',{class:'desk-credits'},h('span',{}),h('a',{href:'https://www.openstreetmap.org/copyright',target:'_blank',rel:'noopener'},'© OpenStreetMap contributors'));
     const legend=h('div',{class:'desk-phase-legend'},Object.values(phaseStyles).map(([name,color])=>h('span',{},h('i',{style:'background:'+css(color)}),name)));
     mapBox.append(legend,credits);
-    const mapBar=bar(orient,button('−',()=>zoom(1/1.4),{'aria-label':'Kaart uitzoomen'}),button('+',()=>zoom(1.4),{'aria-label':'Kaart inzoomen'}),button('Pas track in',fit),
+    const rawTrack=h('input',{id:'map-raw-track',type:'checkbox',checked:!!s.rawTrack,onchange:e=>{s.rawTrack=e.target.checked;WF.touch();show(A.tab);}});
+    const mapBar=bar(orient,h('label',{title:'Vergelijk met de gelogde 1 Hz-posities. De kaartcorrectie verandert de analysekanalen niet.'},rawTrack,' Ruwe track'),button('−',()=>zoom(1/1.4),{'aria-label':'Kaart uitzoomen'}),button('+',()=>zoom(1.4),{'aria-label':'Kaart inzoomen'}),button('Pas track in',fit),
       h('label',{},showPhases,' Fases'),h('label',{title:mapOnline?'Laadt kaarttegels voor het zichtbare gebied bij OpenStreetMap.':'Open de online versie voor de achtergrondkaart.'},showTiles,' Achtergrondkaart'));
     mapBar.classList.add('desk-maptools');mapBox.append(mapBar);
     let timer=null;
@@ -169,7 +170,7 @@ const PrepDesk = (() => {
       const signature=JSON.stringify([W,H,mw,mh,dp,tiles,visiblePhases,view.x,view.y,view.z,view.bearing,marks]);
       if(baseKey!==signature){
       baseKey=signature;
-      geo=drawMap(map,{v:key,view,bearing:view.bearing,bounds,range:[lo,hi],w:mw,h:mh,highlights:marks,phases:visiblePhases?phases:[],tiles:tiles?invalidate:null});
+      geo=drawMap(map,{v:key,view,rawTrack:s.rawTrack,bearing:view.bearing,bounds,range:[lo,hi],w:mw,h:mh,highlights:marks,phases:visiblePhases?phases:[],tiles:tiles?invalidate:null});
       credits.hidden=!tiles;credits.firstChild.textContent=geo?.tileStatus||'';legend.hidden=!visiblePhases;
       const c=strip.getContext('2d');strip.width=W*dp;strip.height=H*dp;c.setTransform(dp,0,0,dp,0,0);c.fillStyle=css('--surface');c.fillRect(0,0,W,H);
       c.font='11px system-ui';c.textBaseline='middle';

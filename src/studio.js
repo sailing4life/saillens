@@ -117,7 +117,7 @@ const STUDIO=(()=>{
  }
  function init(){if(installing)return;installing=true;for(const [id,title]of [['pairreview','Manoeuvreparen'],['daycharts','Day charts'],['dist','Distributies'],['prestart','Prestart']]){TITLE[id]=title;DAYONLY.add(id);if(!$('#t-'+id))$('#panes').append(h('div',{class:'tabpane',id:'t-'+id,hidden:''}));}
   R.events=EventDesk.render;R.pairreview=pairs;R.daycharts=daycharts;R.dist=distributions;R.prestart=prestart;R.summary=tables;R.report=report;TITLE.review='Fases';TITLE.ml='Insights';
-  const cal=R.cal;R.cal=()=>{cal();if(A.D)readiness($('#t-cal'));};
+  const cal=R.cal;R.cal=()=>{cal();if(A.D&&S().calibrationStep==='Afronden')readiness($('#t-cal'));};
   const review=R.review;R.review=()=>{review();phaseControls();};
   const setup=R.setup;R.setup=()=>{setup();const c=$('#t-setup'),time=[...c.querySelectorAll('.card')].find(n=>n.querySelector('h3')?.textContent==='Track & tijdreeks');if(time){const selection=c.querySelector('.wf-selection');c.insertBefore(time,c.children[1]);if(selection)c.insertBefore(selection,time);}};
   for(const [id]of modules){const render=R[id];R[id]=()=>{const full=A.D;if(!full)return;try{if(id!=='prestart')A.D=filteredD();render();}finally{A.D=full;}const c=$('#t-'+id);analysisHeader(c);reportButtons(c);};}

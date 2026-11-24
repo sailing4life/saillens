@@ -104,7 +104,13 @@ function parseLog(text, nativeWindow) {
   const put = (i, k, value) => {
     if (!k || !String(value ?? '').trim()) return;
     const v = csvNumber(value); if (!fin(v)) { diagnostics.invalidValues++; return; }
-    let c = cols.get(k); if (!c) { c = { sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    if (c.discrete) {
+      if (c.count[i] && c.sum[i] !== v) c.sum[i] = NaN;
+      else if (!c.count[i]) c.sum[i] = v;
+      if (c.count[i]++) diagnostics.aggregatedSamples++;
+      return;
+    }
     if (c.count[i]++) diagnostics.aggregatedSamples++;
     if (c.cos) { c.sum[i] += Math.sin(v * D2R); c.cos[i] += Math.cos(v * D2R); } else c.sum[i] += v;
   };
@@ -117,7 +123,7 @@ function parseLog(text, nativeWindow) {
   for (const [k, c] of cols) {
     const a = c.sum, ages = new Uint8Array(n).fill(255); let last = NaN, elapsed = 255, observed = 0, held = 0;
     for (let i = 0; i < n; i++) {
-      if (c.count[i]) { a[i] = c.cos ? (Math.hypot(a[i], c.cos[i]) < 1e-10 ? NaN : (ANG.test(k) ? w360 : w180)(Math.atan2(a[i], c.cos[i]) * R2D)) : a[i] / c.count[i]; last = a[i]; elapsed = fin(last) ? 0 : 255; observed++; }
+      if (c.count[i]) { a[i] = c.cos ? (Math.hypot(a[i], c.cos[i]) < 1e-10 ? NaN : (ANG.test(k) ? w360 : w180)(Math.atan2(a[i], c.cos[i]) * R2D)) : c.discrete ? a[i] : a[i] / c.count[i]; last = a[i]; elapsed = fin(last) ? 0 : 255; observed++; }
       else { elapsed = Math.min(255, elapsed + 1); a[i] = elapsed <= 10 ? last : NaN; if (fin(a[i])) held++; }
       ages[i] = elapsed;
     }
@@ -232,19 +238,51 @@ function applyEvents(raw, ev, cfg) {
    True wind is not rebuilt from scratch (that would drop Expedition's own leeway and upwash corrections): the change that the
    new BSP / AWA / AWS make to the apparent-to-true conversion is added on top of the logged TWA and TWS. */
 const CAL0 = { bspK: 1, hdgOff: 0, awaOff: 0, awsK: 1, heelOff: 0, rudOff: 0, twsDnPct: 0, leewayGain: 1, twa: [] };
-function calibActive(c) { if (!c) return false; return (fin(c.bspK) && c.bspK > 0 && c.bspK !== 1) || !!c.hdgOff || !!c.awaOff || (fin(c.awsK) && c.awsK > 0 && c.awsK !== 1) || !!c.heelOff || !!c.rudOff || !!c.twsDnPct || (fin(c.leewayGain) && c.leewayGain >= 0 && c.leewayGain !== 1) || (c.twa || []).some(r => r.up || r.dn); }
+// Physical transducer names are independent of the boat's tack.
+function speedoConfig(ch, saved = {}) {
+  const keys = Object.keys(ch);
+  const find = pattern => keys.find(k => pattern.test(k.replace(/[ _-]/g, ''))) || '';
+  return {
+    port: find(/^(bsp(bsp|bb|port|p)|port(boatspeed|bsp))$/i),
+    starboard: find(/^(bsp(sb|stbd|starboard|s)|(starboard|stbd)(boatspeed|bsp))$/i),
+    selector: find(/^bspactive$/i), portCode: 1, starboardCode: 2,
+    portK: 1, starboardK: 1, enabled: false, ...saved
+  };
+}
+function checkSpeedos(d, ch) {
+  if (!d?.enabled) return;
+  const keys = [d.port, d.starboard, d.selector];
+  if (new Set(keys).size !== 3 || keys.some(k => !k || !Object.hasOwn(ch,k)))
+    throw new Error('Kies twee verschillende BSP-kanalen en een apart kanaal voor de sensorselectie.');
+  if (![d.portCode,d.starboardCode].every(Number.isInteger) || d.portCode === d.starboardCode)
+    throw new Error('Geef elke sensor een eigen gehele selectiecode.');
+  if (![d.portK,d.starboardK].every(v => fin(v) && v >= .2 && v <= 3))
+    throw new Error('Beide sensorfactoren moeten tussen 0,2 en 3 liggen.');
+}
+function selectedSpeed(ch, d, i) {
+  const code = ch[d.selector]?.[i];
+  const side = code === d.portCode ? 'port' : code === d.starboardCode ? 'starboard' : '';
+  const value = side ? ch[d[side]]?.[i] : NaN;
+  return fin(value) && value >= 0 ? value * d[side+'K'] : NaN;
+}
+function calibActive(c) { if (!c) return false; return !!c.speedos?.enabled || (fin(c.bspK) && c.bspK > 0 && c.bspK !== 1) || !!c.hdgOff || !!c.awaOff || (fin(c.awsK) && c.awsK > 0 && c.awsK !== 1) || !!c.heelOff || !!c.rudOff || !!c.twsDnPct || (fin(c.leewayGain) && c.leewayGain >= 0 && c.leewayGain !== 1) || (c.twa || []).some(r => r.up || r.dn); }
 function applyCalib(ch, n, c) {
   if (!calibActive(c)) return false;
   const tw = (c.twa || []).filter(r => fin(r.tws)).sort((a, b) => a.tws - b.tws);
   const itp = (w, key) => { if (!tw.length) return 0; if (w <= tw[0].tws) return tw[0][key] || 0; for (let i = 1; i < tw.length; i++) if (w <= tw[i].tws) { const f = (w - tw[i - 1].tws) / (tw[i].tws - tw[i - 1].tws); return (tw[i - 1][key] || 0) + f * ((tw[i][key] || 0) - (tw[i - 1][key] || 0)); } return tw[tw.length - 1][key] || 0; };
   const k = fin(c.bspK) && c.bspK > 0 ? c.bspK : 1, ak = fin(c.awsK) && c.awsK > 0 ? c.awsK : 1, ao = c.awaOff || 0, ho = c.hdgOff || 0, dn = c.twsDnPct || 0;
+  const dual = c.speedos?.enabled ? c.speedos : null;
+  if (dual) checkSpeedos(dual,ch);
+  const inputs = dual ? {...ch} : ch;
   const B0 = ch.BSP, A0 = ch.AWA, S0 = ch.AWS, cp = key => ch[key] ? (ch[key] = Float64Array.from(ch[key])) : null;
-  const app = !!(A0 && S0 && B0) && (k !== 1 || ak !== 1 || ao !== 0);
-  const BSP = k !== 1 ? cp('BSP') : null, TWA = cp('TWA'), TWS = cp('TWS'), TWD = cp('TWD'), HDG = ho ? cp('HDG') : null, CSE = ho ? cp('Course') : null, AWA = ao && A0 ? cp('AWA') : null, AWS = ak !== 1 && S0 ? cp('AWS') : null;
+  const app = !!(A0 && S0 && B0) && (dual || k !== 1 || ak !== 1 || ao !== 0);
+  const BSP = dual ? (ch.BSP = new Float64Array(n)) : k !== 1 ? cp('BSP') : null, TWA = cp('TWA'), TWS = cp('TWS'), TWD = cp('TWD'), HDG = ho ? cp('HDG') : null, CSE = ho ? cp('Course') : null, AWA = ao && A0 ? cp('AWA') : null, AWS = ak !== 1 && S0 ? cp('AWS') : null;
   for (let i = 0; i < n; i++) {
+    const sensor = dual ? selectedSpeed(inputs, dual, i) : NaN;
+    const speed = (fin(sensor) ? sensor : B0?.[i]) * k;
     let dT = 0;
-    if (app && TWA && TWS && fin(A0[i]) && fin(S0[i]) && fin(B0[i])) { const o = trueWind(A0[i], S0[i], B0[i]), q = trueWind(A0[i] + ao, S0[i] * ak, B0[i] * k); dT = w180(q.twa - o.twa); if (fin(TWA[i])) TWA[i] = w180(TWA[i] + dT); if (o.tws > 0.3 && fin(TWS[i])) TWS[i] *= q.tws / o.tws; }
-    if (BSP) BSP[i] *= k; if (AWA) AWA[i] = w180(A0[i] + ao); if (AWS) AWS[i] = S0[i] * ak;
+    if (app && TWA && TWS && fin(A0[i]) && fin(S0[i]) && fin(B0[i])) { const o = trueWind(A0[i], S0[i], B0[i]), q = trueWind(A0[i] + ao, S0[i] * ak, speed); dT = w180(q.twa - o.twa); if (fin(TWA[i])) TWA[i] = w180(TWA[i] + dT); if (o.tws > 0.3 && fin(TWS[i])) TWS[i] *= q.tws / o.tws; }
+    if (BSP) BSP[i] = speed; if (AWA) AWA[i] = w180(A0[i] + ao); if (AWS) AWS[i] = S0[i] * ak;
     if (TWA && TWS && fin(TWA[i]) && fin(TWS[i])) { const a = Math.abs(TWA[i]), wd = Math.max(0, Math.min(1, (a - 60) / 60)), e = (1 - wd) * itp(TWS[i], 'up') + wd * itp(TWS[i], 'dn'), s = TWA[i] < 0 ? -1 : 1; if (e) { TWA[i] = s * Math.max(0, Math.min(180, a + e)); dT += s * e; } if (dn) TWS[i] *= 1 + dn / 100 * wd; }
     if (HDG) HDG[i] = w360(HDG[i] + ho); if (CSE) CSE[i] = w360(CSE[i] + ho);
     if (TWD && fin(TWD[i])) TWD[i] = w360(TWD[i] + ho + dT);
@@ -279,6 +317,12 @@ function process(raw, opt) {
   const L = applyEvents(raw, opt.events, cfg);
   for (const k in L.manual) ch[k] = L.manual[k];
   if (invalid.some(Boolean)) for (const k of Object.keys(ch)) { ch[k] = Float64Array.from(ch[k]); for (let i = 0; i < n; i++) if (invalid[i]) ch[k][i] = NaN; }
+  if (!ch.BSP && opt.calib?.speedos?.enabled) {
+    const d = opt.calib.speedos;
+    checkSpeedos(d,ch);
+    const neutral = {...d,portK:1,starboardK:1};
+    ch.BSP = Float64Array.from({length:n}, (_,i) => selectedSpeed(ch,neutral,i));
+  }
   // Complete missing wind inputs before applying a TWA correction table.
   // true wind if missing
   if ((!ch.TWA || !ch.TWS) && ch.AWA && ch.AWS && ch.BSP) { const missing = ['TWA', 'TWS'].filter(k => !ch[k]), twa = !ch.TWA ? need('TWA') : null, tws = !ch.TWS ? need('TWS') : null; for (let i = 0; i < n; i++) { const a = ch.AWA[i] * D2R, x = ch.AWS[i] * Math.cos(a) - ch.BSP[i], y = ch.AWS[i] * Math.sin(a); if (twa) twa[i] = Math.atan2(y, x) * R2D; if (tws) tws[i] = Math.hypot(x, y); } warn.push(missing.join('/') + ' missing; computed from AWA, AWS and BSP.'); }
@@ -578,6 +622,6 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;

@@ -1,19 +1,60 @@
 'use strict';
 const TrackMap=(()=>{
   const limit=85.05112878;
-  function geometry(D){
-    if(D._geo)return D._geo;
+  function geometry(D, raw=false){
+    const cacheKey=raw?'_geoLogged':'_geo';
+    if(D[cacheKey])return D[cacheKey];
     const lat=D.ch.Lat,lon=D.ch.Lon;if(!lat||!lon)return null;
     const ref=SL.median(lat.subarray(D.i0,D.i1));
     const k=Math.cos(Math.min(limit,Math.abs(ref))*SL.D2R),x=new Float64Array(D.n).fill(NaN),y=new Float64Array(D.n).fill(NaN);
     const bx=[Infinity,-Infinity],by=[Infinity,-Infinity];let previous;
+    const latAge=D.raw?.age?.Lat,lonAge=D.raw?.age?.Lon;
+    const observed=i=>!D.invalid?.[i]&&(!latAge||latAge[i]===0)&&(!lonAge||lonAge[i]===0);
     for(let i=D.i0;i<D.i1;i++){
-      if(!fin(lat[i])||!fin(lon[i])||Math.abs(lat[i])>=90)continue;
+      if(!fin(lat[i])||!fin(lon[i])||Math.abs(lat[i])>=90||Math.abs(lon[i])>180||(!raw&&!observed(i)))continue;
       const longitude=previous==null?lon[i]:previous+SL.w180(lon[i]-previous);
       previous=longitude;x[i]=longitude*k;y[i]=-k*Math.asinh(Math.tan(lat[i]*SL.D2R))/SL.D2R;
+    }
+    let interpolated=0,spikes=0;
+    if(!raw){
+      // Only replace an isolated detour if both jumps exceed the local speed
+      // envelope and the fixes immediately before and after agree.
+      const metres=(i,j)=>Math.hypot(x[i]-x[j],y[i]-y[j])*111195*Math.cos(lat[i]*SL.D2R)/k;
+      for(let i=D.i0+1;i<D.i1-1;i++){
+        if(!fin(x[i-1])||!fin(x[i])||!fin(x[i+1]))continue;
+        const sog=D.ch.SOG?.[i],reach=fin(sog)?Math.max(6,sog*.51445*2+2):20;
+        if(metres(i-1,i)>reach&&metres(i,i+1)>reach&&metres(i-1,i+1)<reach*1.5){
+          x[i]=NaN;y[i]=NaN;spikes++;
+        }
+      }
+      let last=-1;
+      for(let i=D.i0;i<D.i1;i++){
+        if(D.invalid?.[i]){last=-1;continue;}
+        if(!fin(x[i]))continue;
+        if(last>=0&&i-last>1&&i-last<=4&&metres(last,i)<(i-last)*25){
+          for(let j=last+1;j<i;j++){
+            const f=(j-last)/(i-last);x[j]=x[last]+f*(x[i]-x[last]);y[j]=y[last]+f*(y[i]-y[last]);interpolated++;
+          }
+        }
+        last=i;
+      }
+      // Reduce the one-second GPS staircase on straight runs. Limit the shift
+      // to 1.5 m and preserve turns. Use immutable neighbours in each stencil.
+      const oldX=x.slice(),oldY=y.slice();
+      for(let i=D.i0+1;i<D.i1-1;i++){
+        const ax=oldX[i]-oldX[i-1],ay=oldY[i]-oldY[i-1],bx=oldX[i+1]-oldX[i],by=oldY[i+1]-oldY[i];
+        const norm=Math.hypot(ax,ay)*Math.hypot(bx,by);
+        if(!fin(norm)||(norm && ax*bx+ay*by<.94*norm))continue;
+        const dx=(bx-ax)/4,dy=(by-ay)/4;
+        const m=Math.hypot(dx,dy)*111195*Math.cos(lat[i]*SL.D2R)/k;
+        if(m>0){const f=Math.min(1,1.5/m);x[i]+=dx*f;y[i]+=dy*f;}
+      }
+    }
+    for(let i=D.i0;i<D.i1;i++){
+      if(!fin(x[i]))continue;
       bx[0]=Math.min(bx[0],x[i]);bx[1]=Math.max(bx[1],x[i]);by[0]=Math.min(by[0],y[i]);by[1]=Math.max(by[1],y[i]);
     }
-    return D._geo={x,y,bx,by,k};
+    return D[cacheKey]={x,y,bx,by,k,interpolated,spikes};
   }
   // Tiles and track share a Mercator plane, locally scaled to nautical miles.
   function visibleTiles({W,H,cx,cy,sc,k,co,si,ox,oy}){

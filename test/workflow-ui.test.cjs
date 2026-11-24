@@ -29,7 +29,7 @@ test('complete demo workflow: review, draft/apply/revert, formulas, notes, reloa
   await a.click('Voorstel vergelijken');assert.equal(a.run('A.D.ch.BSP[200]'),before);
   await a.click('Voorstel toepassen');assert.ok(Math.abs(a.run('A.D.ch.BSP[200]')/before-1.05)<1e-9);
   assert.equal(a.run('A.view.z'),2);assert.equal(a.run('WF.session.selections.analysis.start'),a.run('A.raw.t0+100000'));
-  await a.click('Terug naar gelogd');assert.equal(a.run('A.D.ch.BSP[200]'),before);
+  await a.click('Afronden');await a.click('Terug naar gelogd');assert.equal(a.run('A.D.ch.BSP[200]'),before);
   a.run("show('boat')");a.fill('#formula-name','SignedVMG');a.fill('#formula-expression','BSP * cosD(TWA)');a.fill('#formula-unit','kn');
   await a.click('Voorbeeld berekenen');assert.match(a.$('#formula-preview').textContent,/geldige waarden/);
   await a.click('Formule opslaan bij boot');assert.equal(a.run('WF.session.profile.formulas.length'),0);
@@ -83,7 +83,7 @@ test('unblurred edits survive saving, calibration comparison and reload',async()
   const type=(selector,value)=>{a.$(selector).value=value;a.$(selector).dispatchEvent(new a.w.Event('input',{bubbles:true}));};
   await a.click('Bekijk voorbeeld');
   a.run("show('setup')");type('#session-name','Invoer zonder blur');await a.run('WF.persist()');
-  a.run("show('cal')");type('#draft-awaOff','1.5');
+  a.run("show('cal')");await a.click('AWA / MHU');type('#draft-awaOff','1.5');
   await a.run('WF.persist()');await a.click('Voorstel vergelijken');
   assert.equal(a.$('#draft-awaOff').value,'1.5');assert.equal(a.run('A.calib.awaOff'),0);
   assert.equal(a.run('WF.session.draft.awaOff'),1.5);
@@ -133,9 +133,9 @@ test('pair windows use circular angles and explicit calibration exclusions',asyn
 });
 test('pending calibration cannot be silently published and a failed save does not add versions',async()=>{
  const a=await app();try{
-  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');a.run("show('cal')");a.fill('#draft-awaOff','1.5');
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');a.run("show('cal')");await a.click('AWA / MHU');a.fill('#draft-awaOff','1.5');
   await assert.rejects(a.run('STUDIO.publish()'),/niet-toegepast/);assert.equal(a.run('WF.session.analysisVersions.length'),0);
-  a.run("show('cal')");await a.click('Actieve kalibratie overnemen');assert.equal(a.run('WF.session.draft.awaOff'),0);
+  a.run("show('cal')");await a.click('Afronden');await a.click('Actieve kalibratie overnemen');assert.equal(a.run('WF.session.draft.awaOff'),0);
   a.run("window.persistOriginal=WF.persist;WF.persist=async()=>{throw new Error('disk unavailable')}");await assert.rejects(a.run('STUDIO.publish()'),/disk unavailable/);assert.equal(a.run('WF.session.analysisVersions.length'),0);assert.equal(a.run('WF.session.stage'),'prepare');
   a.run('WF.persist=persistOriginal');await a.run('STUDIO.publish()');assert.equal(a.run('WF.session.analysisVersions.length'),1);
   a.run("show('cal');WF.persist=async()=>{throw new Error('disk unavailable')}");await assert.rejects(a.run('STUDIO.publish()'),/disk unavailable/);assert.equal(a.run('WF.session.analysisVersions.length'),1);a.run('WF.persist=persistOriginal');
@@ -159,7 +159,7 @@ test('race-day tools keep held-out samples independent and reopen a frozen versi
   await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');
   a.run("window.p=A.D.mans.map(m=>RaceTools.suggest(A.D,m,WF.session)).find(p=>p.suggested);WF.session.manoeuvrePairs[p.key]=Object.assign(p,{approved:true,validation:true});");
   assert.ok(a.run('SL.approvedPairs(A.D,WF.session).length'));assert.equal(a.run('SL.calibrationReferences(A.D,WF.session).pairs.length'),0);
-  a.run("show('cal')");await a.click('Toets voorstel op aparte manoeuvres');assert.match(a.$('#t-cal').textContent,/Controlepaar/);
+  a.run("show('cal')");await a.click('TWA / TWD');await a.click('Toets voorstel op aparte manoeuvres');assert.match(a.$('#t-cal').textContent,/Controlepaar/);
   await a.run('STUDIO.publish()');const id=a.run('WF.session.id');
   a.run("show('report')");await a.run('WF.openVersion(1)');assert.notEqual(a.run('WF.session.id'),id);assert.equal(a.run('A.tab'),'analysis');assert.equal(a.run('STUDIO.current()'),true);
   a.run("show('events');A.cur=100");await a.click('Tack toevoegen');assert.ok(a.run('A.D.mans.some(m=>m.manual&&m.i===100)'));await a.click('Laatste draaipuntwijziging herstellen');assert.equal(a.run('A.D.mans.some(m=>m.manual&&m.i===100)'),false);
@@ -265,6 +265,7 @@ test('paired MHU action recomputes the draft on fixed windows and leaves active 
       if(Object.keys(WF.session.manoeuvrePairs).length===5)break;
     }
     show('cal');`);
+  await a.click('AWA / MHU');
   const eligible=a.run('SL.windPairEvidence(SL.calibrationReferences(A.D,WF.session).pairs).alignment');
   assert.ok(eligible.length>=3);
   const expected=Math.round(a.run('SL.median(SL.windPairEvidence(SL.calibrationReferences(A.D,WF.session).pairs).alignment)')*10)/10;
@@ -292,5 +293,21 @@ test('scrubbing moves the shared cursor without creating a time selection',async
   assert.match(a.$('.desk-phase-readout').textContent,/1/);assert.equal(a.run('WF.session.selections.analysis'),null);
   a.$('#map-phases').click();assert.equal(a.run('WF.session.mapPhases'),false);
   await a.click('Afspelen');await a.click('Pauze');assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});
+
+test('per-sensor proposal and boat layout survive step navigation and explicit application',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');a.run(`A.raw.ch['BSP active']=new Float64Array(A.raw.n).fill(1);
+    A.raw.ch['BSP Bsp']=A.raw.ch.BSP.slice();A.raw.ch['BSP Sb']=A.raw.ch.BSP.slice();
+    WF.recompute();show('cal')`);
+  const before=a.run('A.D.ch.BSP[200]');
+  const mode=[...a.w.document.querySelectorAll('#t-cal label')].find(l=>l.textContent.includes('Gebruik twee BSP-sensoren')).querySelector('input');
+  mode.click();a.fill('#draft-portK','1.04');await a.click('Kanaalkeuze bij boot bewaren');
+  await a.click('Volgende');assert.ok(a.$('#draft-leewayGain'));await a.click('Vorige');
+  assert.equal(a.$('#draft-portK').value,'1.04');assert.equal(a.run('A.D.ch.BSP[200]'),before);
+  await a.click('Voorstel toepassen');assert.ok(Math.abs(a.run('A.D.ch.BSP[200]')-before*1.04)<1e-8);
+  assert.equal(a.run("WF.library.boats[0].speedoLayout.port"),'BSP Bsp');
+  await a.run('WF.persist()');assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });

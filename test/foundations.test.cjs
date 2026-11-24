@@ -220,3 +220,41 @@ test('queued saves keep order and recover after a failed write', async () => {
   await new Promise(resolve => setImmediate(resolve)); assert.deepEqual(seen, [1]); releases[0]();
   assert.equal(await first, 1); await secondCheck; assert.equal(await third, 3); assert.deepEqual(seen, [1, 2, 3]);
 });
+
+test('dual speedos use the selector, preserve valid zero and recompute dependent wind and VMG', () => {
+  const rows=['time,BSP,BSP active,BSP Bsp,BSP Sb,AWA,AWS,HDG'];
+  for(const [i,code,bb,sb] of [[0,1,5,0],[1,2,0,7],[2,0,4,6],[3,1,0,4],[4,2,7,'']]){
+    rows.push([iso(i),6,code,bb,sb,50,12,210].join(','));
+  }
+  const raw=SL.parseLog(rows.join('\n')),speedos={...SL.speedoConfig(raw.ch),enabled:true,portK:1.1,starboardK:.9};
+  const d=analysis(raw,{maxHold:0},{calib:{...SL.CAL0,speedos}});
+  [5.5,6.3,6,0,6].forEach((v,i)=>{
+    near(d.ch.BSP[i],v);near(d.ch.TWA[i],SL.trueWind(50,12,v).twa);
+    near(d.ch.VMG[i],Math.abs(v*Math.cos(d.ch.TWA[i]*SL.D2R)));
+  });
+  assert.deepEqual([...raw.ch.BSP],[6,6,6,6,6]);
+  assert.throws(()=>SL.checkSpeedos({...speedos,portCode:2},raw.ch),/selectiecode/);
+  assert.throws(()=>SL.checkSpeedos({...speedos,portK:0},raw.ch),/sensorfactoren/);
+  delete raw.ch.BSP;
+  const onlySensors=analysis(raw,{maxHold:0},{calib:{...SL.CAL0,speedos}});
+  near(onlySensors.ch.BSP[0],5.5);near(onlySensors.ch.TWA[0],SL.trueWind(50,12,5.5).twa);
+  assert.ok(Number.isNaN(onlySensors.ch.BSP[2]));
+});
+test('a switch within a second cannot be averaged into a different active sensor',()=>{
+  const raw=SL.parseLog('time,BSP active\n'+iso(0)+',0\n'+iso(.4)+',2\n'+iso(2)+',1');
+  assert.ok(Number.isNaN(raw.ch['BSP active'][0]));assert.ok(Number.isNaN(raw.ch['BSP active'][1]));
+  assert.equal(raw.ch['BSP active'][2],1);
+});
+test('track rendering fills only short coherent GPS gaps and preserves excluded seconds',()=>{
+  const ctx=vm.createContext({SL,fin:Number.isFinite});
+  vm.runInContext(fs.readFileSync(path.join(root,'src','trackmap.js'),'utf8'),ctx);
+  const map=vm.runInContext('TrackMap',ctx),lon=Float64Array.from({length:16},(_,i)=>4+i*.00002);
+  const lat=new Float64Array(16).fill(52),ages=new Uint8Array(16);ages[2]=1;ages.fill(2,8,14);
+  lon[5]+=.003;
+  const d={ch:{Lat:lat,Lon:lon,SOG:new Float64Array(16).fill(6)},raw:{age:{Lat:ages,Lon:ages}},n:16,i0:0,i1:16,invalid:new Uint8Array(16)};
+  d.invalid[7]=1;
+  const clean=map.geometry(d),raw=map.geometry(d,true);
+  assert.equal(clean.spikes,1);assert.equal(clean.interpolated,2);assert.ok(Math.abs(clean.x[5]-raw.x[5])>.001);
+  assert.ok(Number.isFinite(clean.x[2]));assert.ok(Number.isNaN(clean.x[7]));assert.ok(Number.isNaN(clean.x[10]));
+  assert.equal(map.geometry(d),clean);
+});

@@ -93,41 +93,45 @@ const RaceTools = (() => {
     nativePanel(panel,D,center);
   }
 
-  function calibration(c,model,s){
+  function calibration(c,model,s,section){
     const D=A.D,all=SL.approvedPairs(D,s),groups=new Map();
-    for(const {before,after,pair} of all){
-      if(pair.validation)continue;
-      const band=2*Math.floor((before.v.TWS+after.v.TWS)/4);
-      const key=[pair.type,before.sails,band+'–'+(band+2)+' kn',before.tack+' → '+after.tack].join(' · ');
-      if(!groups.has(key))groups.set(key,[]);
-      groups.get(key).push(pairMetrics(before,after));
+    if(section==='wind'){
+      for(const {before,after,pair} of all){
+        if(pair.validation)continue;
+        const band=2*Math.floor((before.v.TWS+after.v.TWS)/4);
+        const key=[pair.type,before.sails,band+'–'+(band+2)+' kn',before.tack+' → '+after.tack].join(' · ');
+        if(!groups.has(key))groups.set(key,[]);
+        groups.get(key).push(pairMetrics(before,after));
+      }
+      const reserved=all.filter(x=>x.pair.validation);
+      const panel=card('Wind over de manoeuvre',table(['Manoeuvre · zeil · TWS · richting','Paren','Mediaan Δ |AWA|','Mediaan Δ |TWA|','Mediaan Δ TWD'],Array.from(groups,([k,g])=>[k,g.length,...[0,1,2].map(i=>f1(SL.median(g.map(row=>row[i])),2)+'°')])));
+      c.append(panel);
+      if(reserved.length){
+        const result=h('div');panel.append(action('Toets voorstel op aparte manoeuvres',()=>{
+          try{
+            const next=WF.process(WF.snapshot(),s.draft);
+            result.replaceChildren(table(['Controlepaar','|Δ TWD| actief','|Δ TWD| voorstel','|Δ abs(AWA)| actief','|Δ abs(AWA)| voorstel'],reserved.map(({pair,before,after})=>{
+              const a=SL.windowPhase(next,pair.before),b=SL.windowPhase(next,pair.after);
+              const old=pairMetrics(before,after),v=pairMetrics(a,b);
+              return [tstr(pair.anchor),...[old[2],v[2],old[0],v[0]].map(n=>f1(Math.abs(n),2)+'°')];
+            })));
+          }catch(e){banner(e.message,true);}
+        }),result);
+      }else panel.append(h('p',{},'Houd bij manoeuvreparen enkele tacks of gybes apart om het voorstel op andere meetvensters te toetsen.'));
+      return;
     }
-    const reserved=all.filter(x=>x.pair.validation);
-    const panel=card('Wind over de manoeuvre',table(['Manoeuvre · zeil · TWS · richting','Paren','Mediaan Δ |AWA|','Mediaan Δ |TWA|','Mediaan Δ TWD'],Array.from(groups,([k,g])=>[k,g.length,...[0,1,2].map(i=>f1(SL.median(g.map(row=>row[i])),2)+'°')])));
-    c.append(panel);
-    if(reserved.length){
-      const result=h('div');panel.append(action('Toets voorstel op aparte manoeuvres',()=>{
-        try{
-          const next=WF.process(WF.snapshot(),s.draft);
-          result.replaceChildren(table(['Controlepaar','|Δ TWD| actief','|Δ TWD| voorstel','|Δ abs(AWA)| actief','|Δ abs(AWA)| voorstel'],reserved.map(({pair,before,after})=>{
-            const a=SL.windowPhase(next,pair.before),b=SL.windowPhase(next,pair.after);
-            const old=pairMetrics(before,after),v=pairMetrics(a,b);
-            return [tstr(pair.anchor),...[old[2],v[2],old[0],v[0]].map(n=>f1(Math.abs(n),2)+'°')];
-          })));
-        }catch(e){banner(e.message,true);}
-      }),result);
-    }else panel.append(h('p',{},'Houd bij manoeuvreparen enkele tacks of gybes apart om het voorstel op andere meetvensters te toetsen.'));
+    const comparison=h('details',{open:!!s.speedoChannel},h('summary',{},'Extra snelheidskanaal vergelijken'));c.append(comparison);
     const channels=Object.keys(D.ch).filter(k=>!['BSP','SOG'].includes(k)).sort();
     const sensor=sel('comparison-speedo',['',...channels],s.speedoChannel||'',key=>{
       s.speedoChannel=key;WF.touch();show('cal');
     });
-    c.append(card('BSP-sensor vergelijken',field('Extra snelheidskanaal (kn)',sensor),
+    comparison.append(card('BSP-sensor vergelijken',field('Extra snelheidskanaal (kn)',sensor),
       h('p',{},'Gebruik een kanaal in knopen. Beide fits gebruiken dezelfde tijdvakken en het gelogde koersreferentiekanaal.')));
     if(s.speedoChannel && D.ch[s.speedoChannel]){
       const refs=SL.calibrationReferences(D,s).phases.filter(p=>fin(p.v[s.speedoChannel])&&p.v[s.speedoChannel]>2&&p.v.BSP>2);
       const fit=key=>SL.calBsp(D,refs.map(p=>({...p,v:{...p.v,BSP:p.v[key]}})));
       const fits=['BSP',s.speedoChannel].map(key=>({key,model:fit(key)}));
-      c.append(card('Afzonderlijke BSP-fits',table(['Sensor','Factor','90%-interval','Tijdvensters'],fits.map(({key,model:m})=>[key,m.err||f1(m.k,3),m.err?'—':f1(m.kLo,3)+' – '+f1(m.kHi,3),m.nWin||0]))));
+      comparison.append(card('Afzonderlijke BSP-fits',table(['Sensor','Factor','90%-interval','Tijdvensters'],fits.map(({key,model:m})=>[key,m.err||f1(m.k,3),m.err?'—':f1(m.kLo,3)+' – '+f1(m.kHi,3),m.nWin||0]))));
     }
     if(model.bsp.err)return;
     const cells=new Map();

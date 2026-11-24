@@ -10,13 +10,13 @@ const WF = (() => {
   const help = text => h('p', { class: 'muted' }, text);
   const notice = text => h('div', { class: 'wf-notice', role: 'status' }, text);
   const safe = fn => async (...args) => { try { return await fn(...args); } catch (e) { banner(e.message, true); } };
-  function snapshot() {
+  function snapshot(clone=true) {
     if (!session) return null;
     const s = { ...session, raw: A.raw, events: A.events, polar: A.polar ? { rows: A.polar.rows, src: A.polar.src } : null, chart: A.chart,
       cfg: A.cfg, calib: A.calib || SL.CAL0, files: A.files, cur: A.cur, view: A.view,
       tab: ['home', 'boat', 'season'].includes(A.tab) ? (session.tab || 'setup') : A.tab, demo: A.demo,
       ui: { filt: A.filt, cst: A.cst, xst: A.xst, st: A.st, fst: A.fst, mnst: A.mnst, rst: A.rst, est: A.est, pol: A.pol, analysisMode, reviewMode, mobileView, selectedKey }, updated: Date.now() };
-    return structuredClone(s);
+    return clone ? structuredClone(s) : s;
   }
   function status() {
     const e = $('#wf-save'); if (e) { e.textContent = saveMessage; e.className = dirty ? 'chip dirty' : 'chip'; }
@@ -328,9 +328,10 @@ const WF = (() => {
     const c = { ...SL.copy(SL.CAL0), ...value };
     for (const [k, lo, hi] of [['bspK', .2, 3], ['awsK', .2, 3], ['hdgOff', -180, 180], ['awaOff', -180, 180], ['heelOff', -90, 90], ['rudOff', -90, 90], ['leewayGain', 0, 5], ['twsDnPct', -90, 100]]) if (!fin(c[k]) || c[k] < lo || c[k] > hi) throw new Error('Ongeldige correctie: ' + k);
     if (!Array.isArray(c.twa) || c.twa.length > 100 || c.twa.some(r => !fin(r.tws) || r.tws <= 0 || !fin(r.up) || !fin(r.dn) || Math.abs(r.up) > 90 || Math.abs(r.dn) > 90) || new Set(c.twa.map(r => r.tws)).size !== c.twa.length) throw new Error('Ongeldige TWA-tabel: unieke positieve TWS en eindige correcties nodig.');
+    SL.checkSpeedos(c.speedos,A.D.raw.ch);
     return c;
   }
-  function windReview(c,refs,draft){
+  function windReview(c,refs,draft,step){
     const live=SL.windPairEvidence(refs.pairs),result=h('div',{'aria-live':'polite'}),message=h('p',{role:'status'});
     const panel=card('Windkalibratie uit vensterparen',help('Controleer eerst de MHU met aandewindse tacks. Controleer daarna de resterende TWD-sprong per windband, aandewinds en voor de wind. Een echte windshift, asymmetrische trim of kompasfout kan dezelfde sprong geven.'),result,message);
     c.append(panel);
@@ -339,7 +340,7 @@ const WF = (() => {
     }
     function render(){
       const cfg=validateCalib(draft);
-      const D=JSON.stringify(cfg)===JSON.stringify(A.calib)?A.D:process(snapshot(),cfg);
+      const D=JSON.stringify(cfg)===JSON.stringify(A.calib)?A.D:process(snapshot(false),cfg);
       const pairs=refs.pairs.map(reference=>({pair:reference.pair,reference,before:SL.windowPhase(D,reference.pair.before),after:SL.windowPhase(D,reference.pair.after)}));
       const proposed=SL.windPairEvidence(pairs);
       const signature=JSON.stringify(draft);
@@ -348,29 +349,35 @@ const WF = (() => {
       const update=fn=>()=>{if(JSON.stringify(draft)!==signature){message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';return;}
         try{const next=SL.copy(draft);fn(next);session.draft=validateCalib(next);session.preview=false;touch();show('cal');}catch(e){message.textContent=e.message;}};
       const alignment=med(proposed.alignment);
-      result.replaceChildren(h('h4',{},'1 · AWA en MHU-uitlijning'),table(['Tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[proposed.alignment.length,summary(live.alignment),degrees(alignment)]]),
-        btn('MHU-restfout naar voorstel',update(next=>{next.awaOff=Math.round((next.awaOff+alignment)*10)/10;}),false,{disabled:proposed.alignment.length<3||!fin(alignment)||Math.abs(alignment)<.05}),
+      result.replaceChildren();
+      if(step===2)result.append(h('h4',{},'1 · AWA en MHU-uitlijning'),table(['Tackparen','Extra offset bij actieve waarden','Extra offset bij voorstel'],[[proposed.alignment.length,summary(live.alignment),degrees(alignment)]]),
+        btn('MHU-restfout naar voorstel',update(next=>{next.awaOff=Math.round((next.awaOff+alignment)*10)/10;}),false,{disabled:proposed.alignment.length<3||!fin(alignment)||Math.abs(alignment)<.05}));
+      if(step===3){
+        result.append(
         h('h4',{},'2 · TWA-tabel uit de TWD-sprong'),help('Δ TWD en Δ TWS zijn bakboord min stuurboord. De tabelcorrectie is de helft van de resterende TWD-sprong. Beide kolommen gebruiken de windband van het actieve log.'));
-      if(proposed.bands.length){
-        result.append(table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','TWD P25–P75','Δ TWS voorstel','Extra TWA',''],proposed.bands.map(g=>{
-          const old=live.bands.find(b=>b.band===g.band&&b.mode===g.mode);
-          const residual=med(g.errors)/2,tws=BAND_TWS[g.band];
-          return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.errors.length,summary(old?.errors),summary(g.errors),degrees(SL.quant(g.errors,.25))+' / '+degrees(SL.quant(g.errors,.75)),f1(med(g.speeds),2)+' kn',degrees(residual),
-            btn('Naar tabel bij '+tws+' kn',update(next=>{
-              const rows=next.twa.length?next.twa:BAND_TWS.map(t=>({tws:t,up:0,dn:0}));
-              next.twa=SL.addTableResidual(rows,tws,g.mode,residual);
-            }),false,{disabled:g.errors.length<3||Math.abs(residual)<.05})];
-        })));
-      }else result.append(help('Geen paren met voldoende TWD- en TWS-metingen in deze windbanden.'));
-      const extremes=refs.phases.map(w=>D===A.D?w:SL.windowPhase(D,{start:w.t,end:iT(w.i1)})).filter(w=>w&&(w.mode==='Upwind'&&Math.abs(w.v.TWA)<=60||w.mode==='Downwind'&&Math.abs(w.v.TWA)>=120));
-      const tws=SL.calWind(extremes).twsDn,qualified=tws&&fin(tws.pct)&&tws.pct>-100&&Math.abs(tws.pct)>Math.max(3,2*tws.se);
-      result.append(h('h4',{},'3 · TWS aandewinds en voor de wind'));
-      if(tws){
-        const adjusted=Math.round(1000*((1+(cfg.twsDnPct||0)/100)/(1+tws.pct/100)-1))/10;
-        result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(tws.pct,1)+'% (standaardfout '+f1(tws.se,1)+'%). Vergelijk rakken in dezelfde omstandigheden.'),
-          btn('TWS downwind naar voorstel',update(next=>{next.twsDnPct=adjusted;}),false,{disabled:!qualified}));
-      }else result.append(help('Voor de TWS-vergelijking zijn goedgekeurde aandewindse én voor-de-windse vensters nodig, met dekking op beide boegen. De absolute AWS-schaal vraagt een onafhankelijke referentie.'));
-      if(pairs.length){
+        if(proposed.bands.length){
+          result.append(table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','TWD P25–P75','Δ TWS voorstel','Extra TWA',''],proposed.bands.map(g=>{
+            const old=live.bands.find(b=>b.band===g.band&&b.mode===g.mode);
+            const residual=med(g.errors)/2,tws=BAND_TWS[g.band];
+            return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.errors.length,summary(old?.errors),summary(g.errors),degrees(SL.quant(g.errors,.25))+' / '+degrees(SL.quant(g.errors,.75)),f1(med(g.speeds),2)+' kn',degrees(residual),
+              btn('Naar tabel bij '+tws+' kn',update(next=>{
+                const rows=next.twa.length?next.twa:BAND_TWS.map(t=>({tws:t,up:0,dn:0}));
+                next.twa=SL.addTableResidual(rows,tws,g.mode,residual);
+              }),false,{disabled:g.errors.length<3||Math.abs(residual)<.05})];
+          })));
+        }else result.append(help('Geen paren met voldoende TWD- en TWS-metingen in deze windbanden.'));
+      }
+      if(step===4){
+        const extremes=refs.phases.map(w=>D===A.D?w:SL.windowPhase(D,{start:w.t,end:iT(w.i1)})).filter(w=>w&&(w.mode==='Upwind'&&Math.abs(w.v.TWA)<=60||w.mode==='Downwind'&&Math.abs(w.v.TWA)>=120));
+        const tws=SL.calWind(extremes).twsDn,qualified=tws&&fin(tws.pct)&&tws.pct>-100&&Math.abs(tws.pct)>Math.max(3,2*tws.se);
+        result.append(h('h4',{},'3 · TWS aandewinds en voor de wind'));
+        if(tws){
+          const adjusted=Math.round(1000*((1+(cfg.twsDnPct||0)/100)/(1+tws.pct/100)-1))/10;
+          result.append(help('Geschat verschil voor de wind t.o.v. aandewinds bij het voorstel: '+f1(tws.pct,1)+'% (standaardfout '+f1(tws.se,1)+'%). Vergelijk rakken in dezelfde omstandigheden.'),
+            btn('TWS downwind naar voorstel',update(next=>{next.twsDnPct=adjusted;}),false,{disabled:!qualified}));
+        }else result.append(help('Voor de TWS-vergelijking zijn goedgekeurde aandewindse én voor-de-windse vensters nodig, met dekking op beide boegen. De absolute AWS-schaal vraagt een onafhankelijke referentie.'));
+      }
+      if(pairs.length && step!==4){
         const rows=pairs.filter(r=>r.before&&r.after).map(({pair,before,after})=>{
           const [p,s]=before.tack==='Port'?[before.v,after.v]:[after.v,before.v];
           return [tstr(pair.anchor),pair.type,degrees(p.AWA)+' / '+degrees(s.AWA),degrees(p.TWD)+' / '+degrees(s.TWD),degrees(SL.w180(p.TWD-s.TWD)),btn('Bekijk paar',()=>{
@@ -388,6 +395,83 @@ const WF = (() => {
     c.addEventListener('input',e=>{if(e.target.id.startsWith('draft-')||e.target.matches('[aria-label^="TWA "]'))message.textContent='Voorstel gewijzigd. Bereken de restfout opnieuw.';},{signal:windListeners.signal});
   }
   let windListeners;
+  function speedoEditor(draft, phases, bspModel) {
+    const ch=A.D.raw.ch, settings=SL.speedoConfig(ch,draft.speedos || session.profile.speedoLayout);
+    const report=h('div',{'aria-live':'polite'}), controls=h('div', {class:'form'});
+    const box=card('BSP per fysieke sensor',controls,report);
+    const config=h('div',{class:'form'});
+    function changed(key,value) {
+      settings[key]=value;
+      draft.speedos={...settings};
+      session.preview=false;touch();refresh();
+    }
+    const mode=h('input',{type:'checkbox',checked:settings.enabled,onchange:e=>changed('enabled',e.target.checked)});
+    controls.append(field('Gebruik twee BSP-sensoren',mode));
+    function choose(key,label) {
+      const select=h('select',{'aria-label':label,onchange:e=>changed(key,e.target.value)},
+        h('option',{value:''},'Kies kanaal'),Object.keys(ch).sort().map(k=>h('option',{value:k,selected:k===settings[key]},k)));
+      return field(label,select);
+    }
+    function number(key,label,step) {
+      return field(label,h('input',{type:'number',id:'draft-'+key,step,value:settings[key],
+        oninput:e=>changed(key,e.target.value===''?null:e.target.valueAsNumber)}));
+    }
+    config.append(choose('selector','Actieve sensor behouden uit'),choose('port','Bakboordsensor (kn)'),number('portCode','Code BB',1),number('portK','Factor BB',.001),
+      choose('starboard','Stuurboordsensor (kn)'),number('starboardCode','Code SB',1),number('starboardK','Factor SB',.001));
+    box.insertBefore(config,report);
+    const ranges=phases.length?phases.map(p=>[p.i,p.i1]):[[A.D.i0,A.D.i1]];
+    const seconds=new Uint8Array(A.D.n);
+    for(const [lo,hi] of ranges) seconds.fill(1,lo,hi);
+    const measured=(key,i)=>A.D.invalid?.[i] || (A.D.raw.age?.[key]?.[i]??0)>A.D.cfg.maxHold ? NaN : ch[key]?.[i];
+    function refresh(){
+      config.hidden=!settings.enabled;
+      if(!settings.enabled){
+        report.replaceChildren(help(settings.port&&settings.starboard?'Twee sensorkanalen gevonden: '+settings.port+' en '+settings.starboard+'. Het actieve voorstel gebruikt de gelogde BSP.':'Het voorstel gebruikt de gelogde BSP en de globale factor.'));return;
+      }
+      try{SL.checkSpeedos(settings,ch);}catch(e){report.replaceChildren(notice(e.message));return;}
+      const rows=[],fitRows=[],matched=new Uint8Array(A.D.n);
+      for(const [side,label] of [['port','Bakboord'],['starboard','Stuurboord']]){
+        const source=settings[side],code=settings[side+'Code'],samples=[],proposed=[],delta=[];
+        for(let i=A.D.i0;i<A.D.i1;i++){
+          if(!seconds[i]||measured(settings.selector,i)!==code)continue;
+          const v=measured(source,i);if(!fin(v)||v<0)continue;
+          matched[i]=1;samples.push(v);
+          const corrected=v*settings[side+'K']*draft.bspK;proposed.push(corrected);
+          const original=measured('BSP',i);if(fin(original))delta.push(corrected-original);
+        }
+        const residuals=[];
+        for(const {p,r} of bspModel.ratio||[]){
+          let sum=0,count=0;
+          for(let i=p.i;i<p.i1;i++){
+            const v=measured(source,i);
+            if(measured(settings.selector,i)===code&&fin(v)&&v>0){sum+=v;count++;}
+          }
+          // Exclude windows spanning a source change or a sensor outage.
+          if(count===p.i1-p.i && count){
+            const reference=r*p.v.BSP;
+            residuals.push(reference-sum/count*settings[side+'K']*draft.bspK);
+          }
+        }
+        fitRows.push([label,residuals.length,f1(SL.median(residuals),2)]);
+        rows.push([label,source,samples.length,f1(SL.median(samples),2),f1(SL.median(proposed),2),f1(SL.median(delta),2)]);
+      }
+      let other=0,missing=0;
+      for(let i=A.D.i0;i<A.D.i1;i++)if(seconds[i]&&!matched[i]){if(fin(measured('BSP',i)))other++;else missing++;}
+      report.replaceChildren(help(phases.length?'Goedgekeurde referenties, gegroepeerd op de actieve sensor.':'Hele sessie, inclusief stilliggen. Keur fases goed om de vergelijking tot referenties te beperken.'),
+        table(['Sensor','Logkanaal','Actief (s)','Ruw (kn)','Voorstel (kn)','Verschil met log (kn)'],rows),
+        table(['Sensor','Referenties met stroomschatting','Restfout (kn)'],fitRows),
+        help('Restfout = snelheid uit GPS en het actieve stroommodel minus het voorstel. Een positieve waarde betekent dat de sensor te laag leest. Elk venster telt één keer en moet volledig door dezelfde sensor zijn gedekt.'),
+        help('Medianen per sensor. Bij onbekende selectie of ontbrekende sensordata gebruikt het voorstel de gelogde BSP ('+other+' s). Geen bruikbare BSP: '+missing+' s.'));
+    }
+    box.addEventListener('bsp-factor',refresh);
+    config.append(btn('Kanaalkeuze bij boot bewaren',safe(async()=>{
+      SL.checkSpeedos({...settings,enabled:true},ch);
+      const {port,starboard,selector,portCode,starboardCode}=settings;
+      const layout={port,starboard,selector,portCode,starboardCode};
+      boat().speedoLayout=layout;session.profile.speedoLayout={...layout};touch();await persist();banner('Sensorkanalen en codes opgeslagen bij de boot.');
+    })));
+    refresh();return box;
+  }
   function calibration() {
     const c = pane('cal'); if (!session || !A.D) return;
     windListeners?.abort();windListeners=new AbortController();
@@ -398,14 +482,40 @@ const WF = (() => {
     c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Controleer. Vergelijk. Pas toe.'), help(`${ps.length} goedgekeurde fases · ${refs.pairs.length} goedgekeurde vensterparen. Alle correcties zijn ten opzichte van het oorspronkelijke log.`)), btn('Sessie opslaan & analyseren', safe(()=>STUDIO.publish()), true)));
     if (!ps.length) c.append(notice('Keur eerst stabiele fases goed bij Beoordelen. Je kunt al een handmatig voorstel bekijken; de modellen wachten op referenties.'), btn('Referenties beoordelen', () => show('review')));
     if (session.calibrationChanged) c.append(notice('De instrumentkalibratie is tijdens deze sessie gewijzigd. Eén correctie voor de hele sessie is dan niet betrouwbaar. Maak aparte sessies met een constant instrumentprofiel; toepassen is hier geblokkeerd.'));
-    windReview(c,refs,draft);
-    const form = h('div', { class: 'form' });
-    for (const [k, label, step] of [['bspK', 'BSP factor ×', .001], ['hdgOff', 'Heading offset °', .1], ['awaOff', 'AWA / MHU offset °', .1], ['awsK', 'AWS factor ×', .001], ['twsDnPct', 'TWS downwind %', .1], ['leewayGain', 'Leeway factor ×', .05], ['heelOff', 'Heel offset °', .1], ['rudOff', 'Rudder offset °', .1]]) form.append(field(label, h('input', { id: 'draft-' + k, type: 'number', step, value: draft[k], oninput: e => { draft[k] = +e.target.value; session.preview = false; touch(); } })));
-    const cell = (r, key) => h('input', { type: 'number', step: .1, value: r[key], 'aria-label': 'TWA ' + key + ' bij ' + r.tws, oninput: e => { r[key] = +e.target.value; session.preview = false; touch(); } });
-    c.append(card('Voorstel — nog niet actief', form, h('h4', {}, 'TWA-correctie per windsnelheid'), table(['TWS kn', 'Upwind °', 'Downwind °', ''], draft.twa.map((r, i) => [cell(r, 'tws'), cell(r, 'up'), cell(r, 'dn'), btn('Verwijder', () => { draft.twa.splice(i, 1); session.preview = false; show('cal'); })])),
-      bar(btn('TWA-rij toevoegen', () => { draft.twa.push({ tws: (draft.twa.at(-1)?.tws || 4) + 2, up: 0, dn: 0 }); show('cal'); }),
+    const steps=['BSP-sensoren','Kompas & leeway','AWA / MHU','TWA / TWD','TWS','Afronden'];
+    const index=Math.max(0,steps.indexOf(session.calibrationStep));
+    function go(i){session.calibrationStep=steps[i];show('cal');}
+    c.append(h('nav',{'aria-label':'Kalibratieonderdelen',class:'bar'},steps.map((name,i)=>btn(name,()=>go(i),i===index,{'aria-current':i===index?'step':null}))));
+    const form=h('div',{class:'form'}), editor=card(steps[index],form);
+    c.append(editor);
+    const fields=[
+      [['bspK','Globale BSP-factor ×',.001]],
+      [['hdgOff','Heading-offset °',.1],['leewayGain','Leeway-factor ×',.05],['heelOff','Helling-offset °',.1],['rudOff','Roer-offset °',.1]],
+      [['awaOff','AWA / MHU-offset °',.1]],[],[['awsK','AWS-factor ×',.001],['twsDnPct','TWS downwind %',.1]],[]];
+    for(const [k,label,step] of fields[index]) form.append(field(label,h('input',{id:'draft-'+k,type:'number',step,value:draft[k],oninput:e=>{
+      draft[k]=e.target.value===''?null:e.target.valueAsNumber;session.preview=false;touch();speedBox?.dispatchEvent(new Event('bsp-factor'));
+    }})));
+    const speedBox=index===0?speedoEditor(draft,ps,model.bsp):null;if(speedBox)c.append(speedBox);
+    if(index===1)editor.append(help('Heading en leeway veranderen samen de geschatte stroom. Controleer de fit op goedgekeurde rakken over beide boegen.'),
+      table(['Referentie','Uitkomst'],[['Goedgekeurde fases',ps.length],['Heading-offset uit BSP/stroom-fit',model.bsp.err?'Onvoldoende dekking':f1(model.bsp.delta,1)+'°']]));
+    if(index===2)editor.append(help('Een positieve offset wordt opgeteld bij de gesigneerde AWA. Gebruik stabiele vensters rond aandewindse tacks.'));
+    if(index===4)editor.append(help('Controleer de AWS-schaal met een onafhankelijke referentie en vergelijk TWS aandewinds en voor de wind.'));
+    if(index===3){
+      const cell=(r,key)=>h('input',{type:'number',step:.1,value:r[key],'aria-label':'TWA '+key+' bij '+r.tws,oninput:e=>{r[key]=e.target.value===''?null:e.target.valueAsNumber;session.preview=false;touch();}});
+      editor.append(help('Correcties in graden op de absolute TWA, geïnterpoleerd over TWS. TWD volgt de hoekcorrectie.'),
+        table(['TWS kn','Upwind °','Downwind °',''],draft.twa.map((r,i)=>[cell(r,'tws'),cell(r,'up'),cell(r,'dn'),btn('Verwijder',()=>{draft.twa.splice(i,1);session.preview=false;show('cal');})])),
+        btn('TWA-rij toevoegen',()=>{draft.twa.push({tws:(draft.twa.at(-1)?.tws||4)+2,up:0,dn:0});session.preview=false;show('cal');}));
+    }
+    if(index>=2&&index<=4)windReview(c,refs,draft,index);
+    if(index===5)editor.append(table(['Instelling','Actief','Voorstel'],fields.flat().map(([k,label])=>[label,A.calib[k],draft[k]])),
+      help('Vergelijk de instellingen op dezelfde tijdvakken. Pas het voorstel toe om de sessie met deze correcties te analyseren.'));
+    if(index===5 && (A.calib.speedos?.enabled || draft.speedos?.enabled)){
+      const status=(cfg,side)=>cfg.speedos?.enabled?cfg.speedos[side]+' × '+cfg.speedos[side+'K']:'Gelogde BSP';
+      editor.append(table(['Sensor','Actief','Voorstel'],[['port','Bakboord'],['starboard','Stuurboord']].map(([side,label])=>[label,status(A.calib,side),status(draft,side)])));
+    }
+    c.append(bar(index>0?btn('Vorige',()=>go(index-1)):null,index<5?btn('Volgende',()=>go(index+1),true):null,
         btn('Modelsuggesties naar voorstel', () => {
-          const proposed=SL.copy(A.calib||SL.CAL0);
+          const proposed=SL.copy(draft);
           if(!proposed.twa?.length)proposed.twa=BAND_TWS.map(tws=>({tws,up:0,dn:0}));
           const found=calibSuggest(model,proposed);
           if(found.length){session.draft=proposed;session.preview=false;touch();show('cal');}
@@ -413,10 +523,9 @@ const WF = (() => {
         }),
         btn('Voorstel vergelijken', safe(() => { validateCalib(draft); session.preview = true; show('cal'); }), true),
         btn('Voorstel toepassen', safe(() => applyCalibration(draft)), false, { disabled: session.calibrationChanged }),
-        btn('Voorstel wissen', () => { session.draft = SL.copy(SL.CAL0); session.preview = false; show('cal'); })),
-      help('TWA-correcties zijn toevoegingen aan de absolute hoek, geïnterpoleerd over TWS en gemengd tussen 60° en 120° TWA. TWD volgt de hoekcorrectie. Positieve MHU offset wordt bij de gesigneerde AWA opgeteld.')));
+        btn('Voorstel wissen', () => { session.draft = SL.copy(SL.CAL0); session.preview = false; show('cal'); })));
     if (session.preview) {
-      try { const s = snapshot(), original = process(s, null), proposed = process(s, validateCalib(draft));
+      try { const s = snapshot(false), original = process(s, null), proposed = process(s, validateCalib(draft));
         const references = ps.length ? ps.map(p => [p.i, p.i1]) : [[A.D.i0, A.D.i1]];
         const avg = (D, k) => { const values = []; for (const [lo, hi] of references) for (let i = lo; i < hi; i++) values.push(D.ch[k]?.[i]); return (SL.ANG.test(k) ? SL.cmean : SL.mean)(values); };
         c.append(card('Gelogd · actief · voorstel', help(ps.length ? 'Exact dezelfde goedgekeurde tijdvakken voor alle drie de berekeningen.' : 'Geen goedgekeurde referenties: dit zijn alleen beschrijvende sessiegemiddelden.'), table(['Variabele', 'Gelogd', 'Actief', 'Voorstel'], ['BSP', 'AWA', 'TWA', 'TWS', 'TWD', 'VMG', ...s.profile.formulas.map(d => d.name)].map(k => [k, f1(avg(original, k), 2), f1(avg(A.D, k), 2), f1(avg(proposed, k), 2)]))));
@@ -426,7 +535,9 @@ const WF = (() => {
         [1, 2, 3].forEach((j, i) => p.line(vals.map((v, k) => [k, v[j]]), [css('--muted'), css('--s1'), css('--s2')][i])); c.append(legend([[css('--muted'), 'Gelogd'], [css('--s1'), 'Actief'], [css('--s2'), 'Voorstel']]));
       } catch (e) { c.append(notice(e.message)); }
     }
-    const modelBox = h('div', { class: 'wf-models' }); c.append(modelBox); RaceTools.calibration(c,model,session); blkCalModel(modelBox, model, { logMagVar: A.D.logMagVar, mv: A.D.magVar });
+    if(index===0||index===3)RaceTools.calibration(c,model,session,index===0?'speed':'wind');
+    if(index!==5)return;
+    const modelBox=h('details',{},h('summary',{},'Modeluitkomsten'));c.append(modelBox);blkCalModel(modelBox,model,{logMagVar:A.D.logMagVar,mv:A.D.magVar});
     const historyRows = session.calibrationHistory.map((v, i) => [
       'v' + (i + 1), new Date(v.at).toLocaleString('nl-NL'), v.note,
       btn('Terugzetten', safe(() => applyCalibration(v.value, 'Terug naar v' + (i + 1))), false, { disabled: session.calibrationChanged })

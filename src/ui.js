@@ -176,9 +176,9 @@ function blkPerf(c, mode, by) {
     blkXY(c, { ps, x: 'TWS', y, by, zero: 0, notes: n, h: 190, xl: y === 'ΔVMG%' ? 'TWS (kn)' : '', ysuf: y === 'ΔTWA' ? '°' : y === 'ΔVMG%' ? '%' : '' });
 }
 /* track map */
-function mapGeom(D){return TrackMap.geometry(D);}
+function mapGeom(D,raw=false){return TrackMap.geometry(D,raw); }
 function drawMap(cv, o) {
-  const D = A.D, G = mapGeom(D), W = o.w || cv.parentElement.clientWidth || 700, H = o.h || 520, dp = window.devicePixelRatio || 1;
+  const D = A.D, G = mapGeom(D,o.rawTrack), W = o.w || cv.parentElement.clientWidth || 700, H = o.h || 520, dp = window.devicePixelRatio || 1;
   cv.width = W * dp; cv.height = H * dp; cv.style.height = H + 'px'; const c = cv.getContext('2d'); c.setTransform(dp, 0, 0, dp, 0, 0); c.fillStyle = css('--water'); c.fillRect(0, 0, W, H);
   if (!G || !fin(G.bx[0])) { c.fillStyle = css('--muted'); c.font = '13px ' + css('--font'); c.fillText('Geen geldige GPS-posities in dit log.', 20, 30); return null; }
   const v = o.view, rot=(o.bearing||0)*SL.D2R, co=Math.cos(rot), si=Math.sin(rot);
@@ -218,7 +218,7 @@ function drawMap(cv, o) {
   }
   if (o.barbs && D.ch.TWD) { const st = Math.max(60, Math.round((D.i1 - D.i0) / 45)); c.strokeStyle = css('--ink2'); c.fillStyle = css('--ink2'); c.lineWidth = 1; c.font = '10px ' + css('--font'); c.textAlign = 'center'; c.textBaseline = 'middle'; for (let i = D.i0 + st; i < D.i1; i += st) { if (!fin(G.x[i]) || !fin(D.ch.TWD[i]) || !(D.ch.BSP[i] > 1)) continue; const t = (D.ch.TWD[i] + D.magVar) * SL.D2R, x = X(i), y = Y(i), ux = Math.sin(t), uy = -Math.cos(t); c.beginPath(); c.moveTo(x, y); c.lineTo(x + ux * 20, y + uy * 20); c.moveTo(x + ux * 20, y + uy * 20); c.lineTo(x + ux * 20 + uy * 6 - ux * 3, y + uy * 20 - ux * 6 - uy * 3); c.stroke(); c.fillText(f1(D.ch.TWS[i], 0), x + ux * 30, y + uy * 30); } }
   c.font = '600 10px ' + css('--font'); c.textAlign = 'left'; c.textBaseline = 'middle';
-  for (const m of D.mans) { if(m.i<lo||m.i>=hi)continue; c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
+  for (const m of D.mans) { if(m.i<lo||m.i>=hi||!fin(G.x[m.i]))continue; c.fillStyle = css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.arc(X(m.i), Y(m.i), 3.5, 0, 7); c.fill(); c.stroke(); }
   let ly = -99, lx = -99; for (const e of D.L.list) { if (!e.label || e.i < lo || e.i >= hi || !fin(G.x[e.i])) continue; const x = X(e.i), y = Y(e.i), race = e.type !== 'SailsUp'; c.fillStyle = race ? css('--ink') : css('--surface'); c.strokeStyle = css('--ink'); c.lineWidth = 1.5; c.beginPath(); c.rect(x - 4, y - 4, 8, 8); c.fill(); c.stroke(); if (Math.abs(y - ly) < 12 && Math.abs(x - lx) < 80) continue; ly = y; lx = x; const t = e.label; c.lineWidth = 3; c.strokeStyle = css('--surface'); c.strokeText(t, x + 8, y); c.fillStyle = css('--ink'); c.fillText(t, x + 8, y); }
   // wind arrow (mean TWD, arrow points downwind)
   if (D.sum.TWD) { const t = (D.sum.TWD.avg + D.magVar) * SL.D2R - rot, ax = W - 46, ay = 48, dx = -Math.sin(t), dy = Math.cos(t); c.strokeStyle = c.fillStyle = css('--ink2'); c.lineWidth = 2.5; c.beginPath(); c.moveTo(ax - dx * 24, ay - dy * 24); c.lineTo(ax + dx * 20, ay + dy * 20); c.stroke(); c.beginPath(); c.moveTo(ax + dx * 28, ay + dy * 28); c.lineTo(ax + dx * 14 - dy * 7, ay + dy * 14 + dx * 7); c.lineTo(ax + dx * 14 + dy * 7, ay + dy * 14 - dx * 7); c.fill(); c.font = '600 11px ' + css('--font'); c.textAlign = 'center'; c.fillText('TWD ' + D.sum.TWD.avg.toFixed(0) + '°', ax, ay + 42); }
