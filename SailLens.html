@@ -182,6 +182,7 @@ button,input,select{min-height:36px}button:focus-visible,input:focus-visible,sel
 .desk-mapbox,.desk-stripbox{position:relative;min-height:0;flex:1}.desk-map,.desk-strip{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}.desk-map{cursor:grab}.desk-map:active{cursor:grabbing}.desk-strip{cursor:crosshair}
 .desk-maptools{position:absolute;left:8px;bottom:22px;background:var(--surface);padding:3px;border:1px solid var(--line);border-radius:6px;margin:0;gap:3px}
 .desk-side{overflow:auto;padding:0 10px 10px;scrollbar-gutter:stable}.desk-side>.bar:first-child{position:sticky;top:0;z-index:1;background:var(--surface);padding:8px 0;margin:0;border-bottom:1px solid var(--line)}.desk-side h3{margin:0 auto 0 0}.desk-side>.bar,.desk-side>details{margin:8px 0}.desk-side .card{padding:8px 0;box-shadow:none;border:0;border-bottom:1px solid var(--line);border-radius:0}.desk-side .tbl th,.desk-side .tbl td{padding:5px 3px;font-size:12px;white-space:normal}.desk-side .tbl tr[aria-selected=true]{background:var(--hl)}.desk-side .tbl tr[aria-selected]{cursor:pointer}.desk-side .field input{max-width:100%}
+.phase-quality-form{margin:4px 0 10px}.phase-quality-form .form{grid-template-columns:repeat(auto-fit,minmax(135px,1fr));gap:6px 10px}.phase-quality-form .field input,.phase-quality-form .field select{width:100%;min-width:0}.desk-side .phase-results th,.desk-side .phase-results td{white-space:nowrap;font-variant-numeric:tabular-nums}.desk-side .phase-open{color:var(--accent);background:none;border:none;padding:0 2px;text-decoration:underline;text-underline-offset:2px}.phase-results th:first-child,.phase-results td:first-child{position:sticky;left:0;background:var(--surface);box-shadow:1px 0 var(--line)}
 .prep-desk button,.prep-desk select{padding:4px 7px;min-height:28px;font-size:12px}.prep-desk .bar{gap:5px}.prep-desk summary{cursor:pointer;color:var(--accent);padding:4px 0}
 .desk-dialog{width:min(640px,95vw);max-height:85dvh;overflow:auto;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px;box-shadow:0 14px 48px #0003}.desk-dialog::backdrop{background:#10253675}.desk-dialog>.bar{justify-content:space-between}.desk-dialog h3{margin:0}.desk-dialog .card{padding:0;border:0;box-shadow:none}.desk-form{display:grid;gap:9px}.event-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px}.event-error{color:var(--bad);margin:0}.event-error:empty{display:none}
 @media(min-width:851px){body.desk-mode{display:flex;flex-direction:column;height:100dvh;overflow:hidden;min-height:0}.desk-mode aside{position:static;height:auto;flex:none;display:flex;flex-direction:row;align-items:center;padding:3px 12px}.desk-mode aside .brand{padding:3px 12px 3px 0}.desk-mode aside #nav,.desk-mode aside .foot{display:flex;flex-direction:row;align-items:center;gap:6px}.desk-mode aside .foot{margin:0 0 0 auto;padding:0}.desk-mode aside .foot span{display:none}.desk-mode aside button.nav{width:auto;padding:3px 8px}.desk-mode .work,.desk-mode main,.desk-mode #panes,.desk-mode .tabpane{flex:1;min-height:0;display:flex;flex-direction:column}.desk-mode .topbar{padding:3px 12px}.desk-mode .topbar h2{font-size:16px}.desk-mode main{padding:5px 10px 8px;max-width:none}.desk-mode .wf-flow{display:flex;flex-direction:row;align-items:center;gap:8px;margin:0 0 5px}.desk-mode .wf-flow>.bar{order:2;margin:0 0 0 auto}.desk-mode .wf-flow .eyebrow{display:none}.desk-mode .wf-steps{flex:1;max-width:840px}.desk-mode .wf-steps button{padding:4px 6px}.desk-mode #banner{margin:0 0 4px;padding:3px 7px;font-size:12px}}
@@ -573,7 +574,7 @@ function process(raw, opt) {
     if (q.outOfOrder) warn.push(q.outOfOrder + ' out-of-order timestamps were placed in chronological order.');
     if (q.invalidValues) warn.push(q.invalidValues + ' non-numeric channel values were ignored.');
     if (q.aggregatedSamples) warn.push('Subsecond samples averaged into 1-second analysis bins. The workspace retains the original source files.');
-    if (['BSP', 'TWA', 'TWS', 'AWA', 'AWS'].some(k => q.channels[k] && q.channels[k].observed < n)) warn.push('Gaps present: values are held for at most ' + cfg.maxHold + ' seconds; longer gaps are excluded from phases. See import quality in Setup.');
+    if (['BSP', 'TWA', 'TWS', 'AWA', 'AWS'].some(k => q.channels[k] && q.channels[k].observed < n)) warn.push('Gaps present: values are held for at most ' + cfg.maxHold + ' seconds. Beyond that, the channel has no valid measurement. See import quality in Setup.');
   }
   if (raw.timeBasis === 'utc' && cfg.logOff) warn.push('The log contains UTC timestamps; the log UTC offset setting is ignored.');
   const invalid = new Uint8Array(n);
@@ -641,7 +642,8 @@ function process(raw, opt) {
   const aT = need('absTWA'), pol = need('Polar_BSP'), tT = need('Target_TWA'), tB = need('Target_BSP'), vmg = need('VMG'), bp = need('BSPpol%'), bt = need('BSP_trg%'), vp = need('VMG%'),
     dB = need('ΔBSP'), dT = need('ΔTWA'), dV = need('ΔVMG'), dVp = need('ΔVMG%');
   const tack = new Int8Array(n), mode = new Int8Array(n).fill(-1);
-  const confidentMode = opt.skipPhases ? null : new Int8Array(n).fill(-1);
+  const normalized = (opt.phaseRules || opt.phaseBuild?.rules)?.method === 'normalized';
+  const confidentMode = opt.skipPhases || normalized ? null : new Int8Array(n).fill(-1);
   if (ch.Heel) { const a = need('abs_heel'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Heel[i]); }
   if (ch.Rudder) { const a = need('abs_rudder'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Rudder[i]); }
   for (const k of ['Heel', 'Rudder', 'Leeway']) if (ch[k]) { const a = need(k + '_norm'); for (let i = 0; i < n; i++) a[i] = TWA[i] < 0 ? -ch[k][i] : ch[k][i]; }
@@ -653,18 +655,19 @@ function process(raw, opt) {
   for (let i = 0; i < n; i++) {
     const a = Math.abs(TWA[i]), w = TWS[i], b = BSP[i]; aT[i] = a; tack[i] = TWA[i] >= 0 ? 1 : -1;
     vmg[i] = Math.abs(b * Math.cos(a * D2R));
-    if (!fin(a) || !fin(w)) continue;
+    if (!fin(a) || (!fin(w) && !normalized)) continue;
     let ut, dt_, tt, tb, pb = NaN;
     /* targets follow a 3 s mean of TWS, which matches RaceReplay's percentages; polar speed uses the sample itself */
-    if (P) { const w3 = fin(TWS[i - 1]) && fin(TWS[i + 1]) ? (TWS[i - 1] + w + TWS[i + 1]) / 3 : w, u = P.up(w3), d = P.dn(w3); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
+    if (P && fin(w)) { const w3 = fin(TWS[i - 1]) && fin(TWS[i + 1]) ? (TWS[i - 1] + w + TWS[i + 1]) / 3 : w, u = P.up(w3), d = P.dn(w3); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
     else {
-      const angle = lTwa?.[i];
+      // A selected polar cannot supply targets without wind speed.
+      const angle = P ? NaN : lTwa?.[i];
       // VMG targets use angle magnitude; loggers can encode port as -42 or 318.
       tt = fin(angle) && angle >= -180 && angle <= 360 ? Math.abs(w180(angle)) : NaN;
-      tb = lBsp?.[i];
+      tb = P ? NaN : lBsp?.[i];
       if (!fin(tb) || tb <= 0) tb = NaN;
       if (fin(angle) && (!(tt > 0) || (tt < 90) !== (a < 90))) { tt = NaN; tb = NaN; }
-      pb = lPol?.[i];
+      pb = P ? NaN : lPol?.[i];
       if (!fin(pb) || pb <= 0) pb = NaN;
       ut = a < 90 && fin(tt) ? tt : 45;
       dt_ = a >= 90 && fin(tt) ? tt : 142;
@@ -724,7 +727,7 @@ function process(raw, opt) {
   for (const q of formulaDiagnostics) if (q.missing.length) warn.push(q.name + ': ontbrekende kanalen ' + q.missing.join(', '));
   const formulaAngles = new Set((opt.formulas || []).filter(d => d.type === 'angle').map(d => d.name));
   const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases:[], magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics, formulaAngles: [...formulaAngles] };
-  D.phaseDiagnostics = generatePhases(D,opt,confidentMode);
+  D.phaseDiagnostics = generatePhases(D,opt,confidentMode,normalized);
   if(opt.phaseBuild)SL.phaseBuild(D,opt.phaseBuild);
   D.legs = buildLegs(D); D.sum = summary(D);
   return D;
@@ -738,7 +741,7 @@ function phaseMode(mode, start, end) {
   return highest ? MODES[counts.indexOf(highest)] : undefined;
 }
 
-function generatePhases(D, opt, confidentMode) {
+function generatePhases(D, opt, confidentMode, normalized) {
   const {cfg,ch,L,i0,i1,n,mode,tack,raw} = D, length = cfg.phaseLen;
   const reasons = {scope:0,missing:0,speed:0,manoeuvre:0,sail:0,boundary:0,stabilityBsp:0,stabilityTwa:0,stabilityTws:0,stabilityHdg:0,polar:0,angle:0};
   const byMode = Object.fromEntries(MODES.map(name=>[name,0]));
@@ -747,23 +750,32 @@ function generatePhases(D, opt, confidentMode) {
   if (opt.skipPhases || i0+length>i1) return stats;
   const {BSP,TWA,TWS,HDG} = ch;
   const names = Object.keys(ch), angleNames = new Set(D.formulaAngles);
-  const rules = opt.phaseRules, sampleRules = rules ? {...rules,mode:''} : null;
+  const rules = opt.phaseRules || opt.phaseBuild?.rules;
+  // Category and quality choices belong to the review of the fixed windows.
+  const sampleRules = normalized ? {scope:rules.scope, range:rules.range} : rules ? {...rules,mode:''} : null;
   const mask = new Uint8Array(n), boundary = new Uint8Array(n), upwindStart = new Uint8Array(n);
   const maskNames = ['','scope','missing','speed','manoeuvre','sail'];
-  for (const m of D.mans) mask.fill(4,Math.max(i0,m.i-cfg.manBefore),Math.min(i1,m.i+cfg.manAfter));
+  for (const m of D.mans) {
+    mask.fill(4,Math.max(i0,m.i-cfg.manBefore),Math.min(i1,m.i+cfg.manAfter));
+    if (normalized) boundary[m.i] = 1;
+  }
   for (let i=i0+1; i<i1; i++) {
-    if (L.sailState && L.sailState[i] !== L.sailState[i-1]) mask.fill(5,Math.max(i0,i-20),Math.min(i1,i+30));
-    if (L.race[i]!==L.race[i-1] || L.leg[i]!==L.leg[i-1] || L.testing[i]!==L.testing[i-1] || tack[i]!==tack[i-1])
-      boundary[i] = 1; // half-open windows may start or end exactly here
+    const sailChanged = L.sailState && L.sailState[i] !== L.sailState[i-1];
+    if (sailChanged && !normalized) mask.fill(5,Math.max(i0,i-20),Math.min(i1,i+30));
+    if (L.race[i] !== L.race[i-1] || L.leg[i] !== L.leg[i-1] || L.testing[i] !== L.testing[i-1] ||
+        (normalized ? sailChanged : tack[i] !== tack[i-1])) boundary[i] = 1;
+    // Half-open windows may start or end exactly on a context boundary.
   }
   let established = -1, streak = 0;
   for (let i=i0; i<i1; i++) {
     if ((sampleRules && !SL.sampleMatches(D,i,sampleRules)) || (!rules?.scope && cfg.racingOnly && !L.race[i])) mask[i]=1;
-    else if (D.invalid[i] || !fin(BSP[i]) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i]<0) mask[i]=2;
-    else if (BSP[i]<cfg.minBsp) mask[i]=3;
+    else if (D.invalid[i] || (normalized ? !fin(BSP[i]) && !fin(ch.SOG?.[i]) :
+      !fin(BSP[i]) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i]<0)) mask[i]=2;
+    else if (!normalized && BSP[i]<cfg.minBsp) mask[i]=3;
     if (mode[i]===0 && mask[i]!==1 && mask[i]!==2 && mask[i]!==3 && !L.motor?.[i]) {
       upwindStart[i]=1; stats.upwindSailingSeconds++;
     }
+    if (normalized) continue;
     if (mask[i] || boundary[i]) { established=-1; streak=0; }
     // Confirm a change of sailing mode on five consecutive seconds at least 2° inside the new band.
     // Small TWA or target fluctuations at the threshold are handled by the window's own stability test.
@@ -793,6 +805,13 @@ function generatePhases(D, opt, confidentMode) {
     if (nextBoundary<end) {
       const count=Math.min(nextBoundary,lastStart+1)-i;
       reject('masked','boundary',i,count); i+=count; continue;
+    }
+    if (normalized) {
+      const phase = SL.windowPhase(D, {start:raw.t0+i*1000,end:raw.t0+end*1000}, 2);
+      D.phases.push(phase);
+      byMode[phase.mode] = (byMode[phase.mode] || 0) + 1;
+      stats.accepted++; stats.checkedWindowStarts++; i=end+cfg.phaseGap;
+      continue;
     }
     const windowMode = phaseMode(mode,i,end);
     if (rules?.mode && rules.mode!==windowMode) { reject('masked','scope',i); i++; continue; }
@@ -1187,11 +1206,11 @@ function dayRecord(D, meta, extra) {
   return { id: (meta.boat || 'Boat') + '|' + date + '|' + start + '|' + end, boat: meta.boat || 'Boat', date, start, end, timeBasis: 'utc', desc: meta.desc || '', location: meta.location || '', dayType: meta.daytype || '', polar: extra.polar || '', off, added: Date.now(), magVar: D.magVar,
     recipe: JSON.parse(JSON.stringify({ version: 2, cfg: D.cfg, calibration: extra.calibration || null, polarRows: D.P ? D.P.rows : null, files: extra.files || {}, events: extra.events || null, importQuality: D.raw.diagnostics || null, timeBasis: D.raw.timeBasis || 'floating' })),
     sum: { tws: r3(D.sum.TWS.avg), twsMin: r3(D.sum.TWS.min), twsMax: r3(D.sum.TWS.max), twd: D.sum.TWD ? r3(D.sum.TWD.avg) : null, tacks: D.sum.tacks, gybes: D.sum.gybes, sailing: D.sum.sailing, racing: D.sum.racing, dist: r3(D.sum.dist), sails: D.sum.sails }, cal: extra.cal || null,
-    keys, phases: D.phases.map(p => ({ t: p.t - shift, d: p.i1 - p.i, m: MODES.indexOf(p.mode), k: p.tack === 'Stbd' ? 1 : 0, s: p.sails, r: p.race, l: p.leg, x: p.testing ? 1 : 0, v: keys.map(k => r3(p.v[k])) })),
+    keys, phases: D.phases.map(p => ({ t: p.t - shift, d: p.i1 - p.i, m: MODES.indexOf(p.mode), k: p.tack === 'Stbd' ? 1 : p.tack === 'Port' ? 0 : -1, s: p.sails, r: p.race, l: p.leg, x: p.testing ? 1 : 0, v: keys.map(k => r3(p.v[k])) })),
     mans: D.mans.map(m => ({ t: D.raw.t0 + m.i * 1000 - shift, type: m.type, to: m.to, tws: r3(m.tws), loss: r3(m.loss), lossGps: r3(m.lossGps), rate: r3(m.rate), angle: r3(m.angle), bspIn: r3(m.bspIn), bspMin: r3(m.bspMin), sail: m.sail >= 0 ? D.L.sailNames[m.sail] : '-' })) };
 }
 function seasonPool(S) { // expand to the same phase objects the day analysis uses
-  const out = []; for (const d of S.days) { const lab = d.date + ' ' + (d.boat || 'Boat') + (d.desc ? ' ' + d.desc : ''); for (const q of d.phases) { const v = {}; d.keys.forEach((k, i) => { v[k] = q.v[i] == null ? NaN : q.v[i]; }); if (fin(v.AWA) && !fin(v.absAWA)) v.absAWA = Math.abs(v.AWA); out.push({ t: q.t, i: null, i1: null, dur: q.d, tack: q.k ? 'Stbd' : 'Port', mode: MODES[q.m] || 'Unknown', sails: q.s, race: q.r, leg: q.l, raceLeg: q.r ? 'R' + q.r + 'L' + q.l : '-', testing: q.x, v, day: d.date, sessionId: d.id, boat: d.boat, dayLabel: lab, off: d.off, magVar: d.magVar }); } }
+  const out = []; for (const d of S.days) { const lab = d.date + ' ' + (d.boat || 'Boat') + (d.desc ? ' ' + d.desc : ''); for (const q of d.phases) { const v = {}; d.keys.forEach((k, i) => { v[k] = q.v[i] == null ? NaN : q.v[i]; }); if (fin(v.AWA) && !fin(v.absAWA)) v.absAWA = Math.abs(v.AWA); out.push({ t: q.t, i: null, i1: null, dur: q.d, tack: q.k === -1 ? 'Onbekend' : q.k ? 'Stbd' : 'Port', mode: MODES[q.m] || 'Unknown', sails: q.s, race: q.r, leg: q.l, raceLeg: q.r ? 'R' + q.r + 'L' + q.l : '-', testing: q.x, v, day: d.date, sessionId: d.id, boat: d.boat, dayLabel: lab, off: d.off, magVar: d.magVar }); } }
   return out;
 }
 /* import a CSV export of RaceReplay's T_Phase table (Access: External Data > Export > Text file) */
@@ -2214,10 +2233,15 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
   const allowed = (r, purpose) => !r?.invalid && (purpose === 'calibration' ? r?.calibration === true : r?.performance !== false);
   const overlap = (a, b) => a.start < b.end && a.end > b.start;
   const performanceAllowed = (range, reviews) => !Object.values(reviews).some(r => (r.invalid || r.performance === false) && overlap(range, r));
-  function calibrationPhases(D, reviews) {
+  function calibrationPhases(D, reviews, quality) {
     const ranges = Object.values(reviews).filter(r => r.kind === 'interval' && r.calibration && !r.invalid);
     const veto = Object.values(reviews).filter(r => r.invalid || (r.kind === 'interval' && r.calibration === false));
-    return D.phases.filter(p => { const range = objectRange(D, p, 'phase'), review = reviewed(D, p, 'phase', reviews); if (veto.some(r => overlap(range, r)) || review?.calibration === false || review?.invalid) return false; return allowed(review, 'calibration') || ranges.some(r => range.start >= r.start && range.end <= r.end); });
+    return D.phases.filter(p => {
+      if (quality && !SL.phaseMatchesQuality(p,quality)) return false;
+      const range = objectRange(D,p,'phase'), review = reviewed(D,p,'phase',reviews);
+      if (veto.some(r => overlap(range,r)) || review?.calibration === false || review?.invalid) return false;
+      return allowed(review,'calibration') || ranges.some(r => range.start >= r.start && range.end <= r.end);
+    });
   }
   function slowStats(D, reviews = {}, range = null, threshold = 95, filter = null) {
     const out = { valid: 0, target: 0, unknown: 0, slow: 0, manoeuvre: 0, straight: 0, invalid: 0, excluded: 0, slowRanges: [] }, man = new Uint8Array(D.n);
@@ -2273,30 +2297,79 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
 /* Stable preparation boundaries and independently reviewed calibration windows. */
 (() => {
   const finite = Number.isFinite, copy = SL.copy;
+  const phaseBaseKeys = ['phaseLen','phaseGap','manBefore','manAfter'];
   const phaseKeys = ['phaseLen','phaseGap','minBsp','sdTwa','sdBsp','sdTws','sdHdg','upMargin','manBefore','manAfter','polMin','polMax'];
   function phaseDefaults(cfg) { return { ...Object.fromEntries(phaseKeys.map(k => [k, cfg[k] ?? (k === 'sdHdg' ? 10 : SL.DEF[k])])), scope:'all', race:'', sail:'', mode:'', tack:'', range:null }; }
   const eventKey = s => JSON.stringify({sources:s.sources.map(x=>x.hash), raw:s.raw && [s.raw.t0,s.raw.n], events:(s.events?.events||[]).filter(e=>e.type!=='MiscEvent').map(({type,tl,attr})=>[type,tl,attr]), turns:s.turnEdits?.length?s.turnEdits:undefined, clocks:[s.cfg.logOff,s.cfg.evOff,s.cfg.evShiftSec,s.cfg.tStart,s.cfg.tEnd,s.cfg.maxHold,s.cfg.useEvents], channels:s.profile.channels});
   const preparationKey = s => JSON.stringify({source:eventKey(s), annotations:(s.events?.events||[]).map(e=>[e.type,e.tl,e.comments]),cfg:s.cfg, profile:s.profile, polar:s.polar, chart:s.chart, calib:s.calib, baseline:s.baseline, changed:s.calibrationChanged, reviews:s.reviews, phases:s.phaseBuild, pairs:s.manoeuvrePairs});
   function sampleMatches(D,i,f={}) { const t=D.raw.t0+i*1000; return i>=D.i0&&i<D.i1 && (!f.range || (t>=f.range.start&&t<f.range.end)) && (!f.race || String(D.L.race[i])===String(f.race)) && (!f.sail || D.L.sailNames[D.L.sail[i]]===f.sail||D.L.sailSlots?.[D.L.sailState?.[i]]?.includes(f.sail)) && (!f.mode || SL.MODES[D.mode[i]]===f.mode) && (!f.tack || (D.tack[i]>0?'Stbd':'Port')===f.tack) && (f.scope!=='racing'||D.L.race[i]>0) && (f.scope!=='training'||D.L.testing[i]>0) && !D.L.motor?.[i]; }
-  const angle = (D,k) => SL.ANG.test(k) || ['TWA','AWA'].includes(k) || D.formulaAngles?.includes(k);
+  const signedAngles = new Set(['TWA','AWA','MWA']);
+  const angle = (D,k) => SL.ANG.test(k) || signedAngles.has(k) || D.formulaAngles?.includes(k);
+  const qualityLimits = [
+    ['sdHdg','spread','HDG','max'], ['sdBsp','spread','BSP','max'],
+    ['sdTwa','spread','TWA','max'], ['sdTws','spread','TWS','max'],
+    ['minBsp','v','BSP','min'], ['polMin','v','BSPpol%','min'], ['polMax','v','BSPpol%','max'],
+    ['vmgMin','v','VMG%','min'], ['vmgMax','v','VMG%','max']
+  ];
+  function phaseMatchesQuality(p, filter) {
+    if (!filter) return true;
+    if ((filter.mode && p.mode !== filter.mode) || (filter.tack && p.tack !== filter.tack) ||
+        (filter.race && String(p.race) !== String(filter.race)) ||
+        (filter.sail && p.sails !== filter.sail && !p.sailSlots?.includes(filter.sail))) return false;
+    for (const [key,field,channel,bound] of qualityLimits) {
+      const limit = filter[key];
+      if (limit == null || limit === '') continue;
+      const value = p[field]?.[channel];
+      if (!finite(limit) || !finite(value) || !(p.coverage?.[channel] >= .95) ||
+          (bound === 'min' ? value < limit : value > limit)) return false;
+    }
+    return true;
+  }
   function windowPhase(D,r,minSeconds=5) {
     if (!r || !finite(r.start)||!finite(r.end)||r.end<=r.start) return null;
     const i=Math.round((r.start-D.raw.t0)/1000), i1=Math.round((r.end-D.raw.t0)/1000);
     if(i<D.i0||i1>D.i1||i1-i<minSeconds)return null;
     const v={},spread={},coverage={};
-    for(const [k,a] of Object.entries(D.ch)) { const vals=Array.from(a.subarray(i,i1)).filter(finite); coverage[k]=vals.length/(i1-i); v[k]=(angle(D,k)?SL.cmean:SL.mean)(vals); if(['TWA','AWA'].includes(k))v[k]=SL.w180(v[k]); spread[k]=angle(D,k)?SL.sd(vals.map(x=>SL.w180(x-v[k]))):SL.sd(vals); }
+    for (const [key,channel] of Object.entries(D.ch)) {
+      const values = channel.subarray(i,i1), angular = angle(D,key);
+      const center = angular ? SL.cmean(values) : SL.mean(values);
+      v[key] = signedAngles.has(key) ? SL.w180(center) : center;
+      let count = 0, sumSquares = 0, sumOffset = 0;
+      for (const value of values) if (finite(value)) {
+        const offset = angular ? SL.w180(value-center) : value-center;
+        count++; sumSquares += offset*offset; sumOffset += offset;
+      }
+      coverage[key] = count / values.length;
+      const centeredSquares = angular && count ? sumSquares - sumOffset*sumOffset/count : sumSquares;
+      spread[key] = count>1 ? Math.sqrt(Math.max(0,centeredSquares)/(count-1)) : NaN;
+    }
+    if (finite(v.Cur_E) && finite(v.Cur_N)) {
+      v.CUR_RATE = Math.hypot(v.Cur_E,v.Cur_N);
+      v.CUR_DIR = SL.w360(Math.atan2(v.Cur_E,v.Cur_N)*180/Math.PI);
+    }
     const rc=D.L.race[i],lg=D.L.leg[i];
-    return {i,i1,t:r.start,mode:SL.phaseMode(D.mode,i,i1),tack:v.TWA>=0?'Stbd':'Port',sails:D.L.sailNames[D.L.sail[i]]||'-',race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:D.L.testing[i],v,spread,coverage};
+    return {i,i1,t:r.start,mode:SL.phaseMode(D.mode,i,i1) || 'Onbekend',tack:!finite(v.TWA)?'Onbekend':v.TWA>=0?'Stbd':'Port',
+      sails:D.L.sailNames[D.L.sail[i]]||'-',sailSlots:D.L.sailSlots?.[D.L.sailState?.[i]] || [],
+      race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:D.L.testing[i],v,spread,coverage};
   }
   function phaseBuild(D,build) {
     if(!build)return D; // Existing sessions retain their phases until explicitly regenerated.
     if(!build.generated) D.phases=[];
-    else if(Array.isArray(build.ranges)) D.phases=build.ranges.map(r=>windowPhase(D,r,2)).filter(p=>p && ['BSP','TWA','TWS'].every(k=>p.coverage[k]>=.95) && !Array.from(D.invalid.subarray(p.i,p.i1)).some(Boolean));
+    else if (Array.isArray(build.ranges)) {
+      const normalized = build.rules?.method === 'normalized';
+      D.phases = build.ranges.map(r=>windowPhase(D,r,2)).filter(p=>{
+        if (!p || D.invalid.subarray(p.i,p.i1).some(Boolean)) return false;
+        if (!normalized) return ['BSP','TWA','TWS'].every(k=>p.coverage[k]>=.95);
+        for (let i=p.i; i<p.i1; i++) if (!finite(D.ch.BSP[i]) && !finite(D.ch.SOG?.[i])) return false;
+        return true;
+      });
+    }
     return D;
   }
   const pairKey = (D,m) => m.type+':'+(D.raw.t0+m.i*1000);
   function defaultPair(D,m) { const t=D.raw.t0+m.i*1000; return {key:pairKey(D,m),anchor:t,type:m.type,before:{start:t-80000,end:t-30000},after:{start:t+40000,end:t+90000},approved:false,reason:''}; }
   function inspectPair(D,p,cfg=D.cfg) {
+    cfg = {...D.cfg,...cfg};
     const before=windowPhase(D,p.before),after=windowPhase(D,p.after),errors=[];
     if(!before||!after)errors.push('Beide vensters moeten minstens 5 seconden lang zijn en binnen het log liggen.');
     if(p.before?.end>p.anchor-5000||p.after?.start<p.anchor+5000)errors.push('Houd de vensters minimaal 5 seconden van de manoeuvre af.');
@@ -2321,7 +2394,7 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
     const reviewed=approvedPairs(D,s);
     const validationPairs=reviewed.filter(x=>x.pair.validation);
     const pairs=reviewed.filter(x=>!x.pair.validation&&independent(x.before)&&independent(x.after));
-    const stablePhases=SL.calibrationPhases(D,s.reviews).filter(independent);
+    const stablePhases=SL.calibrationPhases(D,s.reviews,s.phaseBuild?.quality).filter(independent);
     const windows=[...stablePhases,...pairs.flatMap(x=>[x.before,x.after])];
     return {phases:[...new Map(windows.map(w=>[w.i+':'+w.i1,w])).values()],stablePhases,pairs,validationPairs};
   }
@@ -2364,7 +2437,7 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
   function versionInput(s) { const {analysisVersions,reportItems,reportTrash,...input}=copy(s); return input; }
   function pendingCalibration(s) { return !!s.draft && JSON.stringify(s.draft)!==JSON.stringify(s.calib); }
   function validatePreparation(s,D) { if(!D)throw new Error('Importeer eerst een log.');if(!s.phaseBuild?.generated)throw new Error('Maak eerst fases met je gekozen criteria.');if(s.phaseBuild.sourceKey!==eventKey(s))throw new Error('De events of broninstellingen zijn gewijzigd. Maak de fases opnieuw.');if(pendingCalibration(s))throw new Error('Er staat een niet-toegepast kalibratievoorstel. Pas het toe of neem de actieve kalibratie over voordat je opslaat.');if(s.calibrationChanged)throw new Error('Splits de sessie eerst op een constante instrumentkalibratie.'); }
-  Object.assign(SL,{windPairEvidence,addTableResidual,phaseDefaults,phaseKeys,eventKey,preparationKey,sampleMatches,windowPhase,phaseBuild,pairKey,defaultPair,inspectPair,approvedPairs,calibrationReferences,versionInput,pendingCalibration,validatePreparation});
+  Object.assign(SL,{windPairEvidence,addTableResidual,phaseDefaults,phaseKeys,phaseBaseKeys,phaseMatchesQuality,eventKey,preparationKey,sampleMatches,windowPhase,phaseBuild,pairKey,defaultPair,inspectPair,approvedPairs,calibrationReferences,versionInput,pendingCalibration,validatePreparation});
 })();
 
 'use strict';
@@ -3845,7 +3918,19 @@ R.summary = () => {
 };
 const csvRow = a => a.map(x => /[",\n]/.test(String(x)) ? '"' + String(x).replace(/"/g, '""') + '"' : x).join(',');
 function legsCsv() { const sv = A.scope; A.scope = 'day'; const ks = varList(); A.scope = sv; return [csvRow(['Leg', 'Mode', 'Duration_s', 'Sails', 'Phases'].concat(ks))].concat(A.D.legs.map(l => csvRow([l.name, l.mode, l.dur, l.sails, l.n].concat(ks.map(k => fin(l.v[k]) ? +l.v[k].toFixed(3) : ''))))).join('\r\n'); }
-function phasesCsv(ps) { const ks = varList(); return [csvRow(['Start', 'Duration_s', 'Mode', 'Tack', 'Sails', 'RaceLeg'].concat(ks))].concat(ps.map(p => csvRow([p.i == null ? ptime(p) : dstr(p.t), p.i == null ? p.dur : p.i1 - p.i, p.mode, p.tack, p.sails, p.raceLeg].concat(ks.map(k => fin(p.v[k]) ? +p.v[k].toFixed(3) : ''))))).join('\r\n'); }
+function phasesCsv(ps) {
+  const keys = varList(), spreads = ps.some(p => p.spread) ? [
+    ['HDG', 'SD HDG (°)'], ['BSP', 'SD BSP (kn)'], ['TWA', 'SD TWA (°)'], ['TWS', 'SD TWS (kn)']
+  ] : [];
+  const number = value => fin(value) ? +value.toFixed(3) : '';
+  const rows = [['Start', 'Duration_s', 'Mode', 'Tack', 'Sails', 'RaceLeg', ...keys, ...spreads.map(([,label]) => label)]];
+  for (const p of ps) {
+    const start = p.i == null ? ptime(p) : dstr(p.t), duration = p.i == null ? p.dur : p.i1 - p.i;
+    rows.push([start, duration, p.mode, p.tack, p.sails, p.raceLeg,
+      ...keys.map(k => number(p.v[k])), ...spreads.map(([key]) => number(p.spread?.[key]))]);
+  }
+  return rows.map(csvRow).join('\r\n');
+}
 
 /* ---------------- Chart (map + replay + time series) ---------------- */
 R.chart = () => {
@@ -4124,8 +4209,14 @@ function seasonImport(text, name) {
 }
 function addDay() {
   if (!A.D) return; if (A.demo) { banner('This is the example data. Load your own log first.', true); return; }
-  const r = withScope('day', () => calAll(A.D.phases, A.D.magVar)), w = r.wind.err ? [] : r.wind.bins;
-  const rec = SL.dayRecord(A.D, meta(), { polar: A.files.polar || (A.D.polarSrc === 'log' ? 'Expedition targets' : A.D.polarSrc), files: A.files, calibration: A.calib, events: A.events, cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
+  const data = {...A.D, phases: A.D.phases.filter(WF.phaseMatches)};
+  const r = withScope('day', () => calAll(data.phases, data.magVar));
+  const rec = SL.dayRecord(data, meta(), { polar: A.files.polar || (data.polarSrc === 'log' ? 'Expedition targets' : data.polarSrc), files: A.files, calibration: A.calib, events: A.events, cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
+  const build = WF.session?.phaseBuild;
+  if (build?.rules?.method === 'normalized' || build?.quality) {
+    rec.recipe.phaseRules = SL.copy(build.rules || {});
+    rec.recipe.phaseQuality = SL.copy(build.quality || {});
+  }
   try { const res = SL.seasonMerge(A.S, [rec]); seasonChanged(); banner(`${rec.date}: ${res.same ? 'identical session already saved' : 'session added'} (${rec.phases.length} phases, ${rec.mans.length} manoeuvres).`); } catch (error) { banner(error.message, true); }
 }
 /* several days at once: logs, with the event file that belongs to each (matched on date) */
@@ -4202,7 +4293,7 @@ R.report = () => withScope('day', () => {
     sec(md + ' performance', 'perf' + md, s => blkPerf(s, md, 'Tack'));
     sec(md + ' XY graphs', 'xy' + md, s => { for (const x of ['abs_heel', 'absTWA', 'Rudder_norm']) if (D.ch[x]) blkXY(s, { x, y: 'VMG%', mode: md, by: 'Tack', h: 260, title: `VMG% vs ${x} (${md.toLowerCase()})` }); }); }
   if (!SL.chartEmpty(A.chart)) sec('Sail chart', 'sails', s => { const st = SL.chartStats(A.chart, D.phases.filter(p => SL.sailTokens(p.sails).length)), tot = st.on + st.off; s.append(h('p', {}, tot ? `${f1(st.on / tot * 100, 0)}% of the ${tot} phases on the chart were sailed with sails the chart allows there (${A.chart.name || 'sail chart'}).` : 'No phases fell in charted cells.')); if (st.rows.length) s.append(table(['TWS', 'TWA', 'Chart allows', 'Sails used', 'Phases', 'Used %', 'To chart %'], st.rows.slice(0, 12).map(r => [r.tws + ' kn', r.twa + '°', r.chart, r.used, r.n, f1(r.perf), f1(r.perfChart)]), 'num')); });
-  sec('Calibration', 'cal', s => { if (D.calibrated) s.append(h('p', { class: 'b' }, 'Calibration file applied: ' + (A.calib.name || 'unnamed') + '.')); blkCalModel(s, calAll(WF.session ? SL.calibrationPhases(D, WF.session.reviews) : phases(), D.magVar), { compact: true, logMagVar: D.logMagVar, mv: D.magVar }); if (!WF.session) blkCal(s, (A.cal && A.cal.off) || 0); });
+  sec('Calibration', 'cal', s => { if (D.calibrated) s.append(h('p', { class: 'b' }, 'Calibration file applied: ' + (A.calib.name || 'unnamed') + '.')); blkCalModel(s, calAll(WF.session ? SL.calibrationPhases(D, WF.session.reviews, WF.session.phaseBuild?.quality) : phases(), D.magVar), { compact: true, logMagVar: D.logMagVar, mv: D.magVar }); if (!WF.session) blkCal(s, (A.cal && A.cal.off) || 0); });
   sec('Model findings (upwind)', 'ml', s => blkML(s, 'Upwind', true));
 });
 
@@ -4539,10 +4630,10 @@ const WF = (() => {
     return SL.analyse(mapped, { cfg, skipPhases: s.phaseBuild && (!s.phaseBuild.generated || Array.isArray(s.phaseBuild.ranges)), turnEdits:s.turnEdits, phaseBuild:s.phaseBuild, phaseRules:s.phaseBuild?.rules, events: s.events, polar: s.polar ? SL.makePolar(s.polar.rows, s.polar.src || 'file') : null, calib,
       formulas: s.profile.formulas || [], originalChannels: raw.ch, invalidRanges: Object.values(s.reviews).filter(r => r.invalid) });
   }
-  function recompute() {
+  function recompute(processed) {
     if (!session || !A.raw) return true;
     try {
-      const s = snapshot(), next = process(s); A.D = next; A.cur = Math.max(next.i0, Math.min(next.i1 - 1, A.cur)); A.view ||= { z: 1, x: 0, y: 0 }; A.ml = {};
+      const next = processed || process(snapshot(false)); A.D = next; A.cur = Math.max(next.i0, Math.min(next.i1 - 1, A.cur)); A.view ||= { z: 1, x: 0, y: 0 }; A.ml = {};
       const keys = new Set(objects(next).map(x => x.key));
       session.staleReviews = Object.values(session.reviews).filter(r => r.kind !== 'interval' && !keys.has(SL.reviewKey(r))).length;
       banner(next.warn.join(' ')); touch(); return true;
@@ -4661,11 +4752,12 @@ const WF = (() => {
   function rangeIndices(range = session?.selections.analysis, D = A.D) {
     return range ? [Math.max(D.i0, Math.floor((range.start - D.raw.t0) / 1000)), Math.min(D.i1, Math.ceil((range.end - D.raw.t0) / 1000))] : [D.i0, D.i1];
   }
+  function phaseMatches(p) { return SL.phaseMatchesQuality(p,session?.phaseBuild?.quality); }
   function filteredPhases(ps, purpose = 'performance') {
     if (!session || season()) return ps;
     if (purpose === 'calibration') return SL.calibrationReferences(A.D,session).phases;
     const r = session.selections.analysis, {mode,...filters}=session.analysisFilter||{};
-    return ps.filter(p => (!mode||p.mode===mode) && SL.sampleMatches(A.D,p.i,filters) && SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
+    return ps.filter(p => phaseMatches(p) && (!mode||p.mode===mode) && SL.sampleMatches(A.D,p.i,filters) && SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
   }
   function objects(D = A.D) {
     if (!D) return [];
@@ -4841,14 +4933,22 @@ const WF = (() => {
   function review() {
     const c = pane('review'); if (!A.D) return;
     reviewMode = 'Fases';
-    const reviewVar = session.reviewVariable || 'VMG%', all = objects(), list = all.filter(x => x.kind === (reviewMode === 'Fases' ? 'phase' : 'manoeuvre'));
-    const detail = !session.selections.analysis&&list.find(x => x.key === selectedKey);
+    const reviewVar = session.reviewVariable || 'VMG%';
+    const candidates = objects().filter(x => x.kind === 'phase');
+    const list = candidates.filter(x => WF.phaseMatches(x.obj));
+    const numbers = new Map(candidates.map((x,i) => [x.key,i+1]));
+    if (selectedKey && candidates.some(x=>x.key===selectedKey) && !list.some(x=>x.key===selectedKey)) {
+      selectedKey=null;session.viewport=null;
+    }
+    const detail = !session.selections.analysis && list.find(x => x.key === selectedKey);
     function focusPhase(x){
       selectedKey=x.key;A.cur=x.obj.i;session.selections.analysis=null;
       session.deskMap={...session.deskMap,z:1,x:0,y:0};session.reviewPage=Math.floor(list.indexOf(x)/40);
       session.viewport=[Math.max(A.D.i0,x.obj.i-90),Math.min(A.D.i1,x.obj.i1+120)];
     }
-    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range,selectPhase:p=>{const x=list.find(x=>x.obj===p);if(x){focusPhase(x);show('review');}}});
+    const {side,toolbar}=PrepDesk.mount(c,'Fases',{phase:detail?.range,selectPhase:p=>{
+      const x=list.find(x=>x.obj===p);if(x){focusPhase(x);show('review');}
+    }});
     toolbar.append(btn('Manoeuvres →',()=>show('pairreview')));
     if (session.staleReviews) side.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
     const range = session.selections.analysis;
@@ -4863,15 +4963,47 @@ const WF = (() => {
           btn(r.invalid ? 'Meting weer geldig' : 'Meting ongeldig', () => { if (!reason.value.trim()) return banner('Geef aan waarom de meting ongeldig is.', true); setReview(item, { invalid: !r.invalid, calibration: false, reason: reason.value }); })),
         help('“Meting ongeldig” sluit dit tijdvak uit voor alle berekeningen. Alleen een slechte manoeuvre? Houd die in performance en sluit hem uit voor kalibratie.')));
     }
-    const visible = list;
-    const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(visible.length / 40) - 1)), shown = visible.slice(page * 40, (page + 1) * 40);
-    const approved = SL.calibrationPhases(A.D,session.reviews).length;
-    const rangeLabel = shown.length ? (page*40+1)+'–'+(page*40+shown.length)+' van '+visible.length : '0 fases';
-    side.append(card('Fasetabel', bar(h('strong', {id:'phase-page-count'}, rangeLabel), h('span', { class: 'chip' }, approved+' fases goedgekeurd voor kalibratie'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
-      btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
-      table(['Fase · tijd', 'Vaarmodus', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return ['F'+(A.D.phases.indexOf(x.obj)+1)+' · '+tstr(x.range.anchor || x.range.start), x.obj.mode, x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
-      !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
-      bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, rangeLabel), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
+    const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(list.length / 40) - 1));
+    const shown = list.slice(page * 40, (page + 1) * 40);
+    const rangeLabel = shown.length ? (page*40+1)+'–'+(page*40+shown.length)+' van '+list.length : '0 fases';
+    const approved = SL.calibrationPhases(A.D,session.reviews,session.phaseBuild?.quality).length;
+    const metricColumns = [
+      ['BSP (kn)','BSP',2],['SD HDG (°)','HDG',1,true],['SD BSP (kn)','BSP',2,true],
+      ['SD TWA (°)','TWA',1,true],['SD TWS (kn)','TWS',2,true],
+      ['BSP/polar (%)','BSPpol%',1],['VMG%','VMG%',1]
+    ];
+    if (!metricColumns.some(([,key,,spread])=>!spread&&key===reviewVar)) metricColumns.push([reviewVar,reviewVar,2]);
+    const rows=shown.map(x=>{
+      const p=x.obj,r=session.reviews[x.key];
+      const state=r?.invalid?'Ongeldig':r?.calibration?'Goedgekeurd':r?.reason?'Uitgesloten':'Te beoordelen';
+      const label='F'+numbers.get(x.key)+' · '+tstr(x.range.anchor || x.range.start);
+      const open=btn(label,()=>{focusPhase(x);show('review');},false,{class:'phase-open',title:'Bekijk '+label});
+      return [open,p.mode,p.tack,
+        ...metricColumns.map(([,key,decimals,spread])=>{
+          const value=spread?p.spread?.[key]:p.v?.[key];
+          if(!fin(value))return '—';
+          const coverage=p.coverage?.[key];
+          if(fin(coverage)&&coverage<.95)return h('span',{title:'Geldige metingen voor '+Math.round(coverage*100)+'% van deze fase.'},'—');
+          return f1(value,decimals);
+        }),state];
+    });
+    side.append(card('Fasetabel',
+      bar(h('strong',{id:'phase-match-count',role:'status'},list.length+' van '+candidates.length+' fases'),
+        h('span',{class:'chip'},approved+' fases goedgekeurd voor kalibratie')),
+      bar(field('Extra variabele',sel('review-variable',varList(),reviewVar,v=>{session.reviewVariable=v;show('review');})),
+        btn('Fases CSV',()=>dl('SailLens-fases.csv',phasesCsv(list.map(x=>x.obj))),false,{disabled:!list.length}),
+        btn('Getoonde selectie goedkeuren',()=>{
+          for(const x of shown){
+            const r=session.reviews[x.key];
+            if(!r?.invalid) session.reviews[x.key]={...x.range,...r,calibration:true,performance:r?.performance!==false,reason:r?.reason||'Handmatig goedgekeurd',updated:Date.now()};
+          }
+          touch();show('review');
+        },false,{disabled:!shown.length,title:'Keur de zichtbare fases op deze pagina goed voor kalibratie.'})),
+      rows.length?table(['Fase · tijd','Vaarmodus','Boeg',...metricColumns.map(([name])=>name),'Status'],rows,'phase-results'):null,
+      !list.length?help(candidates.length?'Geen fases voldoen aan deze filters. Verruim een grens of kies Filters wissen.':session.phaseBuild?.generated?'Geen fases binnen deze basisinstellingen. Controleer het tijdvak, de faseduur en de manoeuvremarges.':'Kies Fases maken om het log in vaste vensters te verdelen.'):null,
+      bar(btn('Vorige',()=>{session.reviewPage=Math.max(0,page-1);show('review');},false,{disabled:page===0}),
+        h('span',{id:'phase-page-count'},rangeLabel),
+        btn('Volgende',()=>{session.reviewPage=page+1;show('review');},false,{disabled:(page+1)*40>=list.length}))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));
     if (exclusions.length) side.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
 
@@ -5340,7 +5472,7 @@ const WF = (() => {
     if (library.lastSession) { try { const s = SL.validateSession(await db.get('session:' + library.lastSession)); adopt(s, process(s)); } catch (e) { banner('Laatste sessie kon niet worden geopend: ' + e.message, true); } }
     show('home'); loading = false; status(); await cloud.init();
   }
-  return { selectionBar, timePanel, notes, comparison, openVersion, open, create, init, resolve, afterShow, touch, persist, importFiles, filteredPhases, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
+  return { selectionBar, timePanel, notes, comparison, openVersion, open, create, init, resolve, afterShow, touch, persist, importFiles, filteredPhases, phaseMatches, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
 })();
 
 'use strict';
@@ -5379,109 +5511,162 @@ const STUDIO=(()=>{
  }
  const phaseFilterLabels={race:'Race',sail:'Zeil',mode:'Vaarmodus',tack:'Boeg'};
  function phaseSettings(rules){
-  const defaults=SL.phaseDefaults(A.cfg);
-  const settings={};
-  for(const k of SL.phaseKeys){
-   const value=Object.hasOwn(rules,k)?rules[k]:defaults[k];
-   if(value==null||value===''||!fin(+value))throw new Error('Vul voor elk detectiecriterium een getal in.');
-   settings[k]=+value;
+  const defaults=SL.phaseDefaults(A.cfg), settings={};
+  for(const key of SL.phaseBaseKeys){
+   const raw=rules[key] === undefined ? defaults[key] : rules[key];
+   const value=raw==null||raw==='' ? NaN : Number(raw);
+   if(!Number.isInteger(value) || value<(key==='phaseLen'?2:0))
+    throw new Error('Gebruik hele seconden: een faseduur van minstens 2 s en een tussenruimte en manoeuvretijden van minstens 0 s.');
+   settings[key]=value;
   }
-  if(settings.sdHdg<0)throw new Error('De maximale spreiding van de heading moet nul of hoger zijn.');
-   if(settings.upMargin<0||settings.upMargin>90)throw new Error('De upwindmarge moet tussen 0° en 90° liggen.');
+  const margin=rules.upMargin === undefined ? defaults.upMargin : rules.upMargin;
+  if(margin==null||margin===''||!fin(Number(margin))||margin<0||margin>90)
+   throw new Error('De upwindmarge moet tussen 0° en 90° liggen.');
+  settings.upMargin=Number(margin);
   return settings;
  }
  function phaseResult(rules){
   const settings=phaseSettings(rules),cfg={...A.cfg,...settings};
-  const r={...rules,...settings,range:null};
-  const choices=phaseChoices(A.D);
-  for(const [key,options] of Object.entries(choices)){
-   if(r[key]&&!options.includes(String(r[key])))throw new Error(phaseFilterLabels[key]+' “'+r[key]+'” komt niet meer voor. Kies een andere waarde of Alle.');
-  }
-  if(r.scope==='selection'){
+  const scope=rules.scope ?? (A.cfg.racingOnly?'racing':'all');
+  if(!['all','racing','training','selection'].includes(scope))throw new Error('Kies een geldig tijdvak.');
+  const r={method:'normalized',...settings,scope};
+  if(scope==='selection'){
    const range=S().selections.analysis||rules.range;
    if(!range||!fin(range.start)||!fin(range.end)||range.end<=range.start||range.start>=iT(A.D.i1)||range.end<=iT(A.D.i0))throw new Error('Selecteer eerst een tijdvak binnen de sessie op de kaart of tijdlijn.');
    r.range=SL.copy(range);
   }
-  const staged=WF.snapshot();staged.cfg=cfg;staged.phaseBuild={generated:true,rules:r};
+  const staged={...WF.snapshot(false),cfg,phaseBuild:{generated:true,rules:r}};
   return {D:WF.process(staged),cfg,rules:r};
  }
  function generate(rules,preview=false){
-  const result=phaseResult(rules),{D,cfg}=result;
+  const {D,cfg,rules:base}=phaseResult(rules);
   if(preview)return D.phases.length;
-  const build={generated:true,rules:result.rules,ranges:D.phases.map(p=>({start:p.t,end:iT(p.i1)})),diagnostics:D.phaseDiagnostics,at:Date.now()};
-  A.cfg=cfg;S().phaseBuild=build;build.sourceKey=SL.eventKey(WF.snapshot());S().phaseDraft=SL.copy(build.rules);S().selections.analysis=null;S().reviewPage=0;
-  WF.recompute();show('review');banner(A.D.phases.length+' fases gemaakt. Controleer de fasetabel en ga daarna naar de manoeuvreparen.');
+  const s=S(),build={generated:true,rules:base,ranges:D.phases.map(p=>({start:p.t,end:iT(p.i1)})),diagnostics:D.phaseDiagnostics,at:Date.now()};
+  if(s.phaseBuild?.quality)build.quality=SL.copy(s.phaseBuild.quality);
+  A.cfg=cfg;s.phaseBuild=build;build.sourceKey=SL.eventKey(WF.snapshot(false));s.phaseDraft=SL.copy(base);s.selections.analysis=null;s.reviewPage=0;
+  WF.recompute(D);show('review');
+  banner(D.phases.length+' basisfases gemaakt. Kies kwaliteitsfilters en beoordeel de fases die je voor kalibratie wilt gebruiken.');
+ }
+ function setPhaseQuality(filters){
+  const s=S(),build=s.phaseBuild;
+  if(!build?.generated)throw new Error('Maak eerst de basisfases.');
+  const quality={};
+  for(const key of ['race','sail','mode','tack']){
+   if(filters[key])quality[key]=String(filters[key]);
+  }
+  for(const key of ['sdHdg','sdBsp','sdTwa','sdTws','minBsp','polMin','polMax','vmgMin','vmgMax']){
+   const raw=filters[key];
+   if(raw==null||raw==='')continue;
+   const value=Number(raw);
+   if(!fin(value)||((key.startsWith('sd')||key==='minBsp')&&value<0))
+    throw new Error('Geef een geldig getal op. Een spreiding of minimumsnelheid moet nul of hoger zijn.');
+   quality[key]=value;
+  }
+  for(const [low,high,label] of [['polMin','polMax','Polar-BSP'],['vmgMin','vmgMax','VMG']]){
+   if(quality[low]>quality[high])throw new Error(label+': het minimum mag niet hoger zijn dan het maximum.');
+  }
+  if(Object.keys(quality).length)build.quality=quality;
+  else delete build.quality;
+  s.reviewPage=0;A.ml={};WF.touch();show('review');
  }
  const reasonLabels={
-  scope:'Selectie of motorgebruik',missing:'Ontbrekende metingen',speed:'BSP onder minimum',manoeuvre:'Tijd rond manoeuvre',
-  sail:'Zeilwissel',boundary:'Grens van boeg, race, rak, vaarmodus of training',stabilityBsp:'Spreiding BSP',stabilityTwa:'Spreiding TWA',stabilityTws:'Spreiding TWS',
-  stabilityHdg:'Spreiding heading',polar:'Buiten polargrenzen',angle:'Onder minimale windhoek'
+  scope:'Buiten het tijdvak of op de motor',missing:'Ontbrekende of ongeldige metingen',speed:'BSP onder minimum',manoeuvre:'Afstand tot manoeuvre',
+  sail:'Zeilwissel',boundary:'Overgang binnen het venster',stabilityBsp:'Spreiding BSP',stabilityTwa:'Spreiding TWA',
+  stabilityTws:'Spreiding TWS',stabilityHdg:'Spreiding HDG',polar:'Buiten polargrenzen',angle:'Onder minimale windhoek'
  };
  const rankedReasons=counts=>Object.entries(counts).filter(([,n])=>n>0).sort((a,b)=>b[1]-a[1])
-  .map(([key,n])=>[reasonLabels[key]||({masked:'Selectie, ontbrekende data, manoeuvre of wissel',stability:'Spreiding',target:'Polar- of hoekgrens'})[key]||key,n]);
+  .map(([key,n])=>[reasonLabels[key]||({masked:'Selectie, data of manoeuvre',stability:'Spreiding',target:'Polar- of hoekgrens'})[key]||key,n]);
  function phaseReport(D,diagnostics){
-  const phases=D.phases;
-  const seconds=phases.reduce((sum,p)=>sum+p.i1-p.i,0);
+  const phases=D.phases,seconds=phases.reduce((sum,p)=>sum+p.i1-p.i,0);
   const report=h('div',{class:'phase-report'},h('p',{},h('strong',{},phases.length+' fases'),' · '+dur(seconds)+' in fases'));
-  const byMode=SL.MODES.map(mode=>{
+  const modes=[...new Set([...SL.MODES,...phases.map(p=>p.mode)])];
+  const byMode=modes.map(mode=>{
    const group=phases.filter(p=>p.mode===mode);
    return [mode,group.filter(p=>p.tack==='Port').length,group.filter(p=>p.tack==='Stbd').length,group.length];
   });
-  const [,bb,sb,upwind]=byMode[0];
-  const upDetails=h('details',{},h('summary',{},'Upwind · '+upwind+' fases ('+bb+' BB, '+sb+' SB)'),table(['Vaarmodus','BB','SB','Totaal'],byMode));
-  report.append(upDetails);
-  if(!diagnostics)return report;
-  if(fin(diagnostics.upwindSailingSeconds)){
-   const starts=rankedReasons(diagnostics.upwindReasons||{});
-   upDetails.append(help(dur(diagnostics.upwindSailingSeconds)+' vaartijd met geldige upwindmetingen binnen de selectie, boven de ingestelde minimumsnelheid. Een fase vereist een volledig stabiel venster.'));
-   if(starts.length)upDetails.append(table(['Afwijsreden bij upwindstart','Kandidaatstarts'],starts),
-    help('Een upwindstart kan later in het venster afvallen, bijvoorbeeld door een manoeuvre. Kandidaatvensters kunnen elkaar overlappen.'));
+  const details=h('details',{},h('summary',{},'Fases per vaarmodus'),table(['Vaarmodus','BB','SB','Totaal'],byMode));
+  report.append(details);
+  if(diagnostics){
+   const counts=diagnostics.reasons||{masked:diagnostics.masked,stability:diagnostics.stability,target:diagnostics.target};
+   const reasons=rankedReasons(counts);
+   if(reasons.length)details.append(table(['Waarom een venster afviel','Kandidaatstarts'],reasons),
+    help('Per start telt de eerste afwijsreden. Kandidaatvensters kunnen overlappen.'));
   }
-  const counts=diagnostics.reasons||{masked:diagnostics.masked,stability:diagnostics.stability,target:diagnostics.target};
-  const ranked=rankedReasons(counts);
-  if(ranked.length)report.append(h('details',{},h('summary',{},'Meeste afwijzingen · '+ranked[0][0]+' ('+ranked[0][1]+')'),
-   table(['Afwijsreden','Kandidaatstarts'],ranked),help('Per kandidaatstart telt de eerste afwijsreden. De vensters overlappen.')));
   return report;
+ }
+ function qualityControls(D,s){
+  const applied=s.phaseBuild?.quality||{}, draft={...applied}, choices=phaseChoices(D);
+  for(const [key,property] of [['mode','mode'],['tack','tack']]){
+   choices[key]=[...new Set([...choices[key],...D.phases.map(p=>p[property]).filter(Boolean)])];
+  }
+  const active=Object.values(applied).filter(v=>v!=null&&v!=='').length;
+  const feedback=h('p',{id:'phase-quality-preview',class:'muted','aria-live':'polite'});
+  function preview(){
+   const n=D.phases.filter(p=>SL.phaseMatchesQuality(p,draft)).length;
+   feedback.textContent=n+' van '+D.phases.length+' fases voldoen aan deze filters.';
+  }
+  function update(k,value){
+   if(value===''||value==null)delete draft[k];
+   else draft[k]=value;
+   preview();
+  }
+  function numeric(k,label){
+   return field(label,h('input',{id:'phase-quality-'+k,type:'number',min:k.startsWith('vmg')?null:0,step:'any',placeholder:'Geen grens',value:applied[k]??'',
+    oninput:e=>update(k,e.target.value===''?null:e.target.valueAsNumber)}));
+  }
+  function category(k){
+   const value=String(applied[k]||''),extra=value&&!choices[k].includes(value);
+   const select=sel('phase-quality-'+k,['',...choices[k],...(extra?[value]:[])],value,v=>update(k,v));
+   select.options[0].textContent='Alle';
+   if(extra)select.selectedOptions[0].textContent=value+' (niet in log)';
+   return field(phaseFilterLabels[k],select);
+  }
+  const numericFields=[
+   ['sdHdg','Max. SD heading (°)'],['sdBsp','Max. SD BSP (kn)'],['sdTwa','Max. SD TWA (°)'],['sdTws','Max. SD TWS (kn)'],
+   ['polMin','Min. BSP/polar (%)'],['polMax','Max. BSP/polar (%)'],
+   ['vmgMin','Min. VMG%'],['vmgMax','Max. VMG%'],['minBsp','Min. gem. BSP (kn)']
+  ];
+  const form=h('form',{class:'phase-quality-form',onsubmit:e=>{
+   e.preventDefault();
+   try{setPhaseQuality(draft);}catch(err){feedback.textContent=err.message;}
+  }},help('SD is de standaardafwijking binnen één fase. Laat een veld leeg om alle waarden toe te laten.'),
+   h('div',{class:'form'},numericFields.map(([k,label])=>numeric(k,label)),Object.keys(phaseFilterLabels).map(category)),
+   help('Elk actief meetfilter vereist data voor minstens 95% van de fase. VMG% vergelijkt aan en voor de wind de VMG met de target-VMG. Op een reach gebruikt het BSP ten opzichte van de polar.'),
+   feedback,bar(h('button',{type:'submit',class:'primary'},'Filters toepassen'),button('Filters wissen',()=>setPhaseQuality({}))));
+  preview();
+  return h('details',{id:'phase-quality-filters',class:'phase-quality'},h('summary',{},'Kwaliteitsfilters'+(active?' · '+active+' actief':'')),form);
  }
  function phaseControls(){
   const s=S(),c=$('#t-review');if(!A.D)return;
   const rules=s.phaseDraft={...SL.phaseDefaults(A.cfg),scope:A.cfg.racingOnly?'racing':'all',...SL.copy(s.phaseDraft||s.phaseBuild?.rules||{})};
-  const choices=phaseChoices(A.D),feedback=h('div',{role:'status','aria-live':'polite',id:'phase-preview'});
+  const feedback=h('div',{role:'status','aria-live':'polite',id:'phase-preview'});
   const selectedRange=h('span',{class:'muted'}),limits=help('');
   function updateHints(){
    const range=s.selections.analysis||rules.range;
    selectedRange.hidden=rules.scope!=='selection';
    selectedRange.textContent=range?dstr(range.start)+' – '+dstr(range.end):'Trek een tijdvak in de tijdgrafiek.';
-   const margin=rules.upMargin;
    limits.textContent='De aandewindse doelhoek komt uit de polar of het log. Bij een ontbrekende doelhoek gebruikt SailLens 45°.'+
-    (fin(margin)&&margin>=0&&margin<=90?' Met deze marge ligt de grens dan bij '+Math.min(90,45+margin).toLocaleString('nl-NL')+'° absolute TWA.':'')+
-    ' Een seconde onder de doelhoek plus marge telt als Upwind. Korte schommelingen rond de grens mogen binnen een stabiele fase vallen. De fase krijgt de meest voorkomende vaarmodus. Onder gemiddeld 28° absolute TWA vervalt de fase.';
+    (fin(rules.upMargin)&&rules.upMargin>=0&&rules.upMargin<=90?' Met deze marge ligt de grens dan bij '+Math.min(90,45+rules.upMargin).toLocaleString('nl-NL')+'° absolute TWA.':'');
   }
-  function update(key,value){rules[key]=value;feedback.replaceChildren();updateHints();WF.touch();}
+  function update(k,v){rules[k]=v;feedback.replaceChildren();updateHints();WF.touch();}
   const num=(k,label,step=1)=>field(label,h('input',{id:'phase-'+k,type:'number',min:k==='phaseLen'?2:0,step,value:rules[k],oninput:e=>update(k,e.target.value===''?null:e.target.valueAsNumber)}));
-  function filter(key){
-   const value=String(rules[key]||''),options=choices[key],missing=value&&!options.includes(value);
-   const select=sel('phase-'+key,['',...options,...(missing?[value]:[])],value,v=>update(key,v));
-   select.options[0].textContent='Alle';
-   if(missing)select.selectedOptions[0].textContent=value+' (niet meer beschikbaar)';
-   return field(phaseFilterLabels[key],select);
-  }
   const scope=sel('phase-scope',['all','racing','training','selection'],rules.scope,v=>update('scope',v));
-  [...scope.options].forEach((o,i)=>o.textContent=['Hele sessie','Alleen races','Alleen training','Geselecteerd tijdvak'][i]);
+  [...scope.options].forEach((o,i)=>o.textContent=['Hele sessie','Alleen tijdens races','Alleen tijdens training','Geselecteerd tijdvak'][i]);
   updateHints();
   const attempt=fn=>()=>{try{fn();}catch(e){feedback.textContent=e.message;}};
-  const body=card(null,help('Maak fases met de gekozen criteria. Bij nieuwe fasegrenzen worden de bijbehorende beoordelingen opnieuw gevraagd.'),
-   bar(field('Tijdvakken',scope),selectedRange,...Object.keys(phaseFilterLabels).map(filter)),
-   h('div',{class:'form'},num('phaseLen','Faseduur (s)'),num('phaseGap','Tussenruimte (s)'),num('sdBsp','Max. spreiding BSP (kn)',.1),num('sdTwa','Max. spreiding TWA (°)',.5),num('sdTws','Max. spreiding TWS (kn)',.1),num('sdHdg','Max. spreiding heading (°)',.5),num('minBsp','Minimum BSP (kn)',.1),num('upMargin','Upwindmarge boven target-TWA (°)',.5),num('manBefore','Vrij vóór manoeuvre (s)'),num('manAfter','Vrij ná manoeuvre (s)'),num('polMin','Minimum polar %'),num('polMax','Maximum polar %')),
-   h('details',{},h('summary',{},'Upwindgrens en stabiliteit'),limits,help('Spreiding is de standaardafwijking binnen één fase.')),
+  const body=card(null,help('Maak vensters van gelijke duur. Kies daarna in de fasetabel welke fases aan je kwaliteitseisen voldoen.'),
+   bar(field('Tijdvak',scope),selectedRange),
+   h('div',{class:'form'},num('phaseLen','Faseduur (s)'),num('phaseGap','Tijd tussen fases (s)'),num('manBefore','Vrij vóór manoeuvre (s)'),num('manAfter','Vrij na manoeuvre (s)')),
+   h('details',{},h('summary',{},'Indeling upwind en reaching'),num('upMargin','Marge boven aandewindse doelhoek (°)',.5),limits),
    bar(button('Bekijk aantal',attempt(()=>{const {D}=phaseResult(rules);feedback.replaceChildren(phaseReport(D,D.phaseDiagnostics));})),
     button('Maak fases',attempt(()=>generate(rules)),true),
-    button('Criteria bewaren bij boot',attempt(()=>{const b=WF.library.boats.find(x=>x.id===s.boatId);b.cfg={...b.cfg,...phaseSettings(rules)};b.revision++;WF.touch();banner('Detectiecriteria opgeslagen als bootstandaard.');}))),feedback);
+    button('Criteria bewaren bij boot',attempt(()=>{const b=WF.library.boats.find(x=>x.id===s.boatId);b.cfg={...b.cfg,...phaseSettings(rules),racingOnly:rules.scope==='racing'};b.revision++;WF.touch();banner('Basisinstellingen bewaard bij deze boot.');}))),feedback);
   const toolbar=c.querySelector('.desk-side > .bar');
   toolbar.append(button('Fases maken',()=>PrepDesk.dialog('Fases maken',body),true));
-  if(s.phaseBuild?.generated){
-   toolbar.after(phaseReport(A.D,s.phaseBuild.diagnostics));
-   if(s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot()))toolbar.after(help('Events of broninstellingen gewijzigd. Maak de fases opnieuw.'));
+  if(s.phaseBuild?.generated||A.D.phases.length){
+   const report=phaseReport(A.D,s.phaseBuild?.diagnostics);
+   toolbar.after(report,s.phaseBuild?.generated?qualityControls(A.D,s):help('Kies Fases maken om kwaliteitsfilters op deze sessie toe te passen.'));
+   if(s.phaseBuild?.generated&&s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot(false)))toolbar.after(help('Events of broninstellingen gewijzigd. Maak de fases opnieuw.'));
   }
  }
  function pairs(){const c=pane('pairreview'),s=S(),D=A.D;if(!D)return;const type=s.pairType||'Alle';
@@ -5555,7 +5740,20 @@ const STUDIO=(()=>{
   try{restoreSettings(item);show(item.tab);const cards=[...$('#t-'+item.tab).querySelectorAll('[data-report-card]')];const section=cards.find(c=>c.querySelector('h3')?.textContent===item.title);if(!section)throw new Error('Dit onderdeel is veranderd of niet beschikbaar. Voeg het gewenste analyseonderdeel opnieuw toe.');const next=capture(section,item.tab,+section.dataset.reportCard),history=[...(item.history||[]),reportState(item)];Object.assign(item,next,{id:item.id,note:item.note,history});WF.touch();}
   finally{restoreSettings(saved,true);show('report');}
  }
- function readiness(c){const s=WF.snapshot(),pairs=SL.approvedPairs(A.D,s),pending=SL.pendingCalibration(s),generated=!!s.phaseBuild?.generated,stale=generated&&s.phaseBuild.sourceKey!==SL.eventKey(s);c.prepend(card('Klaar voor analyse?',table(['Controle','Status'],[['Fases',generated?(stale?'Indeling gewijzigd — genereer opnieuw':A.D.phases.length+' fases'):'Nog niet gegenereerd'],['Kalibratieparen',pairs.length+' bruikbare paren'],['Kalibratievoorstel',pending?'Nog niet toegepast':'Actieve correcties worden opgeslagen'],['Instrumentinstelling',s.calibrationChanged?'Sessies splitsen op instrumentinstelling':'Constante instelling']]),help('Niet iedere manoeuvre hoeft goedgekeurd te zijn. Alleen goedgekeurde referenties voeden de kalibratiemodellen; slechte uitvoering blijft in de performanceanalyse.'),pending?button('Actieve kalibratie overnemen',()=>{S().draft=SL.copy(A.calib);S().preview=false;WF.touch();show('cal');}):null));}
+ function readiness(c){
+  const s=WF.snapshot(false),pairs=SL.approvedPairs(A.D,s),pending=SL.pendingCalibration(s);
+  let phaseStatus='Nog niet gegenereerd';
+  if(s.phaseBuild?.generated){
+   phaseStatus=s.phaseBuild.quality ? A.D.phases.filter(WF.phaseMatches).length+' van '+A.D.phases.length+' fases voldoen aan de filters' : A.D.phases.length+' fases';
+   if(s.phaseBuild.sourceKey!==SL.eventKey(s))phaseStatus='Indeling gewijzigd — genereer opnieuw';
+  }
+  c.prepend(card('Klaar voor analyse?',table(['Controle','Status'],[
+   ['Fases',phaseStatus],['Kalibratieparen',pairs.length+' bruikbare paren'],
+   ['Kalibratievoorstel',pending?'Nog niet toegepast':'Actieve correcties worden opgeslagen'],
+   ['Instrumentinstelling',s.calibrationChanged?'Sessies splitsen op instrumentinstelling':'Constante instelling']
+  ]),help('Alleen goedgekeurde referenties voeden de kalibratiemodellen. Ook overgeslagen manoeuvres blijven beschikbaar in de performanceanalyse.'),
+   pending?button('Actieve kalibratie overnemen',()=>{S().draft=SL.copy(A.calib);S().preview=false;WF.touch();show('cal');}):null));
+ }
  function report(){const c=pane('report'),s=S();if(!s){c.append(help('Open eerst een sessie.'));return;}s.reportItems||=[];const report=h('article',{class:'report studio-report'}),title=h('input',{value:s.reportTitle||s.name+' · debrief','aria-label':'Reporttitel',oninput:e=>{s.reportTitle=e.target.value;report.querySelector('h1').textContent=s.reportTitle;WF.touch();}});
   c.append(bar(field('Reporttitel',title),button('Print / PDF',()=>window.print(),true),button('Download report HTML',()=>{const out=report.cloneNode(true);out.querySelectorAll('.noprint,button,input,textarea').forEach(n=>n.remove());const html='<!doctype html><meta charset="utf-8"><title>SailLens report</title><style>body{font:15px system-ui;max-width:1100px;margin:40px auto;padding:20px}img{max-width:100%}table{border-collapse:collapse;width:100%}td,th{padding:6px;border-bottom:1px solid #ddd;text-align:left}section{margin:30px 0;break-inside:avoid}.muted{color:#526274}</style>'+out.outerHTML;dl('SailLens-report.html',html);}),button('Verwijderd onderdeel herstellen',()=>{const item=s.reportTrash?.pop();if(item){s.reportItems.push(item);WF.touch();show('report');}},false,{disabled:!s.reportTrash?.length})),report);
   report.append(h('h1',{},s.reportTitle||s.name+' · debrief'),help(s.profile.name+' · '+s.reportItems.length+' geselecteerde onderdelen'),help('Grafieken en tabellen zijn vastgelegd bij toevoegen. Filters, tijdvak en sessieversie staan bij ieder onderdeel.'));
@@ -5571,7 +5769,7 @@ const STUDIO=(()=>{
   const setup=R.setup;R.setup=()=>{setup();const c=$('#t-setup'),time=[...c.querySelectorAll('.card')].find(n=>n.querySelector('h3')?.textContent==='Track & tijdreeks');if(time){const selection=c.querySelector('.wf-selection');c.insertBefore(time,c.children[1]);if(selection)c.insertBefore(selection,time);}};
   for(const [id]of modules){const render=R[id];R[id]=()=>{const full=A.D;if(!full)return;try{if(id!=='prestart')A.D=filteredD();render();}finally{A.D=full;}const c=$('#t-'+id);analysisHeader(c);reportButtons(c);};}
  }
- return {init,route,chrome,publish,generate,current,pairs,report,capture,refreshReport,restoreReport};
+ return {init,route,chrome,publish,generate,setPhaseQuality,current,pairs,report,capture,refreshReport,restoreReport};
 })();
 
 'use strict';
@@ -5888,7 +6086,7 @@ const PrepDesk = (() => {
       const review=s.reviews[SL.reviewKey(SL.objectRange(D,p,'phase'))];
       const state=review?.invalid?'excluded':review?.calibration?'approved':review?.reason||review?.performance===false?'excluded':'pending';
       return {i:p.i,i1:p.i1,index:index+1,obj:p,state,color:css(phaseStyles[state][1])};
-    }).filter(p=>p.i<hi&&p.i1>lo);
+    }).filter(p=>p.i<hi&&p.i1>lo&&WF.phaseMatches(p.obj));
     function phaseAt(i){
       let l=0,r=phases.length;
       while(l<r){const m=(l+r)>>1;if(phases[m].i<=i)l=m+1;else r=m;}

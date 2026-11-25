@@ -77,7 +77,7 @@ const PrepDesk = (() => {
       const review=s.reviews[SL.reviewKey(SL.objectRange(D,p,'phase'))];
       const state=review?.invalid?'excluded':review?.calibration?'approved':review?.reason||review?.performance===false?'excluded':'pending';
       return {i:p.i,i1:p.i1,index:index+1,obj:p,state,color:css(phaseStyles[state][1])};
-    }).filter(p=>p.i<hi&&p.i1>lo);
+    }).filter(p=>p.i<hi&&p.i1>lo&&WF.phaseMatches(p.obj));
     function phaseAt(i){
       let l=0,r=phases.length;
       while(l<r){const m=(l+r)>>1;if(phases[m].i<=i)l=m+1;else r=m;}

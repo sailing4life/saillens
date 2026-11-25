@@ -184,8 +184,14 @@ function seasonImport(text, name) {
 }
 function addDay() {
   if (!A.D) return; if (A.demo) { banner('This is the example data. Load your own log first.', true); return; }
-  const r = withScope('day', () => calAll(A.D.phases, A.D.magVar)), w = r.wind.err ? [] : r.wind.bins;
-  const rec = SL.dayRecord(A.D, meta(), { polar: A.files.polar || (A.D.polarSrc === 'log' ? 'Expedition targets' : A.D.polarSrc), files: A.files, calibration: A.calib, events: A.events, cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
+  const data = {...A.D, phases: A.D.phases.filter(WF.phaseMatches)};
+  const r = withScope('day', () => calAll(data.phases, data.magVar));
+  const rec = SL.dayRecord(data, meta(), { polar: A.files.polar || (data.polarSrc === 'log' ? 'Expedition targets' : data.polarSrc), files: A.files, calibration: A.calib, events: A.events, cal: { score: r.score, k: r.bsp.err ? null : r.bsp.k, delta: r.bsp.err ? null : r.bsp.delta, awa: r.awa.err ? null : r.awa.read } });
+  const build = WF.session?.phaseBuild;
+  if (build?.rules?.method === 'normalized' || build?.quality) {
+    rec.recipe.phaseRules = SL.copy(build.rules || {});
+    rec.recipe.phaseQuality = SL.copy(build.quality || {});
+  }
   try { const res = SL.seasonMerge(A.S, [rec]); seasonChanged(); banner(`${rec.date}: ${res.same ? 'identical session already saved' : 'session added'} (${rec.phases.length} phases, ${rec.mans.length} manoeuvres).`); } catch (error) { banner(error.message, true); }
 }
 /* several days at once: logs, with the event file that belongs to each (matched on date) */
@@ -262,7 +268,7 @@ R.report = () => withScope('day', () => {
     sec(md + ' performance', 'perf' + md, s => blkPerf(s, md, 'Tack'));
     sec(md + ' XY graphs', 'xy' + md, s => { for (const x of ['abs_heel', 'absTWA', 'Rudder_norm']) if (D.ch[x]) blkXY(s, { x, y: 'VMG%', mode: md, by: 'Tack', h: 260, title: `VMG% vs ${x} (${md.toLowerCase()})` }); }); }
   if (!SL.chartEmpty(A.chart)) sec('Sail chart', 'sails', s => { const st = SL.chartStats(A.chart, D.phases.filter(p => SL.sailTokens(p.sails).length)), tot = st.on + st.off; s.append(h('p', {}, tot ? `${f1(st.on / tot * 100, 0)}% of the ${tot} phases on the chart were sailed with sails the chart allows there (${A.chart.name || 'sail chart'}).` : 'No phases fell in charted cells.')); if (st.rows.length) s.append(table(['TWS', 'TWA', 'Chart allows', 'Sails used', 'Phases', 'Used %', 'To chart %'], st.rows.slice(0, 12).map(r => [r.tws + ' kn', r.twa + '°', r.chart, r.used, r.n, f1(r.perf), f1(r.perfChart)]), 'num')); });
-  sec('Calibration', 'cal', s => { if (D.calibrated) s.append(h('p', { class: 'b' }, 'Calibration file applied: ' + (A.calib.name || 'unnamed') + '.')); blkCalModel(s, calAll(WF.session ? SL.calibrationPhases(D, WF.session.reviews) : phases(), D.magVar), { compact: true, logMagVar: D.logMagVar, mv: D.magVar }); if (!WF.session) blkCal(s, (A.cal && A.cal.off) || 0); });
+  sec('Calibration', 'cal', s => { if (D.calibrated) s.append(h('p', { class: 'b' }, 'Calibration file applied: ' + (A.calib.name || 'unnamed') + '.')); blkCalModel(s, calAll(WF.session ? SL.calibrationPhases(D, WF.session.reviews, WF.session.phaseBuild?.quality) : phases(), D.magVar), { compact: true, logMagVar: D.logMagVar, mv: D.magVar }); if (!WF.session) blkCal(s, (A.cal && A.cal.off) || 0); });
   sec('Model findings (upwind)', 'ml', s => blkML(s, 'Upwind', true));
 });
 

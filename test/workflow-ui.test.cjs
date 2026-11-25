@@ -63,8 +63,7 @@ test('phase preview, saved counts and upwind breakdown match across pages and sc
   const total=await preview();assert.ok(total>80);
   const snapshotRows=()=>Array.from(a.$('#phase-preview table').tBodies[0].rows,r=>Array.from(r.cells,c=>c.textContent));
   const rows=snapshotRows();assert.equal(rows.length,4);assert.ok(Number(rows[0][3])>0);
-  assert.match(a.$('#phase-preview').textContent,/vaartijd met geldige upwindmetingen/);
-  assert.match(a.$('#phase-preview').textContent,/Afwijsreden bij upwindstart/);
+  assert.equal(a.$('dialog #phase-sdHdg'),null,'quality thresholds are applied to generated phases');
   assert.equal(rows.reduce((sum,r)=>sum+Number(r[3]),0),total);
   await a.click('Maak fases');assert.equal(a.run('A.D.phases.length'),total);
   assert.equal(a.$('#phase-page-count').textContent,'1–40 van '+total);
@@ -78,15 +77,15 @@ test('phase preview, saved counts and upwind breakdown match across pages and sc
   assert.deepEqual(rows,applied);
   // A first sample near a mode boundary can differ from the mode of its whole phase.
   assert.equal(a.run(`(()=>{const p=A.D.phases[0],old=WF.session.analysisFilter;WF.session.analysisFilter={mode:p.mode};const first=A.D.mode[p.i];A.D.mode[p.i]=(SL.MODES.indexOf(p.mode)+1)%SL.MODES.length;try{return WF.filteredPhases([p]).length}finally{A.D.mode[p.i]=first;WF.session.analysisFilter=old}})()`),1);
+  // A saved old sail criterion does not restrict the new base generator.
   a.run("A.cfg.racingOnly=true;WF.session.phaseDraft={...WF.session.phaseDraft,scope:'all',sail:'sail removed from events'};show('review')");
-  await a.click('Fases maken');assert.match(a.$('#phase-sail').selectedOptions[0].textContent,/niet meer beschikbaar/);
-  await a.click('Bekijk aantal');assert.match(a.$('#phase-preview').textContent,/komt niet meer voor/);
-  a.fill('#phase-sail','');assert.equal(await preview(),total);
+  await a.click('Fases maken');
+  assert.equal(await preview(),total);
   a.fill('#phase-scope','selection');a.run('WF.session.selections.analysis={start:A.raw.t0,end:A.raw.t0+900000}');
   a.fill('#phase-phaseLen','4');const short=await preview();assert.ok(short>0);
   await a.click('Maak fases');assert.equal(a.run('A.D.phases.length'),short);
   await a.click('Fases maken');assert.equal(await preview(),short);
-  assert.ok(a.$('#phase-preview').textContent.includes('Kandidaatstarts'));
+  assert.equal(a.run('WF.session.phaseBuild.ranges.every(r=>r.end-r.start===4000)'),true);
   assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
  }finally{a.close();}
 });
@@ -115,6 +114,45 @@ test('editable upwind margin classifies both tacks and old phase builds retain t
   assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });
+test('post-generation quality filters keep phase boundaries, approvals and the published release intact',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  a.run(`const n=240,series=fn=>Float64Array.from({length:n},(_,i)=>fn(i));
+    A.raw={n,t0:A.raw.t0,ch:{BSP:series(i=>i<120?6:5+2*(i%2)),TWS:series(()=>12),
+      TWA:series(i=>i<120?40:80),HDG:series(i=>i<120?(i%2?359:1):i%2?40:65)}};
+    A.events=null;A.polar=null;WF.recompute();show('review');`);
+  await a.click('Fases maken');
+  a.fill('#phase-phaseLen','30');a.fill('#phase-phaseGap','0');await a.click('Maak fases');
+  const ranges=a.run('JSON.stringify(WF.session.phaseBuild.ranges)');
+  assert.equal(a.run('A.D.phases.length'),8);
+  assert.equal(a.$('#phase-quality-sdBsp').value,'');
+  assert.equal(a.$('#phase-quality-polMin').value,'');
+  const filterCount=()=>a.$('#phase-match-count').textContent;
+  const apply=async()=>a.click('Filters toepassen');
+  assert.match(filterCount(),/8 van 8/);
+  a.fill('#phase-quality-sdBsp','0.5');a.fill('#phase-quality-sdHdg','2');await apply();
+  assert.match(filterCount(),/4 van 8/);
+  assert.equal(a.run('JSON.stringify(WF.session.phaseBuild.ranges)'),ranges);
+  await a.click('Getoonde selectie goedkeuren');
+  assert.equal(a.run('SL.calibrationReferences(A.D,WF.session).stablePhases.length'),4);
+  await a.run('STUDIO.publish()');
+  const published=a.run('JSON.stringify(WF.session.analysisVersions[0].input.phaseBuild)');
+  a.run("show('review')");a.fill('#phase-quality-polMin','90');await apply();
+  assert.match(filterCount(),/0 van 8/,'an active polar criterion cannot qualify missing targets');
+  assert.equal(a.run('SL.calibrationReferences(A.D,WF.session).stablePhases.length'),0);
+  await a.run('WF.persist()');
+  const b=await app(a.indexedDB);try{
+   b.run("show('review')");
+   assert.match(b.$('#phase-match-count').textContent,/0 van 8/);
+   await b.click('Filters wissen');assert.match(b.$('#phase-match-count').textContent,/8 van 8/);
+   assert.equal(b.run('SL.calibrationReferences(A.D,WF.session).stablePhases.length'),4);
+   assert.equal(b.run('JSON.stringify(WF.session.phaseBuild.ranges)'),ranges);
+   assert.equal(b.run('JSON.stringify(WF.session.analysisVersions[0].input.phaseBuild)'),published);
+   assert.deepEqual(b.errors,[]);
+  }finally{b.close();}
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});
 test('multi-file imports, duplicate detection, failed import rollback and project restore',async()=>{
  const a=await app();try{
   a.fill('#new-boat-name','Import boat');await a.click('Boot toevoegen');
@@ -132,7 +170,7 @@ test('multi-file imports, duplicate detection, failed import rollback and projec
 });
 test('invalid measurement can be restored after its generated phase disappears',async()=>{
  const a=await app();try{
-  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');a.run("show('review')");await a.click('Bekijk');a.fill('#review-reason','Sensor dropout');await a.click('Meting ongeldig');
+  await a.click('Bekijk voorbeeld');a.run('STUDIO.generate(SL.phaseDefaults(A.cfg))');a.run("show('review')");a.$('.phase-results .phase-open').click();a.fill('#review-reason','Sensor dropout');await a.click('Meting ongeldig');
   assert.ok(a.run('A.D.invalid.some(Boolean)'));assert.ok(a.$('#t-review').textContent.includes('Bewaarde uitsluitingen'));
   await a.click('Uitsluiting herstellen');assert.equal(a.run('A.D.invalid.some(Boolean)'),false);assert.equal(a.errors.length,0);
  }finally{a.close();}
@@ -162,8 +200,8 @@ test('explicit phases, pair review, immutable reports and new saved versions',as
   a.run("show('analysis')");assert.equal(a.run('A.tab'),'cal');
   a.run("show('events')");await a.click('+ Event');assert.ok(a.$('#event-time'));a.fill('#event-kind','MiscEvent');a.fill('#event-note','Controle moment');await a.click('Event toevoegen');
   assert.ok(a.run("A.events.events.some(e=>e.comments==='Controle moment')"));
-  a.run("STUDIO.generate({...SL.phaseDefaults(A.cfg),scope:'racing',race:'1'})");
-  assert.ok(a.run('A.D.phases.length')>0);assert.equal(a.run('A.D.phases.every(p=>p.race===1)'),true);
+  a.run("STUDIO.generate({...SL.phaseDefaults(A.cfg),scope:'racing'})");
+  assert.ok(a.run('A.D.phases.length')>0);assert.equal(a.run('A.D.phases.every(p=>p.race>0)'),true);
   const ranges=a.run('JSON.stringify(WF.session.phaseBuild.ranges)');
   a.run("show('pairreview')");assert.ok(a.$('#pair-before-start'));assert.ok(a.run('Object.keys(WF.session.manoeuvrePairs).length')>0);
   a.run("show('cal')");a.fill('#draft-bspK','1.02');await a.click('Voorstel toepassen');assert.equal(a.run('JSON.stringify(WF.session.phaseBuild.ranges)'),ranges);

@@ -53,10 +53,15 @@
   const allowed = (r, purpose) => !r?.invalid && (purpose === 'calibration' ? r?.calibration === true : r?.performance !== false);
   const overlap = (a, b) => a.start < b.end && a.end > b.start;
   const performanceAllowed = (range, reviews) => !Object.values(reviews).some(r => (r.invalid || r.performance === false) && overlap(range, r));
-  function calibrationPhases(D, reviews) {
+  function calibrationPhases(D, reviews, quality) {
     const ranges = Object.values(reviews).filter(r => r.kind === 'interval' && r.calibration && !r.invalid);
     const veto = Object.values(reviews).filter(r => r.invalid || (r.kind === 'interval' && r.calibration === false));
-    return D.phases.filter(p => { const range = objectRange(D, p, 'phase'), review = reviewed(D, p, 'phase', reviews); if (veto.some(r => overlap(range, r)) || review?.calibration === false || review?.invalid) return false; return allowed(review, 'calibration') || ranges.some(r => range.start >= r.start && range.end <= r.end); });
+    return D.phases.filter(p => {
+      if (quality && !SL.phaseMatchesQuality(p,quality)) return false;
+      const range = objectRange(D,p,'phase'), review = reviewed(D,p,'phase',reviews);
+      if (veto.some(r => overlap(range,r)) || review?.calibration === false || review?.invalid) return false;
+      return allowed(review,'calibration') || ranges.some(r => range.start >= r.start && range.end <= r.end);
+    });
   }
   function slowStats(D, reviews = {}, range = null, threshold = 95, filter = null) {
     const out = { valid: 0, target: 0, unknown: 0, slow: 0, manoeuvre: 0, straight: 0, invalid: 0, excluded: 0, slowRanges: [] }, man = new Uint8Array(D.n);

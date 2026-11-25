@@ -83,10 +83,10 @@ const WF = (() => {
     return SL.analyse(mapped, { cfg, skipPhases: s.phaseBuild && (!s.phaseBuild.generated || Array.isArray(s.phaseBuild.ranges)), turnEdits:s.turnEdits, phaseBuild:s.phaseBuild, phaseRules:s.phaseBuild?.rules, events: s.events, polar: s.polar ? SL.makePolar(s.polar.rows, s.polar.src || 'file') : null, calib,
       formulas: s.profile.formulas || [], originalChannels: raw.ch, invalidRanges: Object.values(s.reviews).filter(r => r.invalid) });
   }
-  function recompute() {
+  function recompute(processed) {
     if (!session || !A.raw) return true;
     try {
-      const s = snapshot(), next = process(s); A.D = next; A.cur = Math.max(next.i0, Math.min(next.i1 - 1, A.cur)); A.view ||= { z: 1, x: 0, y: 0 }; A.ml = {};
+      const next = processed || process(snapshot(false)); A.D = next; A.cur = Math.max(next.i0, Math.min(next.i1 - 1, A.cur)); A.view ||= { z: 1, x: 0, y: 0 }; A.ml = {};
       const keys = new Set(objects(next).map(x => x.key));
       session.staleReviews = Object.values(session.reviews).filter(r => r.kind !== 'interval' && !keys.has(SL.reviewKey(r))).length;
       banner(next.warn.join(' ')); touch(); return true;
@@ -205,11 +205,12 @@ const WF = (() => {
   function rangeIndices(range = session?.selections.analysis, D = A.D) {
     return range ? [Math.max(D.i0, Math.floor((range.start - D.raw.t0) / 1000)), Math.min(D.i1, Math.ceil((range.end - D.raw.t0) / 1000))] : [D.i0, D.i1];
   }
+  function phaseMatches(p) { return SL.phaseMatchesQuality(p,session?.phaseBuild?.quality); }
   function filteredPhases(ps, purpose = 'performance') {
     if (!session || season()) return ps;
     if (purpose === 'calibration') return SL.calibrationReferences(A.D,session).phases;
     const r = session.selections.analysis, {mode,...filters}=session.analysisFilter||{};
-    return ps.filter(p => (!mode||p.mode===mode) && SL.sampleMatches(A.D,p.i,filters) && SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
+    return ps.filter(p => phaseMatches(p) && (!mode||p.mode===mode) && SL.sampleMatches(A.D,p.i,filters) && SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
   }
   function objects(D = A.D) {
     if (!D) return [];
@@ -385,14 +386,22 @@ const WF = (() => {
   function review() {
     const c = pane('review'); if (!A.D) return;
     reviewMode = 'Fases';
-    const reviewVar = session.reviewVariable || 'VMG%', all = objects(), list = all.filter(x => x.kind === (reviewMode === 'Fases' ? 'phase' : 'manoeuvre'));
-    const detail = !session.selections.analysis&&list.find(x => x.key === selectedKey);
+    const reviewVar = session.reviewVariable || 'VMG%';
+    const candidates = objects().filter(x => x.kind === 'phase');
+    const list = candidates.filter(x => WF.phaseMatches(x.obj));
+    const numbers = new Map(candidates.map((x,i) => [x.key,i+1]));
+    if (selectedKey && candidates.some(x=>x.key===selectedKey) && !list.some(x=>x.key===selectedKey)) {
+      selectedKey=null;session.viewport=null;
+    }
+    const detail = !session.selections.analysis && list.find(x => x.key === selectedKey);
     function focusPhase(x){
       selectedKey=x.key;A.cur=x.obj.i;session.selections.analysis=null;
       session.deskMap={...session.deskMap,z:1,x:0,y:0};session.reviewPage=Math.floor(list.indexOf(x)/40);
       session.viewport=[Math.max(A.D.i0,x.obj.i-90),Math.min(A.D.i1,x.obj.i1+120)];
     }
-    const {side,toolbar}=PrepDesk.mount(c,'Fases · '+list.length,{phase:detail?.range,selectPhase:p=>{const x=list.find(x=>x.obj===p);if(x){focusPhase(x);show('review');}}});
+    const {side,toolbar}=PrepDesk.mount(c,'Fases',{phase:detail?.range,selectPhase:p=>{
+      const x=list.find(x=>x.obj===p);if(x){focusPhase(x);show('review');}
+    }});
     toolbar.append(btn('Manoeuvres →',()=>show('pairreview')));
     if (session.staleReviews) side.append(notice(`${session.staleReviews} eerdere beoordelingen hebben gewijzigde grenzen. Ze worden niet als kalibratiereferentie gebruikt; beoordeel de nieuwe fases opnieuw.`));
     const range = session.selections.analysis;
@@ -407,15 +416,47 @@ const WF = (() => {
           btn(r.invalid ? 'Meting weer geldig' : 'Meting ongeldig', () => { if (!reason.value.trim()) return banner('Geef aan waarom de meting ongeldig is.', true); setReview(item, { invalid: !r.invalid, calibration: false, reason: reason.value }); })),
         help('“Meting ongeldig” sluit dit tijdvak uit voor alle berekeningen. Alleen een slechte manoeuvre? Houd die in performance en sluit hem uit voor kalibratie.')));
     }
-    const visible = list;
-    const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(visible.length / 40) - 1)), shown = visible.slice(page * 40, (page + 1) * 40);
-    const approved = SL.calibrationPhases(A.D,session.reviews).length;
-    const rangeLabel = shown.length ? (page*40+1)+'–'+(page*40+shown.length)+' van '+visible.length : '0 fases';
-    side.append(card('Fasetabel', bar(h('strong', {id:'phase-page-count'}, rangeLabel), h('span', { class: 'chip' }, approved+' fases goedgekeurd voor kalibratie'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
-      btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
-      table(['Fase · tijd', 'Vaarmodus', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return ['F'+(A.D.phases.indexOf(x.obj)+1)+' · '+tstr(x.range.anchor || x.range.start), x.obj.mode, x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
-      !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
-      bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, rangeLabel), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
+    const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(list.length / 40) - 1));
+    const shown = list.slice(page * 40, (page + 1) * 40);
+    const rangeLabel = shown.length ? (page*40+1)+'–'+(page*40+shown.length)+' van '+list.length : '0 fases';
+    const approved = SL.calibrationPhases(A.D,session.reviews,session.phaseBuild?.quality).length;
+    const metricColumns = [
+      ['BSP (kn)','BSP',2],['SD HDG (°)','HDG',1,true],['SD BSP (kn)','BSP',2,true],
+      ['SD TWA (°)','TWA',1,true],['SD TWS (kn)','TWS',2,true],
+      ['BSP/polar (%)','BSPpol%',1],['VMG%','VMG%',1]
+    ];
+    if (!metricColumns.some(([,key,,spread])=>!spread&&key===reviewVar)) metricColumns.push([reviewVar,reviewVar,2]);
+    const rows=shown.map(x=>{
+      const p=x.obj,r=session.reviews[x.key];
+      const state=r?.invalid?'Ongeldig':r?.calibration?'Goedgekeurd':r?.reason?'Uitgesloten':'Te beoordelen';
+      const label='F'+numbers.get(x.key)+' · '+tstr(x.range.anchor || x.range.start);
+      const open=btn(label,()=>{focusPhase(x);show('review');},false,{class:'phase-open',title:'Bekijk '+label});
+      return [open,p.mode,p.tack,
+        ...metricColumns.map(([,key,decimals,spread])=>{
+          const value=spread?p.spread?.[key]:p.v?.[key];
+          if(!fin(value))return '—';
+          const coverage=p.coverage?.[key];
+          if(fin(coverage)&&coverage<.95)return h('span',{title:'Geldige metingen voor '+Math.round(coverage*100)+'% van deze fase.'},'—');
+          return f1(value,decimals);
+        }),state];
+    });
+    side.append(card('Fasetabel',
+      bar(h('strong',{id:'phase-match-count',role:'status'},list.length+' van '+candidates.length+' fases'),
+        h('span',{class:'chip'},approved+' fases goedgekeurd voor kalibratie')),
+      bar(field('Extra variabele',sel('review-variable',varList(),reviewVar,v=>{session.reviewVariable=v;show('review');})),
+        btn('Fases CSV',()=>dl('SailLens-fases.csv',phasesCsv(list.map(x=>x.obj))),false,{disabled:!list.length}),
+        btn('Getoonde selectie goedkeuren',()=>{
+          for(const x of shown){
+            const r=session.reviews[x.key];
+            if(!r?.invalid) session.reviews[x.key]={...x.range,...r,calibration:true,performance:r?.performance!==false,reason:r?.reason||'Handmatig goedgekeurd',updated:Date.now()};
+          }
+          touch();show('review');
+        },false,{disabled:!shown.length,title:'Keur de zichtbare fases op deze pagina goed voor kalibratie.'})),
+      rows.length?table(['Fase · tijd','Vaarmodus','Boeg',...metricColumns.map(([name])=>name),'Status'],rows,'phase-results'):null,
+      !list.length?help(candidates.length?'Geen fases voldoen aan deze filters. Verruim een grens of kies Filters wissen.':session.phaseBuild?.generated?'Geen fases binnen deze basisinstellingen. Controleer het tijdvak, de faseduur en de manoeuvremarges.':'Kies Fases maken om het log in vaste vensters te verdelen.'):null,
+      bar(btn('Vorige',()=>{session.reviewPage=Math.max(0,page-1);show('review');},false,{disabled:page===0}),
+        h('span',{id:'phase-page-count'},rangeLabel),
+        btn('Volgende',()=>{session.reviewPage=page+1;show('review');},false,{disabled:(page+1)*40>=list.length}))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));
     if (exclusions.length) side.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
 
@@ -884,5 +925,5 @@ const WF = (() => {
     if (library.lastSession) { try { const s = SL.validateSession(await db.get('session:' + library.lastSession)); adopt(s, process(s)); } catch (e) { banner('Laatste sessie kon niet worden geopend: ' + e.message, true); } }
     show('home'); loading = false; status(); await cloud.init();
   }
-  return { selectionBar, timePanel, notes, comparison, openVersion, open, create, init, resolve, afterShow, touch, persist, importFiles, filteredPhases, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
+  return { selectionBar, timePanel, notes, comparison, openVersion, open, create, init, resolve, afterShow, touch, persist, importFiles, filteredPhases, phaseMatches, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
 })();

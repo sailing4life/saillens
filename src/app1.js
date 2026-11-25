@@ -147,7 +147,19 @@ R.summary = () => {
 };
 const csvRow = a => a.map(x => /[",\n]/.test(String(x)) ? '"' + String(x).replace(/"/g, '""') + '"' : x).join(',');
 function legsCsv() { const sv = A.scope; A.scope = 'day'; const ks = varList(); A.scope = sv; return [csvRow(['Leg', 'Mode', 'Duration_s', 'Sails', 'Phases'].concat(ks))].concat(A.D.legs.map(l => csvRow([l.name, l.mode, l.dur, l.sails, l.n].concat(ks.map(k => fin(l.v[k]) ? +l.v[k].toFixed(3) : ''))))).join('\r\n'); }
-function phasesCsv(ps) { const ks = varList(); return [csvRow(['Start', 'Duration_s', 'Mode', 'Tack', 'Sails', 'RaceLeg'].concat(ks))].concat(ps.map(p => csvRow([p.i == null ? ptime(p) : dstr(p.t), p.i == null ? p.dur : p.i1 - p.i, p.mode, p.tack, p.sails, p.raceLeg].concat(ks.map(k => fin(p.v[k]) ? +p.v[k].toFixed(3) : ''))))).join('\r\n'); }
+function phasesCsv(ps) {
+  const keys = varList(), spreads = ps.some(p => p.spread) ? [
+    ['HDG', 'SD HDG (°)'], ['BSP', 'SD BSP (kn)'], ['TWA', 'SD TWA (°)'], ['TWS', 'SD TWS (kn)']
+  ] : [];
+  const number = value => fin(value) ? +value.toFixed(3) : '';
+  const rows = [['Start', 'Duration_s', 'Mode', 'Tack', 'Sails', 'RaceLeg', ...keys, ...spreads.map(([,label]) => label)]];
+  for (const p of ps) {
+    const start = p.i == null ? ptime(p) : dstr(p.t), duration = p.i == null ? p.dur : p.i1 - p.i;
+    rows.push([start, duration, p.mode, p.tack, p.sails, p.raceLeg,
+      ...keys.map(k => number(p.v[k])), ...spreads.map(([key]) => number(p.spread?.[key]))]);
+  }
+  return rows.map(csvRow).join('\r\n');
+}
 
 /* ---------------- Chart (map + replay + time series) ---------------- */
 R.chart = () => {

@@ -337,7 +337,7 @@ function process(raw, opt) {
     if (q.outOfOrder) warn.push(q.outOfOrder + ' out-of-order timestamps were placed in chronological order.');
     if (q.invalidValues) warn.push(q.invalidValues + ' non-numeric channel values were ignored.');
     if (q.aggregatedSamples) warn.push('Subsecond samples averaged into 1-second analysis bins. The workspace retains the original source files.');
-    if (['BSP', 'TWA', 'TWS', 'AWA', 'AWS'].some(k => q.channels[k] && q.channels[k].observed < n)) warn.push('Gaps present: values are held for at most ' + cfg.maxHold + ' seconds; longer gaps are excluded from phases. See import quality in Setup.');
+    if (['BSP', 'TWA', 'TWS', 'AWA', 'AWS'].some(k => q.channels[k] && q.channels[k].observed < n)) warn.push('Gaps present: values are held for at most ' + cfg.maxHold + ' seconds. Beyond that, the channel has no valid measurement. See import quality in Setup.');
   }
   if (raw.timeBasis === 'utc' && cfg.logOff) warn.push('The log contains UTC timestamps; the log UTC offset setting is ignored.');
   const invalid = new Uint8Array(n);
@@ -405,7 +405,8 @@ function process(raw, opt) {
   const aT = need('absTWA'), pol = need('Polar_BSP'), tT = need('Target_TWA'), tB = need('Target_BSP'), vmg = need('VMG'), bp = need('BSPpol%'), bt = need('BSP_trg%'), vp = need('VMG%'),
     dB = need('ΔBSP'), dT = need('ΔTWA'), dV = need('ΔVMG'), dVp = need('ΔVMG%');
   const tack = new Int8Array(n), mode = new Int8Array(n).fill(-1);
-  const confidentMode = opt.skipPhases ? null : new Int8Array(n).fill(-1);
+  const normalized = (opt.phaseRules || opt.phaseBuild?.rules)?.method === 'normalized';
+  const confidentMode = opt.skipPhases || normalized ? null : new Int8Array(n).fill(-1);
   if (ch.Heel) { const a = need('abs_heel'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Heel[i]); }
   if (ch.Rudder) { const a = need('abs_rudder'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Rudder[i]); }
   for (const k of ['Heel', 'Rudder', 'Leeway']) if (ch[k]) { const a = need(k + '_norm'); for (let i = 0; i < n; i++) a[i] = TWA[i] < 0 ? -ch[k][i] : ch[k][i]; }
@@ -417,18 +418,19 @@ function process(raw, opt) {
   for (let i = 0; i < n; i++) {
     const a = Math.abs(TWA[i]), w = TWS[i], b = BSP[i]; aT[i] = a; tack[i] = TWA[i] >= 0 ? 1 : -1;
     vmg[i] = Math.abs(b * Math.cos(a * D2R));
-    if (!fin(a) || !fin(w)) continue;
+    if (!fin(a) || (!fin(w) && !normalized)) continue;
     let ut, dt_, tt, tb, pb = NaN;
     /* targets follow a 3 s mean of TWS, which matches RaceReplay's percentages; polar speed uses the sample itself */
-    if (P) { const w3 = fin(TWS[i - 1]) && fin(TWS[i + 1]) ? (TWS[i - 1] + w + TWS[i + 1]) / 3 : w, u = P.up(w3), d = P.dn(w3); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
+    if (P && fin(w)) { const w3 = fin(TWS[i - 1]) && fin(TWS[i + 1]) ? (TWS[i - 1] + w + TWS[i + 1]) / 3 : w, u = P.up(w3), d = P.dn(w3); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
     else {
-      const angle = lTwa?.[i];
+      // A selected polar cannot supply targets without wind speed.
+      const angle = P ? NaN : lTwa?.[i];
       // VMG targets use angle magnitude; loggers can encode port as -42 or 318.
       tt = fin(angle) && angle >= -180 && angle <= 360 ? Math.abs(w180(angle)) : NaN;
-      tb = lBsp?.[i];
+      tb = P ? NaN : lBsp?.[i];
       if (!fin(tb) || tb <= 0) tb = NaN;
       if (fin(angle) && (!(tt > 0) || (tt < 90) !== (a < 90))) { tt = NaN; tb = NaN; }
-      pb = lPol?.[i];
+      pb = P ? NaN : lPol?.[i];
       if (!fin(pb) || pb <= 0) pb = NaN;
       ut = a < 90 && fin(tt) ? tt : 45;
       dt_ = a >= 90 && fin(tt) ? tt : 142;
@@ -488,7 +490,7 @@ function process(raw, opt) {
   for (const q of formulaDiagnostics) if (q.missing.length) warn.push(q.name + ': ontbrekende kanalen ' + q.missing.join(', '));
   const formulaAngles = new Set((opt.formulas || []).filter(d => d.type === 'angle').map(d => d.name));
   const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases:[], magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics, formulaAngles: [...formulaAngles] };
-  D.phaseDiagnostics = generatePhases(D,opt,confidentMode);
+  D.phaseDiagnostics = generatePhases(D,opt,confidentMode,normalized);
   if(opt.phaseBuild)SL.phaseBuild(D,opt.phaseBuild);
   D.legs = buildLegs(D); D.sum = summary(D);
   return D;
@@ -502,7 +504,7 @@ function phaseMode(mode, start, end) {
   return highest ? MODES[counts.indexOf(highest)] : undefined;
 }
 
-function generatePhases(D, opt, confidentMode) {
+function generatePhases(D, opt, confidentMode, normalized) {
   const {cfg,ch,L,i0,i1,n,mode,tack,raw} = D, length = cfg.phaseLen;
   const reasons = {scope:0,missing:0,speed:0,manoeuvre:0,sail:0,boundary:0,stabilityBsp:0,stabilityTwa:0,stabilityTws:0,stabilityHdg:0,polar:0,angle:0};
   const byMode = Object.fromEntries(MODES.map(name=>[name,0]));
@@ -511,23 +513,32 @@ function generatePhases(D, opt, confidentMode) {
   if (opt.skipPhases || i0+length>i1) return stats;
   const {BSP,TWA,TWS,HDG} = ch;
   const names = Object.keys(ch), angleNames = new Set(D.formulaAngles);
-  const rules = opt.phaseRules, sampleRules = rules ? {...rules,mode:''} : null;
+  const rules = opt.phaseRules || opt.phaseBuild?.rules;
+  // Category and quality choices belong to the review of the fixed windows.
+  const sampleRules = normalized ? {scope:rules.scope, range:rules.range} : rules ? {...rules,mode:''} : null;
   const mask = new Uint8Array(n), boundary = new Uint8Array(n), upwindStart = new Uint8Array(n);
   const maskNames = ['','scope','missing','speed','manoeuvre','sail'];
-  for (const m of D.mans) mask.fill(4,Math.max(i0,m.i-cfg.manBefore),Math.min(i1,m.i+cfg.manAfter));
+  for (const m of D.mans) {
+    mask.fill(4,Math.max(i0,m.i-cfg.manBefore),Math.min(i1,m.i+cfg.manAfter));
+    if (normalized) boundary[m.i] = 1;
+  }
   for (let i=i0+1; i<i1; i++) {
-    if (L.sailState && L.sailState[i] !== L.sailState[i-1]) mask.fill(5,Math.max(i0,i-20),Math.min(i1,i+30));
-    if (L.race[i]!==L.race[i-1] || L.leg[i]!==L.leg[i-1] || L.testing[i]!==L.testing[i-1] || tack[i]!==tack[i-1])
-      boundary[i] = 1; // half-open windows may start or end exactly here
+    const sailChanged = L.sailState && L.sailState[i] !== L.sailState[i-1];
+    if (sailChanged && !normalized) mask.fill(5,Math.max(i0,i-20),Math.min(i1,i+30));
+    if (L.race[i] !== L.race[i-1] || L.leg[i] !== L.leg[i-1] || L.testing[i] !== L.testing[i-1] ||
+        (normalized ? sailChanged : tack[i] !== tack[i-1])) boundary[i] = 1;
+    // Half-open windows may start or end exactly on a context boundary.
   }
   let established = -1, streak = 0;
   for (let i=i0; i<i1; i++) {
     if ((sampleRules && !SL.sampleMatches(D,i,sampleRules)) || (!rules?.scope && cfg.racingOnly && !L.race[i])) mask[i]=1;
-    else if (D.invalid[i] || !fin(BSP[i]) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i]<0) mask[i]=2;
-    else if (BSP[i]<cfg.minBsp) mask[i]=3;
+    else if (D.invalid[i] || (normalized ? !fin(BSP[i]) && !fin(ch.SOG?.[i]) :
+      !fin(BSP[i]) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i]<0)) mask[i]=2;
+    else if (!normalized && BSP[i]<cfg.minBsp) mask[i]=3;
     if (mode[i]===0 && mask[i]!==1 && mask[i]!==2 && mask[i]!==3 && !L.motor?.[i]) {
       upwindStart[i]=1; stats.upwindSailingSeconds++;
     }
+    if (normalized) continue;
     if (mask[i] || boundary[i]) { established=-1; streak=0; }
     // Confirm a change of sailing mode on five consecutive seconds at least 2° inside the new band.
     // Small TWA or target fluctuations at the threshold are handled by the window's own stability test.
@@ -557,6 +568,13 @@ function generatePhases(D, opt, confidentMode) {
     if (nextBoundary<end) {
       const count=Math.min(nextBoundary,lastStart+1)-i;
       reject('masked','boundary',i,count); i+=count; continue;
+    }
+    if (normalized) {
+      const phase = SL.windowPhase(D, {start:raw.t0+i*1000,end:raw.t0+end*1000}, 2);
+      D.phases.push(phase);
+      byMode[phase.mode] = (byMode[phase.mode] || 0) + 1;
+      stats.accepted++; stats.checkedWindowStarts++; i=end+cfg.phaseGap;
+      continue;
     }
     const windowMode = phaseMode(mode,i,end);
     if (rules?.mode && rules.mode!==windowMode) { reject('masked','scope',i); i++; continue; }
