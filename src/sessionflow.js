@@ -75,24 +75,24 @@
   function defaultPair(D,m) { const t=D.raw.t0+m.i*1000; return {key:pairKey(D,m),anchor:t,type:m.type,before:{start:t-80000,end:t-30000},after:{start:t+40000,end:t+90000},approved:false,reason:''}; }
   function inspectPair(D,p,cfg=D.cfg) {
     cfg = {...D.cfg,...cfg};
-    const before=windowPhase(D,p.before),after=windowPhase(D,p.after),errors=[];
+    const before=windowPhase(D,p.before),after=windowPhase(D,p.after),errors=[],warnings=[];
     if(!before||!after)errors.push('Beide vensters moeten minstens 5 seconden lang zijn en binnen het log liggen.');
     if(p.before?.end>p.anchor-5000||p.after?.start<p.anchor+5000)errors.push('Houd de vensters minimaal 5 seconden van de manoeuvre af.');
     if(!D.mans.some(m=>pairKey(D,m)===p.key))errors.push('Deze manoeuvre wordt niet meer herkend; beoordeel opnieuw.');
     for(const [label,w] of [['Vóór',before],['Na',after]])if(w){
-      for(const k of ['BSP','TWA','TWS'])if(w.coverage[k]<.95)errors.push(label+': onvoldoende geldige '+k+'-metingen.');
+      for(const k of ['BSP','TWA','TWS'])if(w.coverage[k]<.95)(w.coverage[k]>0?warnings:errors).push(label+': onvoldoende geldige '+k+'-metingen.');
       if(Array.from(D.invalid.subarray(w.i,w.i1)).some(Boolean))errors.push(label+': bevat ongeldig verklaarde data.');
-      if(w.v.BSP<(cfg.minBsp||2))errors.push(label+': te weinig bootsnelheid.');
-      for(const [k,limit]of [['BSP',cfg.sdBsp],['TWA',cfg.sdTwa],['TWS',cfg.sdTws],['HDG',cfg.sdHdg??10]])if(finite(w.spread[k])&&w.spread[k]>limit)errors.push(label+': '+k+' is niet stabiel genoeg.');
+      if(w.v.BSP<(cfg.minBsp||2))warnings.push(label+': te weinig bootsnelheid.');
+      for(const [k,limit]of [['BSP',cfg.sdBsp],['TWA',cfg.sdTwa],['TWS',cfg.sdTws],['HDG',cfg.sdHdg??10]])if(finite(w.spread[k])&&w.spread[k]>limit)warnings.push(label+': '+k+' is niet stabiel genoeg.');
       for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sailState?.[i]!==D.L.sailState?.[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
       if(D.mans.some(m=>m.i>=w.i&&m.i<w.i1))errors.push(label+': bevat nog een manoeuvre.');
     }
     if(before&&after){const anchorRace=D.L.race[Math.round((p.anchor-D.raw.t0)/1000)];
       if(before.race!==anchorRace||after.race!==anchorRace)errors.push('De vensters en het draaipunt moeten bij hetzelfde racetijdvak horen.');
       if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
-    return {before,after,errors,valid:!errors.length};
+    return {before,after,errors:[...errors,...warnings],usable:!errors.length,valid:!errors.length&&!warnings.length};
   }
-  function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
+  function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.usable && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
   function calibrationReferences(D,s){
     const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);
     const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);

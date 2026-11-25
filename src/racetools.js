@@ -87,7 +87,7 @@ const RaceTools = (() => {
     }
     if(check.before&&check.after)panel.append(table(['Δ |AWA|','Δ |TWA|','TWD-sprong na − vóór'],[pairMetrics(check.before,check.after).map(x=>f1(x,2)+'°')]));
     panel.append(action(pair.validation?'Vrijgeven voor model':'Apart houden voor controle',()=>{
-      if(!pair.validation&&!check.valid)return banner('Kies eerst twee bruikbare vensters.',true);
+      if(!pair.validation&&!check.usable)return banner('Kies eerst twee bruikbare vensters.',true);
       pair.validation=!pair.validation;pair.approved=pair.validation;pair.rejected=false;WF.touch();show('pairreview');
     }));
     nativePanel(panel,D,center);

@@ -2370,24 +2370,24 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
   function defaultPair(D,m) { const t=D.raw.t0+m.i*1000; return {key:pairKey(D,m),anchor:t,type:m.type,before:{start:t-80000,end:t-30000},after:{start:t+40000,end:t+90000},approved:false,reason:''}; }
   function inspectPair(D,p,cfg=D.cfg) {
     cfg = {...D.cfg,...cfg};
-    const before=windowPhase(D,p.before),after=windowPhase(D,p.after),errors=[];
+    const before=windowPhase(D,p.before),after=windowPhase(D,p.after),errors=[],warnings=[];
     if(!before||!after)errors.push('Beide vensters moeten minstens 5 seconden lang zijn en binnen het log liggen.');
     if(p.before?.end>p.anchor-5000||p.after?.start<p.anchor+5000)errors.push('Houd de vensters minimaal 5 seconden van de manoeuvre af.');
     if(!D.mans.some(m=>pairKey(D,m)===p.key))errors.push('Deze manoeuvre wordt niet meer herkend; beoordeel opnieuw.');
     for(const [label,w] of [['Vóór',before],['Na',after]])if(w){
-      for(const k of ['BSP','TWA','TWS'])if(w.coverage[k]<.95)errors.push(label+': onvoldoende geldige '+k+'-metingen.');
+      for(const k of ['BSP','TWA','TWS'])if(w.coverage[k]<.95)(w.coverage[k]>0?warnings:errors).push(label+': onvoldoende geldige '+k+'-metingen.');
       if(Array.from(D.invalid.subarray(w.i,w.i1)).some(Boolean))errors.push(label+': bevat ongeldig verklaarde data.');
-      if(w.v.BSP<(cfg.minBsp||2))errors.push(label+': te weinig bootsnelheid.');
-      for(const [k,limit]of [['BSP',cfg.sdBsp],['TWA',cfg.sdTwa],['TWS',cfg.sdTws],['HDG',cfg.sdHdg??10]])if(finite(w.spread[k])&&w.spread[k]>limit)errors.push(label+': '+k+' is niet stabiel genoeg.');
+      if(w.v.BSP<(cfg.minBsp||2))warnings.push(label+': te weinig bootsnelheid.');
+      for(const [k,limit]of [['BSP',cfg.sdBsp],['TWA',cfg.sdTwa],['TWS',cfg.sdTws],['HDG',cfg.sdHdg??10]])if(finite(w.spread[k])&&w.spread[k]>limit)warnings.push(label+': '+k+' is niet stabiel genoeg.');
       for(let i=w.i;i<w.i1;i++)if(D.tack[i]!==D.tack[w.i]||D.L.sailState?.[i]!==D.L.sailState?.[w.i]||D.L.race[i]!==D.L.race[w.i]||D.L.motor?.[i]){errors.push(label+': bevat een boeg-, zeil- of racewissel, of motorgebruik.');break;}
       if(D.mans.some(m=>m.i>=w.i&&m.i<w.i1))errors.push(label+': bevat nog een manoeuvre.');
     }
     if(before&&after){const anchorRace=D.L.race[Math.round((p.anchor-D.raw.t0)/1000)];
       if(before.race!==anchorRace||after.race!==anchorRace)errors.push('De vensters en het draaipunt moeten bij hetzelfde racetijdvak horen.');
       if(before.tack===after.tack)errors.push('De vensters moeten op tegengestelde boegen liggen.');if(before.sails!==after.sails||D.L.sailState?.[before.i]!==D.L.sailState?.[after.i])errors.push('Een zeilwissel tussen de vensters maakt dit paar ongeschikt.');}
-    return {before,after,errors,valid:!errors.length};
+    return {before,after,errors:[...errors,...warnings],usable:!errors.length,valid:!errors.length&&!warnings.length};
   }
-  function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.valid && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
+  function approvedPairs(D,s){return Object.values(s.manoeuvrePairs||{}).filter(p=>p.approved).map(p=>({...inspectPair(D,p,s.phaseBuild?.rules||D.cfg),pair:p})).filter(x=>x.usable && !Object.values(s.reviews||{}).some(r=>(r.invalid||(r.kind==='interval'&&r.calibration===false))&&[x.pair.before,x.pair.after].some(w=>w.start<r.end&&w.end>r.start)));}
   function calibrationReferences(D,s){
     const reserved=Object.values(s.manoeuvrePairs||{}).filter(p=>p.validation).flatMap(p=>[p.before,p.after]);
     const independent=w=>!reserved.some(r=>r.start<D.raw.t0+w.i1*1000&&r.end>w.t);
@@ -5701,7 +5701,7 @@ const STUDIO=(()=>{
   };
   const verdict=q=>q?.validation?'Controlepaar':q?.approved?'Goedgekeurd':q?.rejected||q?.reason?'Afgewezen'+(q.reason?' · '+q.reason:''):'Te beoordelen';
   const undo=()=>{const prev=s.lastPairDecision;Object.assign(s.manoeuvrePairs[prev.key],prev.previous);s.activePairKey=prev.key;delete s.lastPairDecision;const index=list.findIndex(x=>SL.pairKey(D,x)===prev.key);WF.touch();if(index>=0)go(index);else show('pairreview');};
-  side.append(bar(button(last?'Goedkeuren':'Goedkeuren & volgende',()=>decide(true),true,{disabled:!check.valid}),button(last?'Afwijzen':'Afwijzen & volgende',()=>decide(false)),button('Besluit herstellen',undo,false,{disabled:!s.lastPairDecision})));
+  side.append(bar(button(last?'Goedkeuren':'Goedkeuren & volgende',()=>decide(true),true),button(last?'Afwijzen':'Afwijzen & volgende',()=>decide(false)),button('Besluit herstellen',undo,false,{disabled:!s.lastPairDecision})));
   side.append(card(null,bar(button('Vorige manoeuvre',()=>go(idx-1),false,{disabled:idx===0}),button('Volgende manoeuvre',()=>go(idx+1),false,{disabled:idx===list.length-1}),button(s.pairCloseup?'Beide vensters':'Draaipunt ±30 s',()=>{s.pairCloseup=!s.pairCloseup;go(idx);}),h('b',{},verdict(pair))),help('Blauw is vóór de manoeuvre, groen is erna. Sleep een vensterrand om de selectie bij te stellen.')));
   const vmg=h('input',{type:'checkbox',id:'pair-vmg',checked:pair.vmgToVmg!==false,
     onchange:e=>{pair.vmgToVmg=e.target.checked;WF.touch();}});
@@ -5710,9 +5710,9 @@ const STUDIO=(()=>{
   const update=()=>{const next={...pair,before:{start:fromLocal(inputs['pair-before-start'].value),end:fromLocal(inputs['pair-before-end'].value)},after:{start:fromLocal(inputs['pair-after-start'].value),end:fromLocal(inputs['pair-after-end'].value)},approved:false,validation:false};if(!SL.windowPhase(D,next.before)||!SL.windowPhase(D,next.after))throw new Error('Kies twee geldige vensters van minimaal 5 seconden binnen het log.');s.manoeuvrePairs[key]=next;WF.touch();show('pairreview');};
   const setRange=side=>{if(!s.selections.analysis)throw new Error('Maak eerst een tijdselectie.');pair[side]=SL.copy(s.selections.analysis);pair.approved=false;pair.validation=false;WF.touch();show('pairreview');};
   side.append(card('Kalibratievensters',h('details',{},h('summary',{},'Tijden precies instellen'),form,bar(button('Vensters bijwerken',safe(update),true),button('Selectie als vóór',safe(()=>setRange('before'))),button('Selectie als na',safe(()=>setRange('after'))))),
-   check.valid?help('Beide vensters voldoen aan de ingestelde stabiliteit en datadekking. Controleer ook visueel of de omstandigheden vergelijkbaar zijn.'):h('ul',{class:'wf-notice'},check.errors.map(t=>h('li',{},t))),field('Reden / notitie',reason),button('Opnieuw beoordelen',()=>{Object.assign(pair,{approved:false,validation:false,rejected:false,reason:''});delete pair.reviewedAt;delete s.lastPairDecision;WF.touch();show('pairreview');},false,{disabled:!pair.approved&&!pair.rejected&&!pair.reason})),
+   !check.valid&&help(check.usable?'Je kunt dit paar ondanks de waarschuwing goedkeuren voor kalibratie.':'Je beoordeling blijft bewaard. Voor kalibratie moeten de vensters aan de onderstaande voorwaarden voldoen.'),check.valid?help('Beide vensters voldoen aan de ingestelde stabiliteit en datadekking. Controleer ook visueel of de omstandigheden vergelijkbaar zijn.'):h('ul',{class:'wf-notice'},check.errors.map(t=>h('li',{},t))),field('Reden / notitie',reason),button('Opnieuw beoordelen',()=>{Object.assign(pair,{approved:false,validation:false,rejected:false,reason:''});delete pair.reviewedAt;delete s.lastPairDecision;WF.touch();show('pairreview');},false,{disabled:!pair.approved&&!pair.rejected&&!pair.reason})),
    table(['Kanaal','Vóór ± σ','Na ± σ','Δ na − vóór'],['BSP','AWA','TWA','TWD','TWS','HDG','Heel'].filter(k=>D.ch[k]).map(k=>{const a=check.before,b=check.after,v=(a&&b)?((SL.ANG.test(k)||['TWA','AWA'].includes(k))?SL.w180(b.v[k]-a.v[k]):b.v[k]-a.v[k]):NaN;return [k,a?f1(a.v[k],2)+' ± '+f1(a.spread[k],2):'—',b?f1(b.v[k],2)+' ± '+f1(b.spread[k],2):'—',f1(v,2)];})),
-   extended,card('Voortgang',help(`${SL.approvedPairs(D,s).length} bruikbare goedgekeurde paren. Overslaan heeft geen invloed op de manoeuvre-performanceanalyse.`),table(['Tijd','Manoeuvre','Beoordeling',''],list.map((x,i)=>{const q=s.manoeuvrePairs[SL.pairKey(D,x)];return [tstr(iT(x.i)),x.type,q?.approved?(SL.inspectPair(D,q,s.phaseBuild?.rules||D.cfg).valid?(q.validation?'Controlepaar':'Goedgekeurd'):'Opnieuw beoordelen'):verdict(q),button('Open manoeuvre',()=>go(i))];}))));
+   extended,card('Voortgang',help(`${SL.approvedPairs(D,s).length} bruikbare goedgekeurde paren. Overslaan heeft geen invloed op de manoeuvre-performanceanalyse.`),table(['Tijd','Manoeuvre','Beoordeling',''],list.map((x,i)=>{const q=s.manoeuvrePairs[SL.pairKey(D,x)];return [tstr(iT(x.i)),x.type,verdict(q),button('Open manoeuvre',()=>go(i))];}))));
  }
  function daycharts(){const c=pane('daycharts');c.append(h('h1',{},'Day charts'),help('Kaart, tijdlijn en kanalen van de opgeslagen sessie. De gedeelde selectie en filters bepalen welke meetpunten zichtbaar zijn.'));WF.timePanel(c);const channels=S().dayChannels||(S().dayChannels=['BSP','TWA','TWD'].filter(k=>A.D.ch[k]));const D=A.D,[lo,hi]=WF.rangeIndices();
   for(let j=0;j<channels.length;j++){const k=channels[j],cv=h('canvas'),section=card('Tijdreeks · '+k,field('Kanaal '+(j+1),sel('day-channel-'+j,varList(),k,v=>{channels[j]=v;show('daycharts');})),cv);c.append(section);const a=D.ch[k],v=Array.from(a.subarray(lo,hi)).filter(fin),min=SL.quant(v,.01),max=SL.quant(v,.99);const p=plot(cv,{xr:[lo,hi],yr:fin(min)?[min-.2,max+.2]:[0,1],h:200,yl:k,xfmt:i=>tstr(iT(i)),xTickGap:110});const step=Math.max(1,Math.floor((hi-lo)/2000));p.line(Array.from({length:Math.ceil((hi-lo)/step)},(_,n)=>[lo+n*step,a[lo+n*step]]),SER(j));}
@@ -5861,7 +5861,7 @@ const RaceTools = (() => {
     }
     if(check.before&&check.after)panel.append(table(['Δ |AWA|','Δ |TWA|','TWD-sprong na − vóór'],[pairMetrics(check.before,check.after).map(x=>f1(x,2)+'°')]));
     panel.append(action(pair.validation?'Vrijgeven voor model':'Apart houden voor controle',()=>{
-      if(!pair.validation&&!check.valid)return banner('Kies eerst twee bruikbare vensters.',true);
+      if(!pair.validation&&!check.usable)return banner('Kies eerst twee bruikbare vensters.',true);
       pair.validation=!pair.validation;pair.approved=pair.validation;pair.rejected=false;WF.touch();show('pairreview');
     }));
     nativePanel(panel,D,center);
