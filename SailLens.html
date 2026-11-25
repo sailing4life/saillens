@@ -1400,6 +1400,16 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
         tx.onabort = tx.onerror = () => reject(tx.error || request.error || new Error('Browser storage read failed.'));
       }); },
       async set(key, value) { return this.setMany([[key, value]]); },
+      async getOrSet(key, initial) { const db = await open(); return new Promise((resolve, reject) => {
+        const tx = db.transaction('kv','readwrite'), store = tx.objectStore('kv'), read = store.get(key);
+        let result;
+        read.onsuccess = () => {
+          result = read.result;
+          if (result === undefined) { result = initial; store.put(initial,key); }
+        };
+        tx.oncomplete = () => resolve(result);
+        tx.onabort = tx.onerror = () => reject(tx.error || new Error('Browser storage write failed.'));
+      }); },
       async setMany(entries) { const db = await open(); return new Promise((resolve, reject) => {
         const tx = db.transaction('kv', 'readwrite');
         tx.oncomplete = () => resolve(true);
@@ -1413,6 +1423,643 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
     return value => { const result = tail.then(() => write(value)); tail = result.catch(() => {}); return result; };
   }
   Object.assign(SL, { createStore, serialWriter });
+})();
+
+'use strict';
+/* A session revision points to immutable chunks. Large logs and unchanged analysis
+   versions can therefore be shared between saves without uploading their bytes again. */
+(() => {
+  const CHUNK = 2 * 1024 * 1024, TEXT_PART = 1024 * 1024;
+  const MAX_TOTAL = 2 * 1024 * 1024 * 1024, MAX_META = 32 * 1024 * 1024;
+  const MAX_ARRAY_BYTES = 128 * 1024 * 1024, MAX_NODES = 1000000;
+  const types = {Float64Array, Float32Array, Uint32Array, Int32Array, Uint16Array, Int16Array, Uint8Array, Uint8ClampedArray, Int8Array};
+  const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
+  const invalid = () => new Error('Ongeldige online sessie.');
+  const compressedHashes = new Map();
+  const hashPattern = /^[0-9a-f]{64}$/;
+  const asText = () => new TextDecoder('utf-8', {fatal:true});
+  const hex = Array.from({length:256}, (_, i) => i.toString(16).padStart(2, '0'));
+  async function digest(bytes) {
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), n => hex[n]).join('');
+  }
+  function newCloudRemote() {
+    const token = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+      .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return {id:crypto.randomUUID(), token};
+  }
+  function checkRemote(remote) {
+    if (!remote || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(remote.id) ||
+        !/^[A-Za-z0-9_-]{43}$/.test(remote.token)) throw new Error('Ongeldige sessielink.');
+  }
+  async function request(remote, suffix, method = 'GET', content, blob = false) {
+    checkRemote(remote);
+    const url = '/api/sessions' + (suffix === null ? '' : '/' + remote.id + suffix);
+    const headers = {Authorization:'Bearer ' + remote.token};
+    let body;
+    if (content !== undefined) {
+      headers['Content-Type'] = blob ? 'application/octet-stream' : 'application/json';
+      body = blob ? content : JSON.stringify(content);
+    }
+    const response = await fetch(url, {method, headers, body, cache:'no-store', credentials:'omit', redirect:'error'});
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null);
+      const error = new Error(typeof detail?.error === 'string' ? detail.error : 'Online opslag gaf fout ' + response.status + '.');
+      error.status = response.status;
+      throw error;
+    }
+    return response;
+  }
+  function revision(value) {
+    if (!Number.isSafeInteger(value) || value < 0) throw invalid();
+    return value;
+  }
+  async function cloudCreate(remote) {
+    const r = await (await request(remote, null, 'POST', {id:remote.id})).json();
+    return {revision:revision(r.revision)};
+  }
+  async function cloudVersion(remote) {
+    const r = await request(remote, '', 'HEAD');
+    const value = r.headers.get('X-Session-Revision');
+    if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) throw invalid();
+    return {revision:revision(Number(value))};
+  }
+  const gzip = bytes => new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer()
+    .then(buf => new Uint8Array(buf));
+  async function pool(values, fn) {
+    let next = 0;
+    await Promise.all(Array.from({length:Math.min(6, values.length)}, async () => {
+      while (next < values.length) await fn(values[next++]);
+    }));
+  }
+  // Never memoise a mutable array by identity across saves. Memoising the result
+  // of compression by the uncompressed digest also works with IndexedDB clones.
+  async function makeChunks(payload) {
+    const encoder = new TextEncoder(), blobs = new Map(), texts = new Map(), arrays = new WeakMap();
+    let total = 0, nodes = 0;
+    function countBytes(size) {
+      total += size;
+      if (total > MAX_TOTAL) throw new Error('De sessie is te groot voor online opslag.');
+    }
+    async function chunk(getBytes, initial) {
+      const bytes = initial || getBytes(), size = bytes.byteLength;
+      if (size > CHUNK) throw invalid();
+      countBytes(size);
+      const hash = await digest(bytes);
+      let spec = compressedHashes.get(hash), available;
+      if (!spec) {
+        spec = [hash, size];
+        if (size >= 1024 && typeof CompressionStream === 'function' && typeof DecompressionStream === 'function') {
+          const compressed = await gzip(bytes);
+          if (compressed.byteLength + 32 < size) { available = compressed; spec = [await digest(compressed), size, 'gzip']; }
+        }
+        if (compressedHashes.size >= 8192) compressedHashes.delete(compressedHashes.keys().next().value);
+        compressedHashes.set(hash, spec);
+      }
+      if (!blobs.has(spec[0])) blobs.set(spec[0], async () => {
+        if (available) return available;
+        const raw = getBytes();
+        return spec[2] ? gzip(raw) : raw;
+      });
+      return spec;
+    }
+    async function binary(bytes) {
+      const parts = [];
+      for (let start = 0; start < bytes.length; start += CHUNK) parts.push(await chunk(() => bytes.subarray(start, start + CHUNK)));
+      return parts;
+    }
+    async function walk(value, depth) {
+      if (depth > 128 || ++nodes > MAX_NODES) throw invalid();
+      if (value === undefined) return {$sl:'undefined'};
+      if (typeof value === 'number' && (!Number.isFinite(value) || Object.is(value, -0))) return {$sl:'number', v:Object.is(value,-0) ? '-0' : String(value)};
+      if (typeof value === 'string' && value.length >= 4096) {
+        if (texts.has(value)) return texts.get(value);
+        // JSON strings preserve even a surrogate pair split across chunk boundaries.
+        async function part(start, end) {
+          const load = () => encoder.encode(JSON.stringify(value.slice(start, end)));
+          const bytes = load();
+          if (bytes.length <= CHUNK) return [await chunk(load, bytes)];
+          const mid = start + Math.floor((end - start) / 2);
+          return [...await part(start, mid), ...await part(mid, end)];
+        }
+        const starts = Array.from({length:Math.ceil(value.length / TEXT_PART)}, (_, i) => i * TEXT_PART);
+        const parts = new Array(starts.length);
+        await pool(starts, async start => { parts[start / TEXT_PART] = await part(start, Math.min(value.length, start + TEXT_PART)); });
+        const node = {$sl:'text', refs:parts.flat()}; texts.set(value, node); return node;
+      }
+      if (value === null || ['string','boolean','number'].includes(typeof value)) return value;
+      if (ArrayBuffer.isView(value)) {
+        const name = value.constructor.name;
+        if (!Object.hasOwn(types, name) || value.byteLength > MAX_ARRAY_BYTES) throw invalid();
+        if (arrays.has(value)) {
+          // Each restored typed array is independent and must fit the read budget.
+          countBytes(value.byteLength);
+          return arrays.get(value);
+        }
+        const refs = await binary(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+        const node = {$sl:'typed', name, refs}; arrays.set(value, node); return node;
+      }
+      if (Array.isArray(value)) {
+        const out = [];
+        for (const item of value) out.push(await walk(item, depth + 1));
+        return out;
+      }
+      if (typeof value !== 'object' || Object.prototype.toString.call(value) !== '[object Object]') throw invalid();
+      const obj = {};
+      for (const [key, item] of Object.entries(value)) {
+        if (forbidden.has(key)) throw invalid();
+        obj[key] = await walk(item, depth + 1);
+      }
+      return Object.hasOwn(obj, '$sl') ? {$sl:'object', entries:Object.entries(obj)} : obj;
+    }
+    const metadata = encoder.encode(JSON.stringify(await walk(payload, 0)));
+    if (metadata.length > MAX_META) throw new Error('De sessie bevat te veel metadata.');
+    return {manifest:{version:1, root:await binary(metadata)}, blobs};
+  }
+  async function cloudPush(remote, payload, baseRevision) {
+    revision(baseRevision);
+    const {manifest, blobs} = await makeChunks(payload);
+    const hashes = [...blobs.keys()], missing = [];
+    for (let start = 0; start < hashes.length; start += 200) {
+      const batch = hashes.slice(start, start + 200);
+      const reply = await (await request(remote, '/missing', 'POST', {hashes:batch})).json();
+      if (!Array.isArray(reply.missing) || reply.missing.some(h => !batch.includes(h))) throw invalid();
+      missing.push(...reply.missing);
+    }
+    await pool(missing, async hash => {
+      const data = await blobs.get(hash)();
+      await request(remote, '/blobs/' + hash, 'PUT', data, true);
+    });
+    const reply = await (await request(remote, '', 'PUT', {baseRevision, manifest, hashes})).json();
+    if (revision(reply.revision) !== baseRevision + 1) throw invalid();
+    return {revision:reply.revision};
+  }
+  function refsSize(refs, limit) {
+    if (!Array.isArray(refs) || refs.length > 65536) throw invalid();
+    let size = 0;
+    for (const ref of refs) {
+      if (!Array.isArray(ref) || (ref.length !== 2 && !(ref.length === 3 && ref[2] === 'gzip')) ||
+          typeof ref[0] !== 'string' || ref[0].length !== 64 || !hashPattern.test(ref[0]) || !Number.isSafeInteger(ref[1]) || ref[1] < 1 || ref[1] > CHUNK || (size += ref[1]) > limit) throw invalid();
+    }
+    return size;
+  }
+  async function unpack(remote, manifest) {
+    if (manifest?.version !== 1) throw invalid();
+    const metaSize = refsSize(manifest.root, MAX_META);
+    const cache = new Map(), waiting = [];
+    let active = 0;
+    async function readSlot(fn) {
+      if (active === 6) await new Promise(resolve => waiting.push(resolve));
+      else active++;
+      try { return await fn(); } finally {
+        if (waiting.length) waiting.shift()();
+        else active--;
+      }
+    }
+    async function read([hash, size, encoding]) {
+      const key = hash + '/' + size + '/' + (encoding || 'raw');
+      if (cache.has(key)) return cache.get(key);
+      const task = readSlot(async () => {
+        const r = await request(remote, '/blobs/' + hash);
+        if (Number(r.headers.get('Content-Length')) > CHUNK) throw invalid();
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        if (bytes.length > CHUNK || await digest(bytes) !== hash) throw new Error('Controle van de online sessiedata mislukt.');
+        if (!encoding) { if (size !== bytes.length) throw invalid(); return bytes; }
+        const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+        const out = new Uint8Array(size); let pos = 0;
+        while (true) {
+          const result = await reader.read(); if (result.done) break;
+          if (pos + result.value.length > size) { await reader.cancel(); throw invalid(); }
+          out.set(result.value, pos); pos += result.value.length;
+        }
+        if (pos !== size) throw invalid();
+        return out;
+      });
+      if (cache.size >= 16) cache.delete(cache.keys().next().value);
+      cache.set(key, task); return task;
+    }
+    async function join(refs, size) {
+      const bytes = new Uint8Array(size); let pos = 0;
+      for (const ref of refs) { bytes.set(await read(ref), pos); pos += ref[1]; }
+      return bytes;
+    }
+    const tree = JSON.parse(asText().decode(await join(manifest.root, metaSize)));
+    let total = metaSize, nodes = 0;
+    const tasks = [], textFields = new Map();
+    function walk(node, assign, depth) {
+      if (depth > 128 || ++nodes > MAX_NODES) throw invalid();
+      if (node === null || typeof node !== 'object') { assign(node); return; }
+      if (node.$sl === 'undefined') { assign(undefined); return; }
+      if (node.$sl === 'number') {
+        if (!['NaN','Infinity','-Infinity','-0'].includes(node.v)) throw invalid();
+        assign(Number(node.v)); return;
+      }
+      if (node.$sl === 'typed' || node.$sl === 'text') {
+        const typed = node.$sl === 'typed';
+        const size = refsSize(node.refs, typed ? MAX_ARRAY_BYTES : MAX_TOTAL);
+        if (typed) {
+          if ((total += size) > MAX_TOTAL) throw invalid();
+          if (typeof node.name !== 'string' || !Object.hasOwn(types, node.name) || size % types[node.name].BYTES_PER_ELEMENT) throw invalid();
+          tasks.push(async () => assign(new types[node.name]((await join(node.refs, size)).buffer)));
+        } else {
+          const key = JSON.stringify(node.refs);
+          if (textFields.has(key)) { textFields.get(key).push(assign); return; }
+          if ((total += size) > MAX_TOTAL) throw invalid();
+          const setters = [assign]; textFields.set(key, setters);
+          tasks.push(async () => {
+            const parts = new Array(node.refs.length);
+            await pool(node.refs.map((_, i) => i), async i => {
+              const part = JSON.parse(asText().decode(await read(node.refs[i])));
+              if (typeof part !== 'string') throw invalid();
+              parts[i] = part;
+            });
+            const value = parts.join('');
+            for (const set of setters) set(value);
+          });
+        }
+        return;
+      }
+      if (Array.isArray(node)) {
+        if (node.length > MAX_NODES - nodes) throw invalid();
+        const array = new Array(node.length); assign(array);
+        for (let i = 0; i < node.length; i++) walk(node[i], v => { array[i] = v; }, depth + 1);
+        return;
+      }
+      const object = {}, escaped = node.$sl === 'object';
+      assign(object);
+      function property(key, value) {
+        if (typeof key !== 'string' || forbidden.has(key) || Object.hasOwn(object, key)) throw invalid();
+        // Stable object order matters to saved analysis signatures even when a
+        // large property is populated asynchronously after its neighbours.
+        object[key] = undefined;
+        walk(value, v => { object[key] = v; }, depth + 1);
+      }
+      if (escaped) {
+        if (!Array.isArray(node.entries) || node.entries.length > MAX_NODES - nodes) throw invalid();
+        for (const pair of node.entries) {
+          if (!Array.isArray(pair) || pair.length !== 2) throw invalid();
+          property(pair[0], pair[1]);
+        }
+      } else {
+        if (Object.hasOwn(node, '$sl')) throw invalid();
+        for (const key of Object.keys(node)) property(key, node[key]);
+      }
+    }
+    let payload;
+    walk(tree, v => { payload = v; }, 0);
+    await pool(tasks, fn => fn());
+    return payload;
+  }
+  async function cloudPull(remote) {
+    const r = await (await request(remote, '')).json(), rev = revision(r.revision);
+    if (rev === 0 && r.manifest === null) return {revision:0, payload:null};
+    return {revision:rev, payload:await unpack(remote, r.manifest)};
+  }
+  Object.assign(SL, {newCloudRemote, cloudCreate, cloudVersion, cloudPush, cloudPull});
+})();
+
+'use strict';
+(() => {
+  const keyFor = id => 'cloud:session:' + id;
+  const sameRemote = (record, remote) => record?.remote.id === remote.id && record.remote.token === remote.token;
+  const linkPattern = /^#session=([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})\.([A-Za-z0-9_-]{43})$/;
+  function parseLink(value) {
+    const url = new URL(value.trim(), location.href);
+    const match = url.origin === location.origin && linkPattern.exec(url.hash);
+    if (!match) throw new Error('Gebruik een volledige privélink van deze SailLens-site.');
+    return {id: match[1], token: match[2]};
+  }
+  function shareLink(remote) {
+    const url = new URL(location.href);
+    url.search = ''; url.hash = 'session=' + remote.id + '.' + remote.token;
+    return url.href;
+  }
+  function createCloudSessions({db, currentId, editStamp, isDirty, flushLocal, readPayload, applyRemote, openLocal, localTime, notify}) {
+    const records = new Map(), reading = new Map(), jobs = new Map(), timers = new Map();
+    const lastEdit = new Map(), messages = new Map(), conflicts = new Set(), active = new Set(), retryDelays = new Map();
+    let previousId, initialized = false, dialog, joinField, retryInvite, openingLink = false;
+    const hosted = () => location.protocol === 'https:' || location.protocol === 'http:';
+    function binding(id) {
+      if (!id || records.has(id)) return Promise.resolve(records.get(id));
+      if (!reading.has(id)) reading.set(id, db.get(keyFor(id)).then(value => {
+        if (!records.has(id)) records.set(id,value || null);
+        return records.get(id);
+      }).finally(() => reading.delete(id)));
+      return reading.get(id);
+    }
+    function needsUpload(id, record) {
+      const stored = localTime?.(id);
+      // The laptop and the boat computer can have different clocks.
+      return !record.revision || (lastEdit.has(id) && lastEdit.get(id) !== record.syncedEdit) ||
+        (stored != null && stored !== record.syncedEdit);
+    }
+    function statusText(id) {
+      if (messages.has(id)) return messages.get(id);
+      const record = records.get(id);
+      if (!record) return id ? 'Opgeslagen op deze computer' : 'Open een bestaande online sessie via de privélink.';
+      return needsUpload(id,record) ? 'Wijzigingen wachten op synchronisatie' : 'Online bijgewerkt';
+    }
+    function status(id, message) {
+      if (message) messages.set(id, message); else messages.delete(id);
+      if (currentId() === id) render();
+    }
+    function enqueue(id, fn) {
+      const prev = jobs.get(id) || Promise.resolve();
+      const next = prev.catch(() => {}).then(() => globalThis.navigator?.locks ?
+        navigator.locks.request('saillens:cloud:' + id,fn) : fn());
+      jobs.set(id, next);
+      return next.finally(() => { if (jobs.get(id) === next) jobs.delete(id); });
+    }
+    async function saveRecord(id, record) {
+      await db.set(keyFor(id), record);
+      records.set(id, record);
+    }
+    function errorState(id, err) {
+      if (err.status === 409) {
+        conflicts.add(id);
+        status(id, 'De online sessie is elders gewijzigd. Je eigen versie staat op deze computer.');
+      } else if (err.status === 401 || err.status === 403 || err.status === 404) {
+        status(id, 'Geen toegang tot de online sessie. Controleer de privélink.');
+      } else {
+        status(id, 'Synchronisatie uitgesteld. ' + (err.message || 'Controleer je verbinding.'));
+        const record = records.get(id);
+        if (record && needsUpload(id,record) && (!err.status || err.status === 429 || err.status >= 500)) {
+          const delay = Math.min(60000, (retryDelays.get(id) || 2500) * 2);
+          retryDelays.set(id,delay); schedule(id,delay);
+        }
+      }
+    }
+    function schedule(id, delay = 1800) {
+      clearTimeout(timers.get(id));
+      timers.set(id, setTimeout(() => {
+        timers.delete(id);
+        runSync(id).catch(() => {});
+      }, delay));
+    }
+    function committed(id, updated) {
+      if (!id || !updated) return;
+      lastEdit.set(id, updated);
+      binding(id).then(record => {
+        if (!record || conflicts.has(id) || !needsUpload(id,record)) return;
+        if (!active.has(id)) status(id, 'Wijzigingen wachten op synchronisatie');
+        schedule(id);
+      }).catch(() => {});
+    }
+    async function upload(id, record) {
+      status(id, 'Sessie online opslaan…');
+      const payload = await readPayload(id);
+      if (payload?.session?.id !== id) throw new Error('De lokale sessie kan niet worden gelezen.');
+      // Retry creation with the same credential after a lost connection.
+      if (!record.revision) await SL.cloudCreate(record.remote);
+      const result = await SL.cloudPush(record.remote, payload, record.revision);
+      const next = {...record, revision:result.revision, syncedEdit:payload.session.updated};
+      await saveRecord(id,next);
+      retryDelays.delete(id);
+      if (lastEdit.get(id) === next.syncedEdit) lastEdit.delete(id);
+      conflicts.delete(id);
+      if (needsUpload(id,next)) schedule(id);
+      status(id);
+    }
+    function runSync(id) {
+      return enqueue(id, async () => {
+        const record = await binding(id);
+        if (!record || conflicts.has(id) || !needsUpload(id,record)) return;
+        active.add(id);
+        try { await upload(id,record); }
+        catch(err) { errorState(id,err); throw err; }
+        finally { active.delete(id); if (currentId() === id) render(); }
+      });
+    }
+    function guard() {
+      const id = currentId(), stamp = editStamp();
+      return () => currentId() === id && editStamp() === stamp && !isDirty();
+    }
+    async function receive(remote, result, preserveCopy, stillCurrent, expectedLocalId, openFromLink = false) {
+      const payload = result.payload, id = payload?.session?.id;
+      if (!id || (expectedLocalId && id !== expectedLocalId)) throw new Error('De link bevat geen geldige sessie.');
+      const known = [records.get(id), await db.get(keyFor(id))];
+      if (known.some(record => sameRemote(record,remote) && record.revision > result.revision))
+        throw new Error('Er is inmiddels een nieuwere versie van deze sessie. Haal de sessie opnieuw op.');
+      if (!stillCurrent()) throw new Error('De lokale sessie veranderde tijdens het ophalen. Probeer het opnieuw.');
+      const record = {remote, revision:result.revision, syncedEdit:payload.session.updated};
+      const ok = await applyRemote(payload, {preserveCopy, expectedLocalId, stillCurrent, openFromLink, metaEntry:[keyFor(id),record]});
+      if (ok === false) throw new Error('De lokale sessie veranderde tijdens het ophalen. Probeer het opnieuw.');
+      records.set(id,record); conflicts.delete(id); lastEdit.delete(id); status(id);
+    }
+    async function refresh(id = currentId(), explicit = false) {
+      if (!id || !hosted() || openingLink || (!explicit && document.hidden)) return;
+      if (explicit) await flushLocal();
+      if (currentId() !== id) return;
+      return enqueue(id, async () => {
+        const record = await binding(id);
+        if (!record || conflicts.has(id) || currentId() !== id || isDirty()) return;
+        const unchanged = guard();
+        // Draft forms live in the DOM until the user presses their save button.
+        const stillCurrent = () => unchanged() && (explicit || !(
+          document.activeElement?.matches('input, select, textarea, [contenteditable="true"]') ||
+          document.querySelector?.('dialog[open]:not([data-cloud-dialog])')));
+        active.add(id);
+        try {
+          if (needsUpload(id,record)) { await upload(id,record); return; }
+          const online = await SL.cloudVersion(record.remote);
+          if (!stillCurrent()) return;
+          if (online.revision > record.revision) {
+            status(id,'Wijzigingen ophalen…');
+            const result = await SL.cloudPull(record.remote);
+            if (!stillCurrent()) return;
+            await receive(record.remote,result,false,stillCurrent,id);
+          }
+          status(id);
+        } catch(err) { errorState(id,err); if (explicit) throw err; }
+        finally { active.delete(id); if (currentId() === id) render(); }
+      });
+    }
+    async function publish() {
+      const id = currentId();
+      if (!id) throw new Error('Open eerst een sessie op deze computer.');
+      await flushLocal();
+      await enqueue(id, async () => {
+        let record = await binding(id);
+        if (!record) {
+          // Two tabs can start sharing the same local session at the same time.
+          record = await db.getOrSet(keyFor(id), {remote:SL.newCloudRemote(), revision:0, syncedEdit:0});
+          records.set(id,record);
+          if (record.revision && needsUpload(id,record)) {
+            errorState(id,{status:409});
+            return;
+          }
+        }
+        active.add(id);
+        try { if (needsUpload(id,record)) await upload(id,record); }
+        catch(err) { errorState(id,err); throw err; }
+        finally { active.delete(id); render(); }
+      });
+    }
+    async function join(remote) {
+      if (openingLink) return;
+      openingLink = true; retryInvite = remote; render();
+      try {
+        await flushLocal();
+        const stillCurrent = guard();
+        let result = await SL.cloudPull(remote);
+        const id = result.payload?.session?.id;
+        if (!id) throw new Error('De eerste upload van deze sessie is nog niet klaar.');
+        await enqueue(id, async () => {
+          const old = await binding(id), same = sameRemote(old,remote);
+          const stored = await db.get(keyFor(id));
+          if ([old,stored].some(record => sameRemote(record,remote) && record.revision > result.revision)) {
+            // The session ID is known only after reading the invite. A queued
+            // local upload may have advanced the revision during that read.
+            result = await SL.cloudPull(remote);
+            if (result.payload?.session?.id !== id) throw new Error('De online sessie is gewijzigd. Open de privélink opnieuw.');
+          }
+          if (same && needsUpload(id,old)) {
+            if (!stillCurrent()) throw new Error('De lokale sessie veranderde tijdens het ophalen. Probeer het opnieuw.');
+            // Reopen the existing local copy even when another session was active.
+            if (openLocal) await openLocal(id);
+            if (old.revision !== result.revision) errorState(id,{status:409}); else schedule(id);
+            retryInvite = null; return;
+          }
+          await receive(remote,result,!!old && !same,stillCurrent,same ? id : null,true);
+          retryInvite = null;
+        });
+      } finally { openingLink = false; render(); }
+    }
+    async function resolveConflict() {
+      const id = currentId();
+      await flushLocal();
+      await enqueue(id, async () => {
+        const record = await binding(id);
+        if (!record || !conflicts.has(id) || currentId() !== id) return;
+        const stillCurrent = guard();
+        status(id,'Online versie ophalen…');
+        try {
+          const result = await SL.cloudPull(record.remote);
+          await receive(record.remote,result,true,stillCurrent,id);
+          notify?.('Online versie geopend. Je eigen versie staat als aparte lokale sessie bij Boten & sessies.');
+        } catch(err) { errorState(id,err); throw err; }
+      });
+    }
+    function el(tag, text, attrs = {}) {
+      const node = document.createElement(tag);
+      if (text) node.textContent = text;
+      for (const [key,value] of Object.entries(attrs)) node.setAttribute(key,value);
+      return node;
+    }
+    function button(label, action) {
+      const node = el('button',label,{type:'button'});
+      node.addEventListener('click', async () => {
+        if (node.disabled) return;
+        node.disabled = true;
+        if (dialog) {
+          dialog.querySelector('[data-cloud-error]').textContent = '';
+          dialog.querySelector('[data-cloud-feedback]').textContent = '';
+        }
+        try { await action(); }
+        catch(err) { if (dialog) dialog.querySelector('[data-cloud-error]').textContent = err.message; else notify?.(err.message,true); }
+        finally { node.disabled = false; render(); }
+      });
+      return node;
+    }
+    function mount(container) {
+      if (!container || container.querySelector(':scope > .sl-cloud-open')) return;
+      const openButton = el('button','Online sessie',{type:'button',class:'sl-cloud-open noprint'});
+      openButton.addEventListener('click', showDialog);
+      container.append(openButton);
+      render();
+    }
+    function showDialog() {
+      if (dialog?.isConnected) return;
+      const d = el('dialog', null, {class:'desk-dialog','data-cloud-dialog':'','aria-label':'Online sessie'});
+      dialog = d;
+      const head = el('div',null,{class:'bar'});
+      head.append(el('h3','Online sessie'),button('Sluiten',() => { d.remove(); dialog = null; }));
+      const message = el('p',null,{'data-cloud-status':'',role:'status','aria-live':'polite'});
+      const explain = el('p',null,{'data-cloud-help':'',class:'muted'});
+      const share = el('div',null,{'data-cloud-share':''});
+      const address = el('input',null,{type:'text',readonly:'','data-cloud-link':'','aria-label':'Privélink naar deze sessie',style:'width:100%'});
+      const shareLabel = el('label','Privélink naar deze sessie'); shareLabel.append(address);
+      const actions = el('div',null,{class:'bar'});
+      const copy = button('Privélink kopiëren', async () => {
+        try { await navigator.clipboard.writeText(address.value); d.querySelector('[data-cloud-feedback]').textContent = 'Privélink gekopieerd.'; }
+        catch { address.focus(); address.select(); d.querySelector('[data-cloud-feedback]').textContent = 'Kopieer de geselecteerde privélink.'; }
+      });
+      const sync = button('Nu synchroniseren',()=>refresh(currentId(),true)); sync.setAttribute('data-cloud-sync','');
+      const retry = button('Online versie ophalen en lokale kopie bewaren',resolveConflict); retry.setAttribute('data-cloud-resolve','');
+      actions.append(copy,sync); share.append(shareLabel,actions);
+      const start = button('Sessie online zetten',publish); start.setAttribute('data-cloud-publish','');
+      const repeat = button('Synchronisatie opnieuw proberen',()=>refresh(currentId(),true)); repeat.setAttribute('data-cloud-repeat','');
+      const open = el('section'), joinLabel = el('label','Privélink van een andere computer');
+      joinField = el('input',null,{type:'url',placeholder:'Plak hier de sessielink',autocomplete:'off',spellcheck:'false','data-cloud-join':'',style:'width:100%'});
+      joinLabel.append(joinField);
+      open.append(el('hr'),joinLabel,button('Open sessielink',async () => {
+        const remote = joinField.value.trim() ? parseLink(joinField.value) : retryInvite;
+        if (!remote) throw new Error('Plak eerst een sessielink.');
+        await join(remote);
+        joinField.value = '';
+      }));
+      d.append(head,message,explain,start,repeat,share,retry,el('span',null,{'data-cloud-feedback':'',role:'status'}),open,el('p',null,{'data-cloud-error':'',role:'alert'}));
+      // Typing a private link is not a change to the sailing session.
+      for (const event of ['input','change']) d.addEventListener(event,e=>e.stopPropagation());
+      d.addEventListener('close',()=>{ d.remove(); if (dialog === d) dialog = null; });
+      document.body.append(d);
+      if (typeof d.showModal === 'function') d.showModal(); else d.setAttribute('open','');
+      render();
+      binding(currentId()).then(render).catch(()=>{});
+    }
+    function render() {
+      const id = currentId(), record = records.get(id), online = record?.revision > 0;
+      const text = openingLink ? 'Online sessie ophalen…' : statusText(id);
+      document.querySelectorAll('.sl-cloud-open').forEach(node => {
+        node.textContent = record ? 'Online sessie · ' + (conflicts.has(id) ? 'conflict' : active.has(id) ? 'synchroniseren' : messages.has(id) || needsUpload(id,record) ? 'wacht' : 'bijgewerkt') : 'Online sessie';
+        node.title = text;
+      });
+      if (!dialog?.isConnected) return;
+      const q = name => dialog.querySelector('[data-cloud-' + name + ']');
+      q('status').textContent = text;
+      q('help').textContent = !hosted() ? 'Open de gehoste SailLens-app om een online sessie te gebruiken.' : record || id ? 'Je log, events, fases en kalibratie worden samen bewaard. Met de privélink kun je deze sessie op een andere computer openen en bewerken. Iedereen met deze link kan dit ook.' : 'Open de privélink op deze computer, of kies eerst een lokale sessie om die online te zetten.';
+      q('publish').hidden = !!record || !id || !hosted();
+      q('repeat').hidden = !record || online || conflicts.has(id);
+      q('share').hidden = !online;
+      q('link').value = online ? shareLink(record.remote) : '';
+      q('sync').hidden = conflicts.has(id);
+      q('resolve').hidden = !conflicts.has(id);
+    }
+    function sessionChanged() {
+      const id = currentId();
+      render();
+      if (!initialized || previousId === id) return;
+      previousId = id;
+      binding(id).then(record => { if (currentId() === id) { render(); if (record) refresh(id).catch(()=>{}); } }).catch(()=>{});
+    }
+    async function handleLink() {
+      if (!location.hash.startsWith('#session=')) return false;
+      const hash = location.hash;
+      history.replaceState(history.state,'',location.pathname + location.search);
+      try { await join(parseLink(hash)); }
+      catch(err) {
+        showDialog();
+        dialog.querySelector('[data-cloud-error]').textContent = err.message + (retryInvite ? ' Gebruik Open sessielink om opnieuw te proberen.' : '');
+      }
+      return true;
+    }
+    async function init() {
+      if (initialized) return;
+      initialized = true;
+      window.addEventListener('hashchange',()=>handleLink().catch(()=>{}));
+      const revisit = () => { refresh().catch(()=>{}); };
+      window.addEventListener('online',revisit);
+      window.addEventListener('focus',revisit);
+      document.addEventListener('visibilitychange',()=>{ if (!document.hidden) revisit(); });
+      window.setInterval(() => {
+        const id = currentId();
+        if (records.get(id) && !jobs.has(id) && !document.hidden && navigator.onLine !== false) revisit();
+      }, 30000);
+      if (!await handleLink()) sessionChanged();
+      else { previousId=currentId(); render(); }
+    }
+    return {mount, init, sessionChanged, committed, refresh, publish, join, resolveConflict};
+  }
+  SL.createCloudSessions = createCloudSessions;
 })();
 
 'use strict';
@@ -3104,7 +3751,7 @@ R.setup = () => {
   const dt = (k, lab, def) => field(lab, h('input', { type: 'datetime-local', id: 'cfg-' + k, step: 1, value: loc(cf[k] ?? def), onchange: e => { cf[k] = unl(e.target.value); } }));
   c.append(h('div', { class: 'cols' },
     card('Files',
-      h('p', { class: 'muted' }, 'Choose files or drop them anywhere on this page. Everything is processed in your browser; nothing is uploaded.'),
+      h('p', { class: 'muted' }, 'Choose files or drop them anywhere on this page. Online sessions also synchronize their source files.'),
       fileRow('Log file', 'log', 'Expedition log (.csv) or a CSV table with a time column', '.csv,.txt,.log'),
       fileRow('Event file', 'ev', 'RaceReplay / OnboardAssistant event file (.ev.xml), or build one on the Events tab', '.xml,.csv'),
       fileRow('Polar file', 'polar', 'Expedition polar (.txt). Without one, the targets logged by Expedition are used', '.txt,.pol,.csv'),
@@ -3819,6 +4466,38 @@ const WF = (() => {
   const help = text => h('p', { class: 'muted' }, text);
   const notice = text => h('div', { class: 'wf-notice', role: 'status' }, text);
   const safe = fn => async (...args) => { try { return await fn(...args); } catch (e) { banner(e.message, true); } };
+  let savedContent;
+  const cloud = SL.createCloudSessions({
+    db, currentId: () => session?.id, editStamp: () => revision, isDirty: () => dirty,
+    flushLocal: async () => { if (dirty) await persist(); },
+    localTime: id => library.sessions.find(s => s.id === id)?.updated,
+    async readPayload(id) {
+      const [stored, workspace] = await Promise.all([db.get('session:' + id), db.get('workspace')]);
+      if (!stored) throw new Error('Sessie ontbreekt op deze computer.');
+      const profile = workspace?.boats.find(b => b.id === stored.boatId) || stored.profile;
+      // Older project backups can lack the edit time and optional formulas.
+      stored.updated ??= stored.created || 0;
+      profile.formulas ??= [];
+      stored.profile.formulas ??= [];
+      return {app:'SailLens', type:'cloud-session', version:1, session:stored, boat:profile};
+    },
+    applyRemote: receiveSession, openLocal: open, notify: (text, bad) => banner(text, bad)
+  });
+  // View state is saved on each device. Moving the cursor or opening a tab
+  // should not advance a shared revision and conflict with an edit elsewhere.
+  const deviceView = ['tab','ui','cur','view','stage','viewport','viewportPairKey','deskMap',
+    'deskEvent','deskList','mapTiles','mapPhases','rawTrack','playSpeed','pairTraceMode',
+    'activePairKey','reviewPage','plotVariable'];
+  function contentKey(s, b) {
+    const {raw, sources, analysisVersions, updated, staleReviews, phaseDraft, ...data} = s;
+    for (const key of deviceView) delete data[key];
+    // Imported event IDs can be allocated lazily when opening the event editor.
+    const events = data.events || {meta:{boat:s.cfg.boat || ''}, evOff:s.cfg.evOff || 0, logOff:s.cfg.logOff || 0, events:[], sails:[]};
+    data.events = {...events, events:(events.events || []).map(({id, ...event}) => event), sails:events.sails || []};
+    const rules = {...SL.phaseDefaults(s.cfg),scope:s.cfg.racingOnly?'racing':'all',...(phaseDraft || s.phaseBuild?.rules)};
+    return JSON.stringify([b, data, rules, sources.map(({text, ...source}) => source),
+      (analysisVersions || []).map(({input, ...version}) => version)]);
+  }
   function snapshot(clone=true) {
     if (!session) return null;
     const s = { ...session, raw: A.raw, events: A.events, polar: A.polar ? { rows: A.polar.rows, src: A.polar.src } : null, chart: A.chart,
@@ -3835,16 +4514,23 @@ const WF = (() => {
     if (loading) return; revision++; dirty = true; saveMessage = 'Wijzigingen opslaan…'; status(); clearTimeout(timer);
     timer = setTimeout(() => persist().catch(() => {}), 500);
   }
-  async function persist() {
+  const persist = SL.serialWriter(async () => {
     clearTimeout(timer); const rev = revision, s = snapshot(), next = SL.copy(library);
+    const key = s && contentKey(s, boat());
+    const changed = !!s && key !== savedContent;
+    if (s) s.updated = changed ? Math.max(Date.now(), (session.updated || 0) + 1) : session.updated;
     if (s) { const item = SL.sessionSummary(s), i = next.sessions.findIndex(x => x.id === s.id); if (i >= 0) next.sessions[i] = item; else next.sessions.push(item); next.lastSession = s.id; }
     try {
       await write([['workspace', next], ...(s ? [['session:' + s.id, s]] : [])]);
+      if (s && session?.id === s.id) {
+        savedContent = key; session.updated = s.updated;
+      }
       // Newer edits may have arrived while this transaction was writing.
       if (rev === revision) { library.sessions = next.sessions; library.lastSession = next.lastSession; savedRevision = rev; dirty = false; saveMessage = 'Opgeslagen in deze browser'; A.evDirty = false; }
+      if (changed) cloud.committed(s.id, s.updated);
       status(); return true;
     } catch (e) { dirty = true; saveMessage = 'Niet opgeslagen — maak een projectbackup'; status(); banner('Opslaan mislukt: ' + e.message + '. Je kunt het project nog exporteren en opnieuw proberen.', true); throw e; }
-  }
+  });
   function process(s, calib = s.calib, raw = s.raw, cfg = s.cfg) {
     if (!raw) return null;
     const mapped = SL.mappedRaw(raw, s.profile.channels || []);
@@ -3874,18 +4560,73 @@ const WF = (() => {
         }
       }catch{ /* An unreadable signature still requires regeneration. */ }
     }
+    const switched = session?.id !== s.id;
     session = s;
     Object.assign(A, { raw: s.raw, events: s.events, polar: s.polar ? SL.makePolar(s.polar.rows, s.polar.src) : null, chart: s.chart || SL.newChart(), cfg: s.cfg,
       calib: s.calib, files: s.files, cur: s.cur || 0, view: s.view || { z: 1, x: 0, y: 0 }, D: D || null, demo: !!s.demo, scope: 'day', ml: {}, evDirty: false,
       filt: { sails: '', leg: '', tack: '', day: '' }, cst: undefined, xst: undefined, st: undefined, fst: undefined, mnst: undefined, rst: undefined, est: undefined, pol: undefined });
     for (const k of ['filt', 'cst', 'xst', 'st', 'fst', 'mnst', 'rst', 'est', 'pol']) if (s.ui?.[k]) A[k] = s.ui[k];
     analysisMode = s.ui?.analysisMode || 'Overzicht'; reviewMode = s.ui?.reviewMode || 'Fases'; mobileView = s.ui?.mobileView || 'Beide'; selectedKey = s.ui?.selectedKey || null;
+    if (switched) savedContent = contentKey(snapshot(false), boat());
+  }
+  async function receiveSession(payload, {preserveCopy, expectedLocalId, stillCurrent, openFromLink, metaEntry}) {
+    if (payload?.type !== 'cloud-session' || payload.app !== 'SailLens' || payload.version !== 1)
+      throw new Error('Deze link bevat geen ondersteunde SailLens-sessie.');
+    const incoming = SL.validateSession(payload.session), b = payload.boat;
+    if (!b || !b.name || b.id !== incoming.boatId || incoming.profile.id !== b.id ||
+        !Array.isArray(b.formulas) || !Number.isFinite(incoming.updated) ||
+        (expectedLocalId && incoming.id !== expectedLocalId)) throw new Error('Ongeldige online sessie of boot.');
+    SL.compileFormulas(b.formulas);
+    const data = process(incoming), existing = await db.get('session:' + incoming.id);
+    if (!stillCurrent()) return false;
+    if (existing && expectedLocalId) {
+      // Keep the map position, time cursor and open tab on this computer.
+      for (const key of deviceView) {
+        if (Object.hasOwn(existing,key)) incoming[key] = existing[key];
+        else delete incoming[key];
+      }
+      if (data) incoming.cur = Math.max(data.i0,Math.min(data.i1 - 1,incoming.cur || 0));
+    }
+    const next = SL.copy(library), entries = [], index = next.boats.findIndex(row => row.id === b.id);
+    if (index < 0) next.boats.push(b);
+    else {
+      const local = next.boats[index], versionDifference = (b.revision || 0) - (local.revision || 0);
+      // Appending log data may update the boat's polar or sails within its current profile revision.
+      if (versionDifference > 0 || (versionDifference === 0 &&
+          ((b.updated || 0) > (local.updated || 0) || (expectedLocalId && b.updated === local.updated)))) next.boats[index] = b;
+    }
+    if (existing && (preserveCopy || !expectedLocalId)) {
+      const fork = {...existing, id:SL.uid(), name:existing.name + ' (lokale kopie)'};
+      for (const v of fork.analysisVersions || []) v.input.id = fork.id;
+      next.sessions.push(SL.sessionSummary(fork));
+      entries.push(['session:' + fork.id, fork]);
+    }
+    next.sessions = next.sessions.filter(row => row.id !== incoming.id);
+    next.sessions.push(SL.sessionSummary(incoming)); next.lastSession = incoming.id;
+    entries.push(['workspace',next], ['session:' + incoming.id,incoming], metaEntry);
+    // Enqueue the local session and its matching remote revision atomically.
+    // Keep the UI stable until the transaction commits.
+    const main = $('#panes'), nav = $('#nav'), toolbar = $('.topbar'), flow = $('#wf-flow');
+    const panels = [main,nav,toolbar,flow,...document.querySelectorAll('dialog[open]:not([data-cloud-dialog])')].filter(Boolean);
+    panels.forEach(el => el.inert = true);
+    try {
+      await write(entries);
+      const stayOnTab = expectedLocalId && session?.id === incoming.id &&
+        !(openFromLink && ['home','boat','season'].includes(A.tab));
+      const target = stayOnTab ? A.tab : incoming.tab;
+      library = next; loading = true;
+      adopt(incoming,data); savedContent = contentKey(snapshot(false),boat());
+      dirty = false; saveMessage = 'Opgeslagen in deze browser';
+      show(target && Object.hasOwn(R,target) ? target : 'setup');
+    } finally { loading = false; panels.forEach(el => el.inert = false); }
+    return true;
   }
   async function open(id) {
     if (dirty) await persist();
     const s = SL.validateSession(await db.get('session:' + id)), D = process(s);
-    loading = true; adopt(s, D); loading = false;
-    show(!s.tab || ['home', 'boat', 'season'].includes(s.tab) ? 'setup' : s.tab);
+    loading = true;
+    try { adopt(s, D); show(!s.tab || ['home', 'boat', 'season'].includes(s.tab) ? 'setup' : s.tab); }
+    finally { loading = false; }
   }
   async function openVersion(number) {
     const version=session.analysisVersions.find(v=>v.number===number);
@@ -4016,7 +4757,7 @@ const WF = (() => {
   function afterShow() {
     if (session && !['home','boat','season'].includes(A.tab)) session.tab=A.tab;
     $('#status').textContent=session?session.profile.name+' · '+session.name+(A.demo?' · voorbeeld':''):'Bootwerkruimte';
-    STUDIO.chrome(); status(); if(!loading&&session)touch();
+    STUDIO.chrome(); status(); cloud.sessionChanged(); if(!loading&&session)touch();
   }
   function selectionBar() {
     const D = A.D, selected = session.selections.analysis, [i0, i1] = rangeIndices();
@@ -4074,7 +4815,7 @@ const WF = (() => {
         bar(field('Nieuwe boot', name), btn('Boot toevoegen', safe(async () => { const b = SL.newBoat(name.value); library.boats.push(b); touch(); await persist(); await create(b.id); }), true))),
       card('Recente sessies', library.sessions.length ? table(['Boot', 'Sessie', 'Begintijd log', 'Laatst bewerkt', ''], [...library.sessions].sort((a, b) => b.updated - a.updated).map(s => [library.boats.find(b => b.id === s.boatId)?.name || 'Boot', s.name, s.start ? new Date(s.start).toISOString().slice(0, 16).replace('T', ' ') : 'Nog geen log', new Date(s.updated).toLocaleString('nl-NL'), btn('Open sessie', safe(() => open(s.id)))])) : help('Je eerste sessie verschijnt hier zodra je een boot toevoegt.'),
         bar(btn('Project importeren', () => file.click()), file, btn('Bekijk voorbeeld', safe(async () => { let b = library.boats.find(b => b.example); if (!b) { b = SL.newBoat('Voorbeeldboot'); b.example = true; library.boats.push(b); } await create(b.id, true); })), btn('Opslaan opnieuw proberen', safe(persist)))),
-      help('Automatisch opgeslagen op dit apparaat en in deze browser. Een projectbackup bevat je bronbestanden, bootprofielen, beoordelingen, kalibratie en formules.'));
+      help('Open een sessie en kies ‘Online sessie’ om op een andere computer verder te werken. Met ‘Projectbackup’ exporteer je alle lokale boten en sessies.'));
   }
   function setup() {
     const c = pane('setup'); if (!session) { c.append(card('Start een sessie', help('Kies eerst een boot.'), btn('Naar boten', () => show('home'), true))); return; }
@@ -4586,6 +5327,7 @@ const WF = (() => {
     TITLE.home = 'Boten & sessies'; TITLE.setup = 'Gegevens'; TITLE.cal = 'Kalibratie'; ANY.add('boat'); DAYONLY.add('review'); DAYONLY.add('analysis');
     $('#nav [data-tab="home"]').textContent = 'Boten & sessies';
     $('.topbar').append(h('span', { id: 'wf-save', class: 'chip', role: 'status', 'aria-live': 'polite' }));
+    cloud.mount($('.topbar'));
     R.home = home; R.setup = setup; R.boat = boatSettings; R.review = review; R.cal = calibration; R.analysis = analyse;
     const oldReport = R.report; R.report = () => { oldReport(); if (!session) return; const c = $('#t-report .report') || $('#t-report'); c.prepend(h('section', { class: 'rsec' }, h('h2', {}, session.name + ' · debrief'), help('Boot: ' + session.profile.name + ' · profiel v' + session.profile.revision + ' · kalibratie v' + session.calibrationHistory.length), help(session.baseline || 'Geen instrumentcontext ingevuld.'), help('Samenvatting en track tonen de volledige sessie. Fasegrafieken en eigen variabelen volgen de actieve selectie en beoordelingen. ' + (session.selections.analysis ? dstr(session.selections.analysis.start) + ' – ' + dstr(session.selections.analysis.end) : 'Geen tijdselectie.')), session.notes.map(n => h('p', {}, (n.range ? tstr(n.range.start) + '–' + tstr(n.range.end) + ': ' : '') + n.text)))); if (session.profile.formulas.length) c.append(card('Eigen variabelen', table(['Naam', 'Formule', 'Eenheid', 'Versie', 'Fasegemiddelde'], session.profile.formulas.map(d => [d.name, d.expression, d.unit, d.version, f1((d.type === 'angle' ? SL.cmean : SL.mean)(filteredPhases(A.D.phases).map(p => p.v[d.name])), 3)])))); };
     STUDIO.init();
@@ -4596,7 +5338,7 @@ const WF = (() => {
     catch (e) { saveMessage = 'Opslag niet beschikbaar'; banner(e.message + '. Gebruik projectexport om je werk te bewaren.', true); }
     loading = true;
     if (library.lastSession) { try { const s = SL.validateSession(await db.get('session:' + library.lastSession)); adopt(s, process(s)); } catch (e) { banner('Laatste sessie kon niet worden geopend: ' + e.message, true); } }
-    show('home'); loading = false; status();
+    show('home'); loading = false; status(); await cloud.init();
   }
   return { selectionBar, timePanel, notes, comparison, openVersion, open, create, init, resolve, afterShow, touch, persist, importFiles, filteredPhases, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
 })();

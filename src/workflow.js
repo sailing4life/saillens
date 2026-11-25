@@ -10,6 +10,38 @@ const WF = (() => {
   const help = text => h('p', { class: 'muted' }, text);
   const notice = text => h('div', { class: 'wf-notice', role: 'status' }, text);
   const safe = fn => async (...args) => { try { return await fn(...args); } catch (e) { banner(e.message, true); } };
+  let savedContent;
+  const cloud = SL.createCloudSessions({
+    db, currentId: () => session?.id, editStamp: () => revision, isDirty: () => dirty,
+    flushLocal: async () => { if (dirty) await persist(); },
+    localTime: id => library.sessions.find(s => s.id === id)?.updated,
+    async readPayload(id) {
+      const [stored, workspace] = await Promise.all([db.get('session:' + id), db.get('workspace')]);
+      if (!stored) throw new Error('Sessie ontbreekt op deze computer.');
+      const profile = workspace?.boats.find(b => b.id === stored.boatId) || stored.profile;
+      // Older project backups can lack the edit time and optional formulas.
+      stored.updated ??= stored.created || 0;
+      profile.formulas ??= [];
+      stored.profile.formulas ??= [];
+      return {app:'SailLens', type:'cloud-session', version:1, session:stored, boat:profile};
+    },
+    applyRemote: receiveSession, openLocal: open, notify: (text, bad) => banner(text, bad)
+  });
+  // View state is saved on each device. Moving the cursor or opening a tab
+  // should not advance a shared revision and conflict with an edit elsewhere.
+  const deviceView = ['tab','ui','cur','view','stage','viewport','viewportPairKey','deskMap',
+    'deskEvent','deskList','mapTiles','mapPhases','rawTrack','playSpeed','pairTraceMode',
+    'activePairKey','reviewPage','plotVariable'];
+  function contentKey(s, b) {
+    const {raw, sources, analysisVersions, updated, staleReviews, phaseDraft, ...data} = s;
+    for (const key of deviceView) delete data[key];
+    // Imported event IDs can be allocated lazily when opening the event editor.
+    const events = data.events || {meta:{boat:s.cfg.boat || ''}, evOff:s.cfg.evOff || 0, logOff:s.cfg.logOff || 0, events:[], sails:[]};
+    data.events = {...events, events:(events.events || []).map(({id, ...event}) => event), sails:events.sails || []};
+    const rules = {...SL.phaseDefaults(s.cfg),scope:s.cfg.racingOnly?'racing':'all',...(phaseDraft || s.phaseBuild?.rules)};
+    return JSON.stringify([b, data, rules, sources.map(({text, ...source}) => source),
+      (analysisVersions || []).map(({input, ...version}) => version)]);
+  }
   function snapshot(clone=true) {
     if (!session) return null;
     const s = { ...session, raw: A.raw, events: A.events, polar: A.polar ? { rows: A.polar.rows, src: A.polar.src } : null, chart: A.chart,
@@ -26,16 +58,23 @@ const WF = (() => {
     if (loading) return; revision++; dirty = true; saveMessage = 'Wijzigingen opslaan…'; status(); clearTimeout(timer);
     timer = setTimeout(() => persist().catch(() => {}), 500);
   }
-  async function persist() {
+  const persist = SL.serialWriter(async () => {
     clearTimeout(timer); const rev = revision, s = snapshot(), next = SL.copy(library);
+    const key = s && contentKey(s, boat());
+    const changed = !!s && key !== savedContent;
+    if (s) s.updated = changed ? Math.max(Date.now(), (session.updated || 0) + 1) : session.updated;
     if (s) { const item = SL.sessionSummary(s), i = next.sessions.findIndex(x => x.id === s.id); if (i >= 0) next.sessions[i] = item; else next.sessions.push(item); next.lastSession = s.id; }
     try {
       await write([['workspace', next], ...(s ? [['session:' + s.id, s]] : [])]);
+      if (s && session?.id === s.id) {
+        savedContent = key; session.updated = s.updated;
+      }
       // Newer edits may have arrived while this transaction was writing.
       if (rev === revision) { library.sessions = next.sessions; library.lastSession = next.lastSession; savedRevision = rev; dirty = false; saveMessage = 'Opgeslagen in deze browser'; A.evDirty = false; }
+      if (changed) cloud.committed(s.id, s.updated);
       status(); return true;
     } catch (e) { dirty = true; saveMessage = 'Niet opgeslagen — maak een projectbackup'; status(); banner('Opslaan mislukt: ' + e.message + '. Je kunt het project nog exporteren en opnieuw proberen.', true); throw e; }
-  }
+  });
   function process(s, calib = s.calib, raw = s.raw, cfg = s.cfg) {
     if (!raw) return null;
     const mapped = SL.mappedRaw(raw, s.profile.channels || []);
@@ -65,18 +104,73 @@ const WF = (() => {
         }
       }catch{ /* An unreadable signature still requires regeneration. */ }
     }
+    const switched = session?.id !== s.id;
     session = s;
     Object.assign(A, { raw: s.raw, events: s.events, polar: s.polar ? SL.makePolar(s.polar.rows, s.polar.src) : null, chart: s.chart || SL.newChart(), cfg: s.cfg,
       calib: s.calib, files: s.files, cur: s.cur || 0, view: s.view || { z: 1, x: 0, y: 0 }, D: D || null, demo: !!s.demo, scope: 'day', ml: {}, evDirty: false,
       filt: { sails: '', leg: '', tack: '', day: '' }, cst: undefined, xst: undefined, st: undefined, fst: undefined, mnst: undefined, rst: undefined, est: undefined, pol: undefined });
     for (const k of ['filt', 'cst', 'xst', 'st', 'fst', 'mnst', 'rst', 'est', 'pol']) if (s.ui?.[k]) A[k] = s.ui[k];
     analysisMode = s.ui?.analysisMode || 'Overzicht'; reviewMode = s.ui?.reviewMode || 'Fases'; mobileView = s.ui?.mobileView || 'Beide'; selectedKey = s.ui?.selectedKey || null;
+    if (switched) savedContent = contentKey(snapshot(false), boat());
+  }
+  async function receiveSession(payload, {preserveCopy, expectedLocalId, stillCurrent, openFromLink, metaEntry}) {
+    if (payload?.type !== 'cloud-session' || payload.app !== 'SailLens' || payload.version !== 1)
+      throw new Error('Deze link bevat geen ondersteunde SailLens-sessie.');
+    const incoming = SL.validateSession(payload.session), b = payload.boat;
+    if (!b || !b.name || b.id !== incoming.boatId || incoming.profile.id !== b.id ||
+        !Array.isArray(b.formulas) || !Number.isFinite(incoming.updated) ||
+        (expectedLocalId && incoming.id !== expectedLocalId)) throw new Error('Ongeldige online sessie of boot.');
+    SL.compileFormulas(b.formulas);
+    const data = process(incoming), existing = await db.get('session:' + incoming.id);
+    if (!stillCurrent()) return false;
+    if (existing && expectedLocalId) {
+      // Keep the map position, time cursor and open tab on this computer.
+      for (const key of deviceView) {
+        if (Object.hasOwn(existing,key)) incoming[key] = existing[key];
+        else delete incoming[key];
+      }
+      if (data) incoming.cur = Math.max(data.i0,Math.min(data.i1 - 1,incoming.cur || 0));
+    }
+    const next = SL.copy(library), entries = [], index = next.boats.findIndex(row => row.id === b.id);
+    if (index < 0) next.boats.push(b);
+    else {
+      const local = next.boats[index], versionDifference = (b.revision || 0) - (local.revision || 0);
+      // Appending log data may update the boat's polar or sails within its current profile revision.
+      if (versionDifference > 0 || (versionDifference === 0 &&
+          ((b.updated || 0) > (local.updated || 0) || (expectedLocalId && b.updated === local.updated)))) next.boats[index] = b;
+    }
+    if (existing && (preserveCopy || !expectedLocalId)) {
+      const fork = {...existing, id:SL.uid(), name:existing.name + ' (lokale kopie)'};
+      for (const v of fork.analysisVersions || []) v.input.id = fork.id;
+      next.sessions.push(SL.sessionSummary(fork));
+      entries.push(['session:' + fork.id, fork]);
+    }
+    next.sessions = next.sessions.filter(row => row.id !== incoming.id);
+    next.sessions.push(SL.sessionSummary(incoming)); next.lastSession = incoming.id;
+    entries.push(['workspace',next], ['session:' + incoming.id,incoming], metaEntry);
+    // Enqueue the local session and its matching remote revision atomically.
+    // Keep the UI stable until the transaction commits.
+    const main = $('#panes'), nav = $('#nav'), toolbar = $('.topbar'), flow = $('#wf-flow');
+    const panels = [main,nav,toolbar,flow,...document.querySelectorAll('dialog[open]:not([data-cloud-dialog])')].filter(Boolean);
+    panels.forEach(el => el.inert = true);
+    try {
+      await write(entries);
+      const stayOnTab = expectedLocalId && session?.id === incoming.id &&
+        !(openFromLink && ['home','boat','season'].includes(A.tab));
+      const target = stayOnTab ? A.tab : incoming.tab;
+      library = next; loading = true;
+      adopt(incoming,data); savedContent = contentKey(snapshot(false),boat());
+      dirty = false; saveMessage = 'Opgeslagen in deze browser';
+      show(target && Object.hasOwn(R,target) ? target : 'setup');
+    } finally { loading = false; panels.forEach(el => el.inert = false); }
+    return true;
   }
   async function open(id) {
     if (dirty) await persist();
     const s = SL.validateSession(await db.get('session:' + id)), D = process(s);
-    loading = true; adopt(s, D); loading = false;
-    show(!s.tab || ['home', 'boat', 'season'].includes(s.tab) ? 'setup' : s.tab);
+    loading = true;
+    try { adopt(s, D); show(!s.tab || ['home', 'boat', 'season'].includes(s.tab) ? 'setup' : s.tab); }
+    finally { loading = false; }
   }
   async function openVersion(number) {
     const version=session.analysisVersions.find(v=>v.number===number);
@@ -207,7 +301,7 @@ const WF = (() => {
   function afterShow() {
     if (session && !['home','boat','season'].includes(A.tab)) session.tab=A.tab;
     $('#status').textContent=session?session.profile.name+' · '+session.name+(A.demo?' · voorbeeld':''):'Bootwerkruimte';
-    STUDIO.chrome(); status(); if(!loading&&session)touch();
+    STUDIO.chrome(); status(); cloud.sessionChanged(); if(!loading&&session)touch();
   }
   function selectionBar() {
     const D = A.D, selected = session.selections.analysis, [i0, i1] = rangeIndices();
@@ -265,7 +359,7 @@ const WF = (() => {
         bar(field('Nieuwe boot', name), btn('Boot toevoegen', safe(async () => { const b = SL.newBoat(name.value); library.boats.push(b); touch(); await persist(); await create(b.id); }), true))),
       card('Recente sessies', library.sessions.length ? table(['Boot', 'Sessie', 'Begintijd log', 'Laatst bewerkt', ''], [...library.sessions].sort((a, b) => b.updated - a.updated).map(s => [library.boats.find(b => b.id === s.boatId)?.name || 'Boot', s.name, s.start ? new Date(s.start).toISOString().slice(0, 16).replace('T', ' ') : 'Nog geen log', new Date(s.updated).toLocaleString('nl-NL'), btn('Open sessie', safe(() => open(s.id)))])) : help('Je eerste sessie verschijnt hier zodra je een boot toevoegt.'),
         bar(btn('Project importeren', () => file.click()), file, btn('Bekijk voorbeeld', safe(async () => { let b = library.boats.find(b => b.example); if (!b) { b = SL.newBoat('Voorbeeldboot'); b.example = true; library.boats.push(b); } await create(b.id, true); })), btn('Opslaan opnieuw proberen', safe(persist)))),
-      help('Automatisch opgeslagen op dit apparaat en in deze browser. Een projectbackup bevat je bronbestanden, bootprofielen, beoordelingen, kalibratie en formules.'));
+      help('Open een sessie en kies ‘Online sessie’ om op een andere computer verder te werken. Met ‘Projectbackup’ exporteer je alle lokale boten en sessies.'));
   }
   function setup() {
     const c = pane('setup'); if (!session) { c.append(card('Start een sessie', help('Kies eerst een boot.'), btn('Naar boten', () => show('home'), true))); return; }
@@ -777,6 +871,7 @@ const WF = (() => {
     TITLE.home = 'Boten & sessies'; TITLE.setup = 'Gegevens'; TITLE.cal = 'Kalibratie'; ANY.add('boat'); DAYONLY.add('review'); DAYONLY.add('analysis');
     $('#nav [data-tab="home"]').textContent = 'Boten & sessies';
     $('.topbar').append(h('span', { id: 'wf-save', class: 'chip', role: 'status', 'aria-live': 'polite' }));
+    cloud.mount($('.topbar'));
     R.home = home; R.setup = setup; R.boat = boatSettings; R.review = review; R.cal = calibration; R.analysis = analyse;
     const oldReport = R.report; R.report = () => { oldReport(); if (!session) return; const c = $('#t-report .report') || $('#t-report'); c.prepend(h('section', { class: 'rsec' }, h('h2', {}, session.name + ' · debrief'), help('Boot: ' + session.profile.name + ' · profiel v' + session.profile.revision + ' · kalibratie v' + session.calibrationHistory.length), help(session.baseline || 'Geen instrumentcontext ingevuld.'), help('Samenvatting en track tonen de volledige sessie. Fasegrafieken en eigen variabelen volgen de actieve selectie en beoordelingen. ' + (session.selections.analysis ? dstr(session.selections.analysis.start) + ' – ' + dstr(session.selections.analysis.end) : 'Geen tijdselectie.')), session.notes.map(n => h('p', {}, (n.range ? tstr(n.range.start) + '–' + tstr(n.range.end) + ': ' : '') + n.text)))); if (session.profile.formulas.length) c.append(card('Eigen variabelen', table(['Naam', 'Formule', 'Eenheid', 'Versie', 'Fasegemiddelde'], session.profile.formulas.map(d => [d.name, d.expression, d.unit, d.version, f1((d.type === 'angle' ? SL.cmean : SL.mean)(filteredPhases(A.D.phases).map(p => p.v[d.name])), 3)])))); };
     STUDIO.init();
@@ -787,7 +882,7 @@ const WF = (() => {
     catch (e) { saveMessage = 'Opslag niet beschikbaar'; banner(e.message + '. Gebruik projectexport om je werk te bewaren.', true); }
     loading = true;
     if (library.lastSession) { try { const s = SL.validateSession(await db.get('session:' + library.lastSession)); adopt(s, process(s)); } catch (e) { banner('Laatste sessie kon niet worden geopend: ' + e.message, true); } }
-    show('home'); loading = false; status();
+    show('home'); loading = false; status(); await cloud.init();
   }
   return { selectionBar, timePanel, notes, comparison, openVersion, open, create, init, resolve, afterShow, touch, persist, importFiles, filteredPhases, rangeIndices, exportProject, get session() { return session; }, get library() { return library; }, get dirty() { return dirty; }, recompute, process, snapshot, applyCalibration, objects, comparison, editBoatId: null, formulaEdit: null };
 })();

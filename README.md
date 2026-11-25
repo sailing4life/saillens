@@ -1,6 +1,6 @@
 # SailLens
 
-Boat-first sailing analysis. The standalone `SailLens.html` and the Railway service process sailing files entirely in the browser. No sailing logs are uploaded to a server.
+Boat-first sailing analysis runs in the browser. The hosted app can synchronize a session across devices when its owner enables online storage.
 
 ## Session workflow
 
@@ -18,7 +18,13 @@ Each boat owns channel mapping, units/sign conversion, phase defaults, polars, s
 
 IndexedDB stores the workspace index and complete sessions in atomic transactions. Save status changes only when a transaction commits. Session IDs are independent of boat name/date, so multiple sessions on one day remain separate. Autosave includes source text, processed-grid raw arrays, events, active/draft calibration, reviews, formulas, notes, selections and view state, plus saved analysis versions and report snapshots. The legacy season database remains separate and is restored without losing existing entries.
 
-**Projectbackup** exports all boats and sessions, plus the season database. **Project importeren** validates the whole file and restores boats/sessions as new copies. Existing projects are not overwritten. Restored analysis versions and report references are remapped together to the new boat/session IDs. Keep an export for device changes or browser-data cleanup: there is no account or cross-device sync.
+**Projectbackup** exports all boats and sessions, plus the season database. **Project importeren** validates the whole file and restores boats/sessions as new copies. Restored analysis versions and report references are remapped together to the new boat/session IDs.
+
+### Open the same session on another computer
+
+Open the session on the first computer and choose **Online sessie → Sessie online zetten**. Once the first upload finishes, choose **Privélink kopiëren**. Open that link on the other computer. Both devices retain the session in their local session list and synchronize subsequent edits. Each private link grants read and edit access to one complete session, including its original logs, boat settings, calibration and reports.
+
+SailLens saves locally first and uploads changed data in the background. The online status shows when you can switch devices. If both computers edit the same revision, **Online versie ophalen en lokale kopie bewaren** opens the newer online revision and keeps that computer's work as a separate local session.
 
 ## Custom variables
 
@@ -56,4 +62,4 @@ Production has no JavaScript dependencies. Development dependencies support DOM 
 
 ## Deploy
 
-The Dockerfile serves the built HTML with Caddy on `$PORT`. Railway follows `main`. Commit `SailLens.html` together with its sources. GitHub Actions runs the regression suite and checks that the generated file is current.
+The Dockerfile runs the Python HTTP service on `$PORT`. It serves the built HTML and stores online sessions in SQLite on the persistent `/data` volume. Railway follows `main`. Commit `SailLens.html` together with its sources. GitHub Actions runs the regression suite and checks that the generated file is current.

@@ -1,4 +1,5 @@
-# Serves the single-file app. All sailing data stays in the visitor's browser.
-FROM caddy:2-alpine
-COPY Caddyfile /etc/caddy/Caddyfile
-COPY SailLens.html /srv/index.html
+FROM python:3.13-alpine
+WORKDIR /srv
+COPY server.py SailLens.html ./
+ENV PYTHONDONTWRITEBYTECODE=1 SAILLENS_DATA_DIR=/data
+CMD ["python", "server.py"]
