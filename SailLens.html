@@ -255,7 +255,7 @@ function signedWindSample(value) {
 
 /* ---------- log parsing ---------- */
 const ALIAS = { BSP: ['bsp', 'boatspeed', 'boat speed', 'stw'], AWA: ['awa'], AWS: ['aws'], TWA: ['twa'], TWS: ['tws'], TWD: ['twd'],
-  HDG: ['hdg', 'heading'], COG: ['cog'], SOG: ['sog'], Lat: ['lat', 'latitude'], Lon: ['lon', 'long', 'longitude', 'lng'],
+  HDG: ['hdg', 'heading'], Course: ['course'], COG: ['cog'], SOG: ['sog'], Lat: ['lat', 'latitude'], Lon: ['lon', 'long', 'longitude', 'lng'],
   Heel: ['heel', 'roll'], Rudder: ['rudder', 'rud'], Forestay: ['forestay'], Trim: ['trim', 'pitch'], Leeway: ['leeway'] };
 function canon(name) { const l = name.trim().toLowerCase(); for (const k in ALIAS) if (ALIAS[k].includes(l)) return k; return name.trim(); }
 function parseTime(s) {
@@ -551,6 +551,10 @@ function applyCalib(ch, n, c, loggedTws) {
   if (c.rudOff && ch.Rudder) { const a = cp('Rudder'); for (let i = 0; i < n; i++) a[i] += c.rudOff; }
   return true;
 }
+function loggedTargetAngleKey(ch) {
+  return ['Targ Twa','TargTwa'].find(k=>ch[k]) ||
+    Object.keys(ch).find(k=>/^(?:targ(?:et)?twa|twatrg)$/i.test(k.replace(/[\s_-]/g,'')));
+}
 function process(raw, opt) {
   const cfg = { ...DEF, ...opt.cfg }, n = raw.n, ch = { ...raw.ch };
   validateConfig(cfg);
@@ -629,7 +633,8 @@ function process(raw, opt) {
     const name = channelNames.find(k => pattern.test(k.replace(/[\s_-]/g, '')));
     return name === undefined ? undefined : ch[name];
   };
-  const lTwa = ch['Targ Twa'] || ch.TargTwa || loggedChannel(/^(?:targ(?:et)?twa|twatrg)$/i);
+  const targetAngleKey = loggedTargetAngleKey(ch);
+  const lTwa = targetAngleKey && ch[targetAngleKey];
   const lBsp = ch['Targ Bsp'] || ch.TargBsp || loggedChannel(/^(?:targ(?:et)?bsp|bsptrg)$/i);
   const lPol = ch.PolBsp || loggedChannel(/^(?:pol(?:ar)?bsp|bsppol)$/i);
   if (!P && (lTwa || lBsp || lPol)) src = 'log';
@@ -995,7 +1000,7 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { phaseMode, speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { loggedTargetAngleKey, phaseMode, speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;
 
@@ -1884,27 +1889,37 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
 
 'use strict';
 (() => {
-  // The calibration math is sample-local. Run the same engine on the union of
+  // Run the same calibration engine on the union of
   // approved seconds, keeping logged gaps, event overrides and physical inputs.
   // Discard its synthetic timeline: reference IDs and any time-dependent
   // information (race, sail, tack, fit windows) always come from the session.
   function preview(D, phases, calib, outputs) {
     const dual = calib.speedos?.enabled ? calib.speedos : null;
-    const keys = new Set(['BSP','Heel','HDG', ...outputs]);
+    if (!D.raw?.ch || !Number.isInteger(D.n)) return null;
+    const withTarget=outputs.includes('Target_TWA');
+    const keys = new Set(['BSP','Heel','HDG', ...outputs.filter(k=>k!=='Target_TWA')]);
+    if (withTarget && !D.P) {
+      const source=SL.loggedTargetAngleKey({...D.raw.ch,...D.L?.manual});
+      if (source) keys.add(source);
+    }
+    if (outputs.includes('Course')) keys.add('Leeway');
     if (outputs.includes('TWA')) for (const k of ['AWA','AWS','TWD','TWA','TWS']) keys.add(k);
     if (dual) for (const k of [dual.port,dual.starboard,dual.selector]) keys.add(k);
     // A crew-defined graph channel may depend on other instruments and the full
     // formula graph. Its ordinary session pipeline is authoritative.
-    if (D.formulaDiagnostics?.some(f=>keys.has(f.name))) return null;
-    if (!D.raw?.ch || !Number.isInteger(D.n)) return null;
+    if (D.formulaDiagnostics?.some(f=>keys.has(f.name)||outputs.includes(f.name))) return null;
 
     const ordered=phases.slice().sort((a,b)=>a.i-b.i);
     const ranges=[];
     for (const {i,i1} of ordered) {
       if (!Number.isInteger(i)||!Number.isInteger(i1)||i<D.i0||i1>D.i1||i1<=i) return null;
+      // File-polar targets use centered three-second wind speed. Include the
+      // neighbours from the actual session, even at the selected time limits.
+      const halo=withTarget && D.P ? 1 : 0;
+      const start=Math.max(0,i-halo),end=Math.min(D.n,i1+halo);
       const last=ranges.at(-1);
-      if (last && i<=last.end) last.end=Math.max(last.end,i1);
-      else ranges.push({start:i,end:i1});
+      if (last && start<=last.end) last.end=Math.max(last.end,end);
+      else ranges.push({start,end});
     }
     if (!ranges.length) return D;
     const n=ranges.reduce((sum,r)=>sum+r.end-r.start,0), ch=Object.create(null);
@@ -1921,7 +1936,7 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
       ch[key]=values;
     }
     const compact=SL.analyse({n,t0:D.raw.t0,ch},{
-      cfg:{...D.cfg,tStart:null,tEnd:null},calib,skipPhases:true
+      cfg:{...D.cfg,tStart:null,tEnd:null},calib,polar:withTarget?D.P:null,skipPhases:true
     });
     // Only the requested channels are recomputed. Arrays retain the original
     // sample numbering so a held-out pair can be plotted at its logged times.
@@ -1939,7 +1954,9 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
     return {...D,ch:projected};
   }
 
-  SL.windPlotPreview=(D,phases,calib)=>preview(D,phases,calib,['AWA','MWA','TWA','TWS','TWD']);
+  const windChannels=['AWA','MWA','TWA','TWS','TWD'];
+  SL.windPlotPreview=(D,phases,calib,tackAngles=false)=>preview(D,phases,calib,
+    tackAngles?[...windChannels,'HDG','Course','COG','SOG','Leeway','Target_TWA']:windChannels);
   SL.speedPlotPreview=(D,phases,calib)=>{
     const data=preview(D,phases,calib,['BSP','Heel','HDG','SOG','COG']);
     if (!data) return null;
@@ -2059,6 +2076,130 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
     return {channels:channels.filter(k=>D.ch[k]),phases,pairs,hasProposal:proposal!==D};
   }
   SL.windPlotData=windPlotData;
+})();
+
+'use strict';
+(() => {
+  const {fin, w180, w360, D2R, R2D} = SL;
+  const sources = ['HDG', 'Course', 'COG'];
+  const bearing = value => fin(value) && value >= 0 && value <= 360;
+  const windAngle = value => fin(value) && value >= -180 && value <= 360;
+  const covered = (samples, window) => samples.length >= .95 * (window.i1 - window.i);
+
+  function circularMean(values) {
+    let sin = 0, cos = 0;
+    for (const value of values) {
+      sin += Math.sin(value * D2R);
+      cos += Math.cos(value * D2R);
+    }
+    return Math.hypot(sin, cos) > 1e-8 * values.length ? w360(Math.atan2(sin, cos) * R2D) : NaN;
+  }
+
+  function samples(D, window, source) {
+    const indices = [], sign = window.tack === 'Port' ? -1 : 1;
+    for (let i = window.i; i < window.i1; i++) {
+      const twa = D.ch.TWA?.[i], tws = D.ch.TWS?.[i];
+      if (D.invalid?.[i] || !windAngle(twa) || !fin(tws) || tws < 0) continue;
+      const signed = w180(twa) * sign;
+      // A changed wind calibration can move the samples across the tack line.
+      if (signed <= 0 || signed === 180) return [];
+      if (!bearing(D.ch[source]?.[i])) continue;
+      if (source === 'COG' && D.ch.SOG && (!fin(D.ch.SOG[i]) || D.ch.SOG[i] < .5)) continue;
+      indices.push(i);
+    }
+    return indices;
+  }
+
+  // Mirrors the input precedence in analyse(). An instrument TWD may itself
+  // have been calculated on board; 'log' describes its provenance only.
+  function windSource(D, i) {
+    if (D.formulaDiagnostics?.some(f => f.name === 'TWD')) return 'formula';
+    if (D.L?.manual?.TWD) return fin(D.L.manual.TWD[i]) ? 'manual' : 'derived';
+    if (!D.raw?.ch) return 'unknown';
+    return fin(D.raw.ch.TWD?.[i]) && !(D.raw.age?.TWD?.[i] > (D.cfg?.maxHold ?? SL.DEF.maxHold)) ? 'log' : 'derived';
+  }
+
+  function legMeans(D, window, source, indices) {
+    const ch = D.ch, variation = D.cfg?.magVar ?? D.magVar ?? 0;
+    const getBearing = i => w360(ch[source][i] + (source === 'COG' ? 0 : variation));
+    const getTwd = i => w360(ch.TWD[i] + variation);
+    const meanBearing = circularMean(indices.map(getBearing));
+    const twa = w180(circularMean(indices.map(i => ch.TWA[i])));
+    if (!fin(meanBearing) || !fin(twa) || Math.abs(twa) >= 90) return null;
+
+    const targets = indices.map(i => ch.Target_TWA?.[i]).filter(windAngle).map(x => Math.abs(w180(x))).filter(x => x > 0 && x < 90);
+    const leeway = indices.map(i => ch.Leeway?.[i]).filter(x => fin(x) && Math.abs(x) < 90);
+    const withWind = indices.filter(i => bearing(ch.TWD?.[i]));
+    const hasWind = covered(withWind, window);
+    const origins = hasWind ? new Set(withWind.map(i => windSource(D, i))) : new Set();
+    return {
+      n:indices.length, bearing:meanBearing, twa,
+      target:covered(targets, window) ? SL.mean(targets) : NaN,
+      leeway:covered(leeway, window) ? SL.mean(leeway) : NaN,
+      twd:hasWind ? circularMean(withWind.map(getTwd)) : NaN,
+      windSource:!hasWind ? 'missing' : origins.size === 1 ? origins.values().next().value : 'mixed',
+      windBearing:hasWind ? circularMean(withWind.map(getBearing)) : NaN,
+      windCount:hasWind ? withWind.length : 0,
+      closureSum:hasWind ? withWind.reduce((sum, i) => sum + Math.abs(w180(getTwd(i) - getBearing(i) - ch.TWA[i])), 0) : NaN
+    };
+  }
+
+  function geometry(D, port, stbd, source, portSeconds, stbdSeconds) {
+    if (!covered(portSeconds, port) || !covered(stbdSeconds, stbd)) return null;
+    const p = legMeans(D, port, source, portSeconds), s = legMeans(D, stbd, source, stbdSeconds);
+    if (!p || !s) return null;
+    const angle = w180(p.bearing - s.bearing);
+    // Upwind on opposite tacks, the port bearing is clockwise from starboard.
+    // Coincident, opposite or reversed bearings have no identifiable upwind bisector.
+    if (angle <= 1e-8 || angle >= 180 - 1e-8) return null;
+    const axis = w360(s.bearing + angle / 2), twaSum = s.twa - p.twa, residual = angle - twaSum;
+    const twdDelta = w180(p.twd - s.twd);
+    const twd = Math.abs(twdDelta) < 180 - 1e-8 ? w360(s.twd + twdDelta / 2) : NaN;
+    const windTurn = w180(p.windBearing - s.windBearing);
+    const windAxis = windTurn > 1e-8 && windTurn < 180 - 1e-8 ? w360(s.windBearing + windTurn / 2) : NaN;
+    let twdSource = p.windSource === s.windSource ? p.windSource : 'mixed';
+    if (!p.windCount || !s.windCount) twdSource = 'missing';
+    return {
+      port:p.bearing, stbd:s.bearing, angle, axis, twaPort:p.twa, twaStbd:s.twa, twaSum,
+      residual, halfResidual:residual / 2, targetHalf:(p.target + s.target) / 2,
+      leewayPort:p.leeway, leewayStbd:s.leeway,
+      twd, twdDelta, twdAxisDelta:w180(windAxis - twd), twdSource,
+      closure:(p.closureSum + s.closureSum) / (p.windCount + s.windCount), nPort:p.n, nStbd:s.n
+    };
+  }
+
+  function tackAngleData(D, refs, proposal = D, windData) {
+    proposal ||= D;
+    // Reuse the wind review's decisions about approval, races, sail changes,
+    // motor use, overlapping held-out windows and trustworthy opposite sides.
+    const references = [...(refs.pairs || []), ...(refs.validationPairs || [])];
+    const windows = new Map(references.filter(x => x?.before && x.after && x.pair && x.valid !== false && x.pair.approved !== false && !x.pair.rejected)
+      .map(x => [x.pair.key, x]));
+    const wind = windData || SL.windPlotData(D, {pairs:refs.pairs, validationPairs:refs.validationPairs}, proposal);
+    const rows = [];
+    for (const pair of wind.pairs) {
+      const ref = windows.get(pair.key);
+      if (!ref || pair.type !== 'Tack' || pair.mode !== 'up') continue;
+      const {before, after} = ref;
+      const [port, stbd] = before.tack === 'Port' ? [before, after] : [after, before];
+      const active = {}, proposed = {};
+      for (const source of sources) {
+        let pi = samples(D, port, source), si = samples(D, stbd, source);
+        if (proposal !== D) {
+          const pp = new Set(samples(proposal, port, source)), ps = new Set(samples(proposal, stbd, source));
+          const sharedPort = pi.filter(i => pp.has(i)), sharedStbd = si.filter(i => ps.has(i));
+          proposed[source] = geometry(proposal, port, stbd, source, sharedPort, sharedStbd);
+          if (proposed[source]) { pi = sharedPort; si = sharedStbd; }
+        }
+        active[source] = geometry(D, port, stbd, source, pi, si);
+        if (proposal === D) proposed[source] = active[source];
+      }
+      rows.push({key:pair.key, t:pair.t, sail:pair.sail, tws:pair.tws, validation:pair.validation,
+        vmgToVmg:pair.vmgToVmg, direction:before.tack + ' → ' + after.tack, targetSource:D.polarSrc, active, proposed});
+    }
+    return {rows};
+  }
+  SL.tackAngleData = tackAngleData;
 })();
 
 'use strict';
@@ -2735,6 +2876,7 @@ const WindPlots = (() => {
     };
     if(!data.pairs.length&&!data.phases.length)panel.append(h('p',{class:'muted'},'Keur stabiele fases en vensters vóór en na een tack of gijp goed voor kalibratie.'));
     const channels=['AWA','TWA','MWA'].filter(k=>data.channels.includes(k));
+    const method=data.hasTackAngles?select('method','Methode',[['wind','TWD-sprong per boeg'],['angles','Overstaghoek en windas']],view.method||'wind'):null;
     const angle=mhu?select('channel','Windhoek',(channels.length?channels:['AWA']).map(k=>[k,k]),view.channel||channels[0]):null;
     const series=select('series','Kalibratie',data.hasProposal?[['active','Actief'],['proposed','Voorstel']]:[['active','Actief']],view.series||(data.hasProposal?'proposed':'active'));
     const sails=[...new Set([...data.phases,...data.pairs].map(p=>p.sail))].sort((a,b)=>sailLabel(a).localeCompare(sailLabel(b),'nl'));
@@ -2750,16 +2892,22 @@ const WindPlots = (() => {
     if(data.pairs.some(p=>p.validation))controls.append(field('Toon controleparen (*)',checks));
     function draw(){
       const channel=mhu?angle.value:'TWA',metric=mhu?channel:'TWD',version=series.value;
+      const tackMode=method?.value==='angles';
+      plots.hidden=tackMode;
+      color.closest('label').hidden=tackMode;
       const minTws=lo.value===''?null:lo.valueAsNumber,maxTws=hi.value===''?null:hi.valueAsNumber;
       const invalid=!lo.validity.valid||!hi.validity.valid||(minTws!==null&&maxTws!==null&&minTws>maxTws);
       function selected(p){
         return !invalid&&(!mhu||p.vmgToVmg!==false)&&(!sail.value||p.sail===sail.value)&&(minTws===null||(fin(p.tws)&&p.tws>=minTws))&&(maxTws===null||(fin(p.tws)&&p.tws<=maxTws));
       }
       const phases=data.phases.filter(selected),pairs=data.pairs.filter(selected);
-      note.textContent=invalid?'Vul een geldige TWS-onder- en bovengrens in.':mhu?
+      note.textContent=invalid?'Vul een geldige TWS-onder- en bovengrens in.':tackMode?
+        'Vergelijk de hoogte van beide boegen met de gemeten TWA en het polartarget.':mhu?
         'Per paar: |'+channel+'| bakboord min stuurboord. Positief betekent een ruimere hoek op bakboord. Het MHU-voorstel gebruikt AWA uit aandewindse tacks.':
         'Per paar: TWD bakboord min stuurboord, via de kortste hoek. Positief betekent dat TWD op bakboord verder rechtsom ligt.';
       const display=pairs.filter(p=>!p.validation||checks.checked);
+      onSelectionChange?.({pairs:pairs.filter(p=>!p.validation),visiblePairs:display,tackMode,phases,channel,sail:sail.value,minTws,maxTws,series:version});
+      if(tackMode){plots.replaceChildren();return;}
       const bars=display.map(p=>Math.abs(p[version][metric])).filter(fin);
       const limit=Math.max(1,Math.ceil(bars.reduce((a,b)=>Math.max(a,b),0)));
       const grid=h('div',{class:'windplot-grid'}),legend=h('div',{class:'legend'});
@@ -2788,12 +2936,117 @@ const WindPlots = (() => {
       }
       if(phases.length)expandable(plots,'Meetwaarden per fase',['Tijd','Koers','Boeg','Zeilset','TWS actief (kn)',...(data.hasProposal?['TWS voorstel (kn)']:[]),'|'+channel+'| actief',...(data.hasProposal?['|'+channel+'| voorstel']:[])],
         phases,p=>[tstr(p.t),p.mode==='up'?'Aandewinds':'Voor de wind',p.side==='Port'?'BB':'SB',sailLabel(p.sail),fmt(p.active.TWS),...(data.hasProposal?[fmt(p.proposed.TWS)]:[]),deg(p.active[channel]),...(data.hasProposal?[deg(p.proposed[channel])]:[])]);
-      onSelectionChange?.({pairs:pairs.filter(p=>!p.validation),phases,channel,sail:sail.value,minTws,maxTws,series:version});
     }
     draw();
     return panel;
   }
   return {render};
+})();
+
+'use strict';
+(() => {
+  const sources=[['HDG','HDG · boegrichting'],['Course','Course · door het water'],['COG','COG · over de grond']];
+  const windSources={log:'Logkanaal',manual:'Handmatige invoer',formula:'Sessieformule',derived:'HDG + TWA',mixed:'Gemengde herkomst',unknown:'Onbekend',missing:'—'};
+  const degrees=new Intl.NumberFormat('nl-NL',{minimumFractionDigits:1,maximumFractionDigits:1});
+  function deg(value,signed=false){
+    if(!Number.isFinite(value))return '—';
+    const rounded=Math.round(Math.abs(value)*10)/10;
+    const sign=rounded===0?'':value<0?'−':signed?'+':'';
+    return sign+degrees.format(rounded)+'°';
+  }
+  function medianCell(metrics,pick,signed=false){
+    const values=metrics.map(pick).filter(Number.isFinite);
+    if(!values.length)return '—';
+    const coverage=values.length<metrics.length?' ('+values.length+'/'+metrics.length+')':'';
+    return deg(SL.median(values),signed)+coverage;
+  }
+  function directionLabel(row){
+    return row.direction==='Port → Stbd'?'BB → SB':row.direction==='Stbd → Port'?'SB → BB':row.direction||'';
+  }
+  function tackLink(row,openPair){
+    const time=tstr(row.t),direction=directionLabel(row);
+    const stamp=openPair?h('button',{type:'button',title:dstr(row.t)+' · '+direction,
+      'aria-label':'Open tack '+time+' '+direction,onclick:()=>openPair(row.key)},time):time;
+    return h('span',{},stamp,' ',h('span',{class:'muted'},direction));
+  }
+  function useLabel(row){
+    if(row.validation)return 'Controle';
+    return row.vmgToVmg===false?'Tactisch':'VMG';
+  }
+
+  function renderTackAngles(host,data,view={},openPair=null){
+    const previous=host.querySelector('details'),previousSource=previous?.querySelector('[data-tack-source]')?.value;
+    const series=view.series==='proposed'?'proposed':'active';
+    const selected=view.visiblePairs?new Set(view.visiblePairs.map(p=>p.key)):null;
+    const rows=data.rows.filter(row=>selected?selected.has(row.key):!row.validation);
+    const fit=rows.filter(row=>!row.validation&&row.vmgToVmg!==false);
+    const panel=card('Overstaghoek en windas');
+    panel.classList.add('windplot-panel');
+    host.replaceChildren(panel);
+    if(!rows.length){
+      panel.append(h('p',{class:'muted'},'Geen goedgekeurde aandewindse tackparen voor deze selectie. Beoordeel de stabiele vensters vóór en na een overstag in Manoeuvres of verruim de zeilset- en TWS-filters.'));
+      return;
+    }
+
+    const showTargets=rows.some(r=>sources.some(([source])=>Number.isFinite(r[series][source]?.targetHalf)));
+    const headers=['Koersbron','Paren','Overstaghoek','Halve hoek','Gem. |TWA|',...(showTargets?['Target |TWA|']:[]),'Δ per boeg','TWD-sluitfout'];
+    const summary=sources.map(([source,label])=>{
+      const metrics=fit.map(r=>r[series][source]).filter(m=>Number.isFinite(m?.angle));
+      return [label,metrics.length,medianCell(metrics,m=>m.angle),medianCell(metrics,m=>m.angle/2),
+        medianCell(metrics,m=>m.twaSum/2),...(showTargets?[medianCell(metrics,m=>m.targetHalf)]:[]),
+        medianCell(metrics,m=>m.halfResidual,true),medianCell(metrics,m=>m.closure)];
+    });
+    const version=series==='proposed'?'voorstel':'actieve kalibratie';
+    const targetSources={log:'het log',file:'de bootpolar',learned:'de polar uit sessiedata'};
+    const targetSource=targetSources[rows[0].targetSource];
+    const targetNote=showTargets&&targetSource?' · target uit '+targetSource:'';
+    panel.append(h('p',{class:'muted'},'Mediaan over VMG-naar-VMG-tacks · '+version+targetNote+'.'),table(headers,summary),
+      h('p',{},'Δ per boeg = halve overstaghoek min gemiddelde |TWA| op beide boegen. Een positieve Δ betekent dat de koersbron een ruimere hoek geeft dan de getoonde TWA.'),
+      h('p',{class:'muted'},'Een kleine TWD-sluitfout betekent dat koers + getekende TWA de TWD in de data goed reproduceert. Course kan al leeway uit het instrument bevatten. In COG werkt ook de stroming door.'));
+    const fallback=rows.some(r=>sources.some(([source])=>r[series][source]?.twdSource==='derived'));
+    const mixed=rows.some(r=>sources.some(([source])=>r[series][source]?.twdSource==='mixed'));
+    if(fallback||mixed){
+      const origin=fallback?'SailLens berekende TWD voor een of meer paren uit HDG + TWA.':'Een of meer paren combineren verschillende TWD-bronnen.';
+      panel.append(h('p',{class:'muted'},origin+' Controleer de TWD-bron bij Windas en leeway voordat je de sluitfout interpreteert.'));
+    }
+    if(showTargets)panel.append(h('p',{class:'muted'},'Vergelijk de target met de halve hoek van de koersbron waarop je polar is gebaseerd.'));
+    if(fit.length===0)panel.append(h('p',{class:'muted'},'De selectie bevat alleen controle- of tactische paren. Hun meetwaarden staan hieronder.'));
+
+    const details=h('details',{open:!!previous?.open},h('summary',{},'Meetwaarden per tack ('+rows.length+')'));
+    panel.append(details);
+    const available=sources.filter(([source])=>rows.some(r=>r[series][source]));
+    if(!available.length){
+      panel.insertBefore(h('p',{class:'muted'},'Onvoldoende geldige koersmetingen op beide boegen. Controleer de kanaalkoppeling en de vensters per tack.'),details);
+      details.append(table(['Tack','Gebruik','Zeilset'],rows.map(row=>[tackLink(row,openPair),useLabel(row),row.sail])));
+      return;
+    }
+    const selectedSource=available.some(([key])=>key===previousSource)?previousSource:available[0][0];
+    const select=h('select',{'data-tack-source':''},available.map(([key,label])=>h('option',{value:key,selected:key===selectedSource},label)));
+    const previousMode=previous?.querySelector('[data-tack-mode]')?.value||'angles';
+    const mode=h('select',{'data-tack-mode':''},[['angles','Hoogte en TWA'],['wind','Windas en leeway']].map(([key,label])=>
+      h('option',{value:key,selected:key===previousMode},label)));
+    const body=h('div');
+    details.append(h('div',{class:'form'},field('Koersbron per tack',select),field('Tabel per tack',mode)),body,
+      h('p',{class:'muted'},'De windas ligt halverwege de twee richtingen. Dat benadert TWD bij gelijke vaarhoeken en constante wind. Een winddraaiing of ongelijk sturen verschuift de as. Absolute richtingen gebruiken de ingestelde magnetische variatie.'),
+      h('p',{class:'muted'},'De TWD-sluitfout is het gemiddelde absolute hoekverschil tussen TWD en koers + getekende TWA op dezelfde seconden. Als die kanalen uit dezelfde instrumentberekening komen, kan de sluitfout ook bij een kalibratiefout klein zijn.'));
+    function draw(){
+      const key=select.value,measurements=rows.map(row=>{
+        const m=row[series][key],tack=tackLink(row,openPair);
+        if(mode.value==='wind')return [tack,useLabel(row),deg(m?.port)+' / '+deg(m?.stbd),deg(m?.leewayPort,true)+' / '+deg(m?.leewayStbd,true),
+          deg(m?.axis)+' / '+deg(m?.twd),deg(m?.twdDelta,true),deg(m?.closure),windSources[m?.twdSource]||'—',m?m.nPort+' / '+m.nStbd:'—'];
+        return [tack,useLabel(row),row.sail,Number.isFinite(row.tws)?degrees.format(row.tws):'—',
+          deg(m?.angle),deg(m?.twaPort,true)+' / '+deg(m?.twaStbd,true),...(showTargets?[deg(m?.targetHalf)]:[]),deg(m?.halfResidual,true)];
+      });
+      const columns=mode.value==='wind'?
+        ['Tack','Gebruik','Koers BB / SB (°T)','Leeway BB / SB','Windas / TWD (°T)','ΔTWD BB−SB','TWD-sluitfout','Bron TWD','Seconden BB / SB']:
+        ['Tack','Gebruik','Zeilset','TWS (kn)','Overstaghoek','TWA BB / SB',...(showTargets?['Target |TWA|']:[]),'Δ per boeg'];
+      body.replaceChildren(table(columns,measurements));
+    }
+    select.addEventListener('change',draw);
+    mode.addEventListener('change',draw);
+    draw();
+  }
+  SL.renderTackAngles=renderTackAngles;
 })();
 
 'use strict';
@@ -3924,10 +4177,13 @@ const WF = (() => {
   }
   function windAngleReview(host,c,refs,draft,kind,getProposal){
     const plots=h('div'),evidence=h('section',{class:'card'}),message=h('p',{role:'status',class:'muted'});
+    const tackCheck=kind==='twa'?h('div',{id:'tack-angle-check'}):null;
     const view=(session.windPlotViews||={})[kind]||={};
     const referenceWindows=[...refs.phases,...(refs.validationPairs||[]).flatMap(r=>[r.before,r.after])];
-    let signature;
-    host.append(plots,evidence,message);
+    let signature,tackAngles;
+    host.append(plots);
+    if(tackCheck)host.append(tackCheck);
+    host.append(evidence,message);
     function openPair(key){
       const pair=session.manoeuvrePairs[key];if(!pair)return;
       session.activePairKey=key;session.pairType='Alle';
@@ -3941,7 +4197,12 @@ const WF = (() => {
       const next=SL.copy(draft);fn(next);
       session.draft=validateCalib(next);session.preview=false;touch();show('cal');
     });
-    function explain({pairs,sail}){
+    function explain({pairs,sail,visiblePairs,series,tackMode}){
+      if(tackCheck){
+        tackCheck.hidden=!tackMode;
+        evidence.hidden=tackMode;
+        if(tackMode)SL.renderTackAngles(tackCheck,tackAngles,{series,visiblePairs},openPair);
+      }
       evidence.replaceChildren();
       if(kind==='mhu'){
         const residuals=pairs.map(p=>p.proposed.mhuResidual).filter(fin),delta=SL.median(residuals);
@@ -3963,12 +4224,13 @@ const WF = (() => {
     function refresh(){
       try{
         const cfg=validateCalib(draft),same=JSON.stringify(cfg)===JSON.stringify(A.calib);
-        const proposed=same||!referenceWindows.length?A.D:SL.windPlotPreview(A.D,referenceWindows,cfg)||getProposal();
+        const proposed=same||!referenceWindows.length?A.D:SL.windPlotPreview(A.D,referenceWindows,cfg,!!tackCheck)||getProposal();
         const data=SL.windPlotData(A.D,refs,proposed);
+        if(tackCheck)tackAngles=SL.tackAngleData(A.D,refs,proposed,data);
         signature=JSON.stringify(draft);plots.replaceChildren();message.textContent='';
-        WindPlots.render(plots,{...data,kind},view,openPair,explain);
+        WindPlots.render(plots,{...data,kind,hasTackAngles:!!tackCheck},view,openPair,explain);
         if(!referenceWindows.length)message.append(btn('Manoeuvres beoordelen',()=>show('pairreview')));
-      }catch(e){plots.replaceChildren();evidence.replaceChildren();message.textContent=e.message;}
+      }catch(e){plots.replaceChildren();tackCheck?.replaceChildren();evidence.replaceChildren();message.textContent=e.message;}
     }
     refresh();watchDraft(c,draft,refresh,()=>{message.textContent='Voorstel wordt doorgerekend…';});
   }

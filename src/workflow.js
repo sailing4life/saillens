@@ -368,10 +368,13 @@ const WF = (() => {
   }
   function windAngleReview(host,c,refs,draft,kind,getProposal){
     const plots=h('div'),evidence=h('section',{class:'card'}),message=h('p',{role:'status',class:'muted'});
+    const tackCheck=kind==='twa'?h('div',{id:'tack-angle-check'}):null;
     const view=(session.windPlotViews||={})[kind]||={};
     const referenceWindows=[...refs.phases,...(refs.validationPairs||[]).flatMap(r=>[r.before,r.after])];
-    let signature;
-    host.append(plots,evidence,message);
+    let signature,tackAngles;
+    host.append(plots);
+    if(tackCheck)host.append(tackCheck);
+    host.append(evidence,message);
     function openPair(key){
       const pair=session.manoeuvrePairs[key];if(!pair)return;
       session.activePairKey=key;session.pairType='Alle';
@@ -385,7 +388,12 @@ const WF = (() => {
       const next=SL.copy(draft);fn(next);
       session.draft=validateCalib(next);session.preview=false;touch();show('cal');
     });
-    function explain({pairs,sail}){
+    function explain({pairs,sail,visiblePairs,series,tackMode}){
+      if(tackCheck){
+        tackCheck.hidden=!tackMode;
+        evidence.hidden=tackMode;
+        if(tackMode)SL.renderTackAngles(tackCheck,tackAngles,{series,visiblePairs},openPair);
+      }
       evidence.replaceChildren();
       if(kind==='mhu'){
         const residuals=pairs.map(p=>p.proposed.mhuResidual).filter(fin),delta=SL.median(residuals);
@@ -407,12 +415,13 @@ const WF = (() => {
     function refresh(){
       try{
         const cfg=validateCalib(draft),same=JSON.stringify(cfg)===JSON.stringify(A.calib);
-        const proposed=same||!referenceWindows.length?A.D:SL.windPlotPreview(A.D,referenceWindows,cfg)||getProposal();
+        const proposed=same||!referenceWindows.length?A.D:SL.windPlotPreview(A.D,referenceWindows,cfg,!!tackCheck)||getProposal();
         const data=SL.windPlotData(A.D,refs,proposed);
+        if(tackCheck)tackAngles=SL.tackAngleData(A.D,refs,proposed,data);
         signature=JSON.stringify(draft);plots.replaceChildren();message.textContent='';
-        WindPlots.render(plots,{...data,kind},view,openPair,explain);
+        WindPlots.render(plots,{...data,kind,hasTackAngles:!!tackCheck},view,openPair,explain);
         if(!referenceWindows.length)message.append(btn('Manoeuvres beoordelen',()=>show('pairreview')));
-      }catch(e){plots.replaceChildren();evidence.replaceChildren();message.textContent=e.message;}
+      }catch(e){plots.replaceChildren();tackCheck?.replaceChildren();evidence.replaceChildren();message.textContent=e.message;}
     }
     refresh();watchDraft(c,draft,refresh,()=>{message.textContent='Voorstel wordt doorgerekend…';});
   }

@@ -19,7 +19,7 @@ function signedWindSample(value) {
 
 /* ---------- log parsing ---------- */
 const ALIAS = { BSP: ['bsp', 'boatspeed', 'boat speed', 'stw'], AWA: ['awa'], AWS: ['aws'], TWA: ['twa'], TWS: ['tws'], TWD: ['twd'],
-  HDG: ['hdg', 'heading'], COG: ['cog'], SOG: ['sog'], Lat: ['lat', 'latitude'], Lon: ['lon', 'long', 'longitude', 'lng'],
+  HDG: ['hdg', 'heading'], Course: ['course'], COG: ['cog'], SOG: ['sog'], Lat: ['lat', 'latitude'], Lon: ['lon', 'long', 'longitude', 'lng'],
   Heel: ['heel', 'roll'], Rudder: ['rudder', 'rud'], Forestay: ['forestay'], Trim: ['trim', 'pitch'], Leeway: ['leeway'] };
 function canon(name) { const l = name.trim().toLowerCase(); for (const k in ALIAS) if (ALIAS[k].includes(l)) return k; return name.trim(); }
 function parseTime(s) {
@@ -315,6 +315,10 @@ function applyCalib(ch, n, c, loggedTws) {
   if (c.rudOff && ch.Rudder) { const a = cp('Rudder'); for (let i = 0; i < n; i++) a[i] += c.rudOff; }
   return true;
 }
+function loggedTargetAngleKey(ch) {
+  return ['Targ Twa','TargTwa'].find(k=>ch[k]) ||
+    Object.keys(ch).find(k=>/^(?:targ(?:et)?twa|twatrg)$/i.test(k.replace(/[\s_-]/g,'')));
+}
 function process(raw, opt) {
   const cfg = { ...DEF, ...opt.cfg }, n = raw.n, ch = { ...raw.ch };
   validateConfig(cfg);
@@ -393,7 +397,8 @@ function process(raw, opt) {
     const name = channelNames.find(k => pattern.test(k.replace(/[\s_-]/g, '')));
     return name === undefined ? undefined : ch[name];
   };
-  const lTwa = ch['Targ Twa'] || ch.TargTwa || loggedChannel(/^(?:targ(?:et)?twa|twatrg)$/i);
+  const targetAngleKey = loggedTargetAngleKey(ch);
+  const lTwa = targetAngleKey && ch[targetAngleKey];
   const lBsp = ch['Targ Bsp'] || ch.TargBsp || loggedChannel(/^(?:targ(?:et)?bsp|bsptrg)$/i);
   const lPol = ch.PolBsp || loggedChannel(/^(?:pol(?:ar)?bsp|bsppol)$/i);
   if (!P && (lTwa || lBsp || lPol)) src = 'log';
@@ -759,6 +764,6 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { phaseMode, speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { loggedTargetAngleKey, phaseMode, speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;

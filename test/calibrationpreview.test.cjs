@@ -138,3 +138,29 @@ test('manual wind angle entries and imported invalid codes follow the same angle
   assert.ok(Number.isNaN(parsed.ch.TWA[0]));
   assert.deepEqual([parsed.ch.TWA[1],parsed.ch.AWA[1],parsed.ch.MWA[1]],[-45,-30,-31]);
 });
+
+test('tack check uses the proposed water course, signed leeway and the session target on the original seconds',()=>{
+  const n=96,t0=Date.UTC(2026,10,8,9),col=fn=>Float64Array.from({length:n},(_,i)=>fn(i));
+  const ch={HDG:col(i=>i<50?51:325),Course:col(i=>i<50?56:319),Leeway:col(i=>i<50?5:-6),
+    COG:col(i=>i<50?58:320),TWA:col(i=>i<50?-45:46),TWD:col(()=>7),
+    TWS:col(i=>8+(i*7%15)),BSP:col(()=>6),AWA:col(i=>i<50?-30:31),AWS:col(()=>14),
+    twa_trg:col(i=>i<50?320:43)};
+  const raw={n,t0,ch,age:{Leeway:new Uint8Array(n)}};
+  raw.age.Leeway[66]=4;
+  const calib={...SL.CAL0,bspK:1.08,hdgOff:1.3,leewayGain:1.45};
+  const ranges=[{i:7,i1:21},{i:62,i1:81}],cfg={tStart:t0+7000,tEnd:t0+81000,maxHold:2};
+  const file=SL.makePolar([{tws:7,pts:[[40,5],[140,5]],tu:[46,5]},{tws:20,pts:[[40,8],[140,8]],tu:[33,8]}],'file');
+  for(const polar of [file,null]){
+    const opts={cfg,polar,skipPhases:true};
+    const active=SL.analyse(raw,opts),full=SL.analyse(raw,{...opts,calib});
+    const partial=SL.windPlotPreview(active,ranges,calib,true);
+    for(const {i,i1} of ranges)for(const k of ['TWA','TWD','HDG','Course','COG','Leeway','Target_TWA'])
+      assert.deepEqual([...partial.ch[k].subarray(i,i1)],[...full.ch[k].subarray(i,i1)],k);
+    assert.ok(Number.isNaN(partial.ch.Leeway[66]));
+    assert.notEqual(partial.ch.Course[10],active.ch.Course[10]);
+    if(polar)assert.notEqual(partial.ch.Target_TWA[10],active.ch.Target_TWA[10]);
+    else assert.equal(partial.ch.Target_TWA[10],40);
+    active.formulaDiagnostics=[{name:'Course'}];
+    assert.equal(SL.windPlotPreview(active,ranges,calib,true),null);
+  }
+});

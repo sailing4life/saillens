@@ -107,6 +107,7 @@ const WindPlots = (() => {
     };
     if(!data.pairs.length&&!data.phases.length)panel.append(h('p',{class:'muted'},'Keur stabiele fases en vensters vóór en na een tack of gijp goed voor kalibratie.'));
     const channels=['AWA','TWA','MWA'].filter(k=>data.channels.includes(k));
+    const method=data.hasTackAngles?select('method','Methode',[['wind','TWD-sprong per boeg'],['angles','Overstaghoek en windas']],view.method||'wind'):null;
     const angle=mhu?select('channel','Windhoek',(channels.length?channels:['AWA']).map(k=>[k,k]),view.channel||channels[0]):null;
     const series=select('series','Kalibratie',data.hasProposal?[['active','Actief'],['proposed','Voorstel']]:[['active','Actief']],view.series||(data.hasProposal?'proposed':'active'));
     const sails=[...new Set([...data.phases,...data.pairs].map(p=>p.sail))].sort((a,b)=>sailLabel(a).localeCompare(sailLabel(b),'nl'));
@@ -122,16 +123,22 @@ const WindPlots = (() => {
     if(data.pairs.some(p=>p.validation))controls.append(field('Toon controleparen (*)',checks));
     function draw(){
       const channel=mhu?angle.value:'TWA',metric=mhu?channel:'TWD',version=series.value;
+      const tackMode=method?.value==='angles';
+      plots.hidden=tackMode;
+      color.closest('label').hidden=tackMode;
       const minTws=lo.value===''?null:lo.valueAsNumber,maxTws=hi.value===''?null:hi.valueAsNumber;
       const invalid=!lo.validity.valid||!hi.validity.valid||(minTws!==null&&maxTws!==null&&minTws>maxTws);
       function selected(p){
         return !invalid&&(!mhu||p.vmgToVmg!==false)&&(!sail.value||p.sail===sail.value)&&(minTws===null||(fin(p.tws)&&p.tws>=minTws))&&(maxTws===null||(fin(p.tws)&&p.tws<=maxTws));
       }
       const phases=data.phases.filter(selected),pairs=data.pairs.filter(selected);
-      note.textContent=invalid?'Vul een geldige TWS-onder- en bovengrens in.':mhu?
+      note.textContent=invalid?'Vul een geldige TWS-onder- en bovengrens in.':tackMode?
+        'Vergelijk de hoogte van beide boegen met de gemeten TWA en het polartarget.':mhu?
         'Per paar: |'+channel+'| bakboord min stuurboord. Positief betekent een ruimere hoek op bakboord. Het MHU-voorstel gebruikt AWA uit aandewindse tacks.':
         'Per paar: TWD bakboord min stuurboord, via de kortste hoek. Positief betekent dat TWD op bakboord verder rechtsom ligt.';
       const display=pairs.filter(p=>!p.validation||checks.checked);
+      onSelectionChange?.({pairs:pairs.filter(p=>!p.validation),visiblePairs:display,tackMode,phases,channel,sail:sail.value,minTws,maxTws,series:version});
+      if(tackMode){plots.replaceChildren();return;}
       const bars=display.map(p=>Math.abs(p[version][metric])).filter(fin);
       const limit=Math.max(1,Math.ceil(bars.reduce((a,b)=>Math.max(a,b),0)));
       const grid=h('div',{class:'windplot-grid'}),legend=h('div',{class:'legend'});
@@ -160,7 +167,6 @@ const WindPlots = (() => {
       }
       if(phases.length)expandable(plots,'Meetwaarden per fase',['Tijd','Koers','Boeg','Zeilset','TWS actief (kn)',...(data.hasProposal?['TWS voorstel (kn)']:[]),'|'+channel+'| actief',...(data.hasProposal?['|'+channel+'| voorstel']:[])],
         phases,p=>[tstr(p.t),p.mode==='up'?'Aandewinds':'Voor de wind',p.side==='Port'?'BB':'SB',sailLabel(p.sail),fmt(p.active.TWS),...(data.hasProposal?[fmt(p.proposed.TWS)]:[]),deg(p.active[channel]),...(data.hasProposal?[deg(p.proposed[channel])]:[])]);
-      onSelectionChange?.({pairs:pairs.filter(p=>!p.validation),phases,channel,sail:sail.value,minTws,maxTws,series:version});
     }
     draw();
     return panel;

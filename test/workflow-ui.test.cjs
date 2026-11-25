@@ -394,6 +394,62 @@ test('a BSP draft updates wind diagnostics on approved windows and becomes the a
   assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });
+test('reviewed tack angles follow the TWA and leeway draft on fixed windows, and open the reviewed tack',async()=>{
+ const a=await app();try{
+  a.fill('#new-boat-name','Tacktest');await a.click('Boot toevoegen');
+  const start=Date.UTC(2026,10,8,10),csv=['Time,BSP,SOG,TWA,TWS,TWD,HDG,Course,COG,Leeway,Targ Twa'];
+  for(let i=0;i<800;i++){
+    const port=Math.floor(i/200)%2===0;
+    csv.push([new Date(start+i*1000).toISOString(),7,7,port?-44:44,12,0,
+      port?40:320,port?44:316,port?46:314,port?4:-4,39].join(','));
+  }
+  a.w.logFile={name:'tacks.csv',text:async()=>csv.join('\n')};
+  await a.run('WF.importFiles([logFile])');
+  a.run("show('pairreview')");
+  const approved=a.run('WF.session.activePairKey');
+  await a.click('Goedkeuren & volgende');await a.click('Afwijzen & volgende');
+  const reviews=a.run('JSON.stringify(WF.session.manoeuvrePairs)');
+  a.run("show('cal')");await a.click('TWA / TWD');
+  assert.equal(a.$('#tack-angle-check').hidden,true);
+  a.fill('#windplot-twa-method','angles');
+  assert.equal(a.$('#tack-angle-check').hidden,false);
+
+  const summary=(source,label)=>{
+    const tbl=a.$('#tack-angle-check table'),idx=[...tbl.tHead.rows[0].cells].findIndex(c=>c.textContent===label);
+    assert.ok(idx>=0,label);
+    const row=[...tbl.tBodies[0].rows].find(r=>r.cells[0].textContent.startsWith(source));
+    return parseFloat(row.cells[idx].textContent.replace('−','-').replace(',','.'));
+  };
+  assert.equal(summary('HDG','Paren'),1);
+  assert.equal(summary('HDG','Overstaghoek'),80);
+  assert.equal(summary('Course','Overstaghoek'),88);
+  assert.equal(summary('COG','Overstaghoek'),92);
+  assert.equal(summary('Course','TWD-sluitfout'),0);
+  assert.equal(summary('Course','Target |TWA|'),39);
+  await a.click('Kompas & leeway');a.fill('#draft-leewayGain','1.5');
+  await a.click('TWA / TWD');await a.click('TWA-rij toevoegen');
+  a.fill('[aria-label^="TWA up bij "]','3');await pause(300);
+  assert.equal(a.$('#windplot-twa-series').value,'proposed');
+  assert.equal(summary('HDG','Overstaghoek'),80);
+  assert.equal(summary('Course','Overstaghoek'),92);
+  assert.equal(summary('COG','Overstaghoek'),92);
+  assert.equal(summary('HDG','Δ per boeg'),-7);
+  assert.equal(summary('Course','Δ per boeg'),-1);
+  a.fill('#windplot-twa-series','active');
+  assert.equal(summary('Course','Overstaghoek'),88);
+  assert.equal(summary('HDG','Δ per boeg'),-4);
+  assert.equal(a.run('A.calib.leewayGain'),1);
+  assert.equal(a.run('A.calib.twa.length'),0);
+  a.fill('#windplot-twa-min','13');assert.equal(a.$('#tack-angle-check table'),null);
+  a.fill('#windplot-twa-min','');
+  const details=a.$('#tack-angle-check details');details.open=true;
+  const button=details.querySelector('button[aria-label^="Open tack "]');assert.ok(button);
+  button.click();
+  assert.equal(a.run('A.tab'),'pairreview');assert.equal(a.run('WF.session.activePairKey'),approved);
+  assert.equal(a.run('JSON.stringify(WF.session.manoeuvrePairs)'),reviews);
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});
 test('Mercator map keeps the track continuous across the dateline and registers rotated tiles',async()=>{
  const a=await app();try{
   const result=JSON.parse(a.run(`(()=>{const g=TrackMap.geometry({ch:{Lat:Float64Array.of(0,0,NaN),Lon:Float64Array.of(179,-179,NaN)},i0:0,i1:3,n:3});
