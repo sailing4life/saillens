@@ -1,17 +1,57 @@
 'use strict';
 const CalibrationPlots = (() => {
+  function bspMeans(selected, series, groupBySensor, filtered, side, signed) {
+    const dimension = groupBySensor ? 'BSP-sensor' : 'Boeg';
+    const groups = new Map([['BB',[]],['SB',[]]]);
+    for (const r of selected) {
+      const label = groupBySensor ? side(r.sensor || 'Onbekend / wissel') : side(r.side);
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(r);
+    }
+    const head = h('thead', {},
+      h('tr', {}, h('th', {scope:'col',rowspan:2}, dimension),
+        series.map(s => h('th', {scope:'colgroup',colspan:3}, s.label))),
+      h('tr', {}, series.flatMap(() => ['Vensters','Δ (kn)','Δ (%)'].map(label => h('th', {scope:'col'}, label)))));
+    const body = h('tbody');
+    const result = new Map();
+    function addRow(id, label, values, difference=false) {
+      const row = h('tr', {'data-group':id}, h('th', {scope:'row'}, label));
+      series.forEach((s,i) => {
+        const {count,delta,pct} = values[i];
+        for (const [metric,value] of [['count',difference ? '—' : count],['delta',signed(delta)],
+          ['pct',difference && fin(pct) ? signed(pct)+' pp' : signed(pct)]]) {
+          row.append(h('td', {'data-series':s.key,'data-metric':metric}, value));
+        }
+      });
+      body.append(row);
+    }
+    for (const [label, rows] of groups) {
+      if (!rows.length && filtered) continue;
+      const values = series.map(s => SL.bspResidualMean(rows,s.key));
+      result.set(label,values);
+      addRow(label, label === '—' ? 'Onbekend' : label, values);
+    }
+    const bb = result.get('BB'), sb = result.get('SB');
+    if (bb && sb && bb.some((value,i) => value.count && sb[i].count)) {
+      addRow('difference','BB − SB',bb.map((value,i) => ({
+        delta:value.delta-sb[i].delta, pct:value.pct-sb[i].pct
+      })),true);
+    }
+    return h('div', {class:'scroll'}, h('table', {class:'tbl num','aria-label':'Gemiddelde BSP-afwijking per '+dimension.toLowerCase()}, head, body));
+  }
+
   function render(container, diagnostic, view = {}) {
     const speed = diagnostic.kind === 'speed';
     const variable = speed ? 'SOG − BSP' : 'HDG − COG';
     const unit = speed ? 'kn' : '°';
     const signed = value => {
       if (!fin(value)) return '—';
-      const rounded = Number(value.toFixed(speed ? 2 : 1));
+      const rounded = Number(value.toFixed(speed ? 2 : 1)) || 0;
       return (rounded > 0 ? '+' : '') + rounded.toLocaleString('nl-NL', {
         minimumFractionDigits: speed ? 2 : 1, maximumFractionDigits: speed ? 2 : 1
       });
     };
-    const side = value => ({Port:'BB', Stbd:'SB', Starboard:'SB'})[value] || value || '—';
+    const side = value => ({Port:'BB', Stbd:'SB', Starboard:'SB', Bakboord:'BB', Stuurboord:'SB'})[value] || value || '—';
     const rows = diagnostic.rows.filter(r => fin(r.t) && (fin(r.raw) || fin(r.corrected)));
     const source = value => ({model:'Stroommodel', manual:'Handmatig', logged:'Gelogde stroom'})[value] || value || '';
     const axes = speed
@@ -61,6 +101,13 @@ const CalibrationPlots = (() => {
     const axesBar = bar(field(speed ? 'Hoofdgrafiek' : 'Horizontale as', axis), sides.length > 1 ? field('Boeg', tack) : null,
       showSensors ? field('BSP-sensor', sensor) : null);
     const status = h('p', {class:'muted', role:'status'});
+    const means = speed ? h('section', {id:'cal-bsp-means','aria-labelledby':'cal-bsp-means-title'}) : null;
+    const meanTable = speed ? h('div') : null;
+    const grouping = speed && showSensors ? h('select', {'aria-label':'Groeperen op',onchange:choose('meanGroup')},
+      h('option', {value:'tack'}, 'Boeg'), h('option', {value:'sensor',selected:view.meanGroup==='sensor'}, 'BSP-sensor')) : null;
+    if (means) means.append(bar(h('h4', {id:'cal-bsp-means-title'}, 'Gemiddelde BSP-afwijking'),
+      grouping ? field('Groeperen op',grouping) : null), meanTable,
+      h('p', {class:'muted'}, 'Elk referentievenster telt één keer. Δ (%) is de gemiddelde afwijking gedeeld door de gemiddelde BSP van dezelfde metingen. Het verschil BB − SB staat in knopen en procentpunten (pp).'));
     for (const set of sets) {
       set.input = h('input', {type:'checkbox', 'data-series':set.key, checked:set.count > 0 && view[set.key] !== false,
         disabled:!set.count, onchange:e=>{view[set.key]=e.target.checked;draw();}});
@@ -70,6 +117,7 @@ const CalibrationPlots = (() => {
       controls.append(h('label', {style:'display:inline-flex;align-items:center;gap:5px;cursor:pointer'}, set.input, marker, set.caption));
     }
     panel.append(axesBar, controls, charts, status);
+    if (means) panel.append(means);
 
     // Keep the vertical range fixed across filters so the before/after comparison uses the same scale.
     let limit = speed ? .2 : 2;
@@ -84,6 +132,13 @@ const CalibrationPlots = (() => {
       for (const set of sets) set.caption.textContent = set.label + ' (' + selected.filter(r => fin(r[set.key])).length + ')';
       const visible = sets.filter(set => set.input.checked);
       const hasValue = selected.some(r => visible.some(set => fin(r[set.key])));
+      if (means) {
+        means.hidden = !visible.length || !selected.length;
+        if (!means.hidden) {
+          const bySensor = grouping?.value === 'sensor';
+          meanTable.replaceChildren(bspMeans(selected,visible,bySensor,bySensor ? sensor.value : tack.value,side,signed));
+        }
+      }
       drawChart(mainChart, axes.find(a => a.key === axis.value), selected, visible);
       if (heelChart) drawChart(heelChart, heelAxis, selected, visible);
       updateTable();

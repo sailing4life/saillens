@@ -72,31 +72,54 @@
       const instrument = fin(p.v[key]) ? p.v[key] + offset : NaN;
       const raw = residual(p.v.SOG, p.v.COG, instrument, still, headingPlot);
       const corrected = residual(p.v.SOG, p.v.COG, instrument, current, headingPlot);
-      return {raw, corrected, flow:fin(corrected) ? current : null};
+      return {raw, corrected, flow:fin(corrected) ? current : null,
+        rawBsp:!headingPlot && fin(raw) ? instrument : NaN,
+        correctedBsp:!headingPlot && fin(corrected) ? instrument : NaN};
     }
     const rawValues = [], correctedValues = [];
-    let east = 0, north = 0;
+    let east = 0, north = 0, rawBspSum = 0, correctedBspSum = 0;
     for (let i = p.i; i < p.i1; i++) {
       if (D.invalid?.[i]) continue;
       const sog = D.ch.SOG?.[i], cog = D.ch.COG?.[i], input = D.ch[key]?.[i];
       if (!fin(input)) continue;
       const instrument = input + offset;
       const raw = residual(sog, cog, instrument, still, headingPlot);
-      if (fin(raw)) rawValues.push(raw);
+      if (fin(raw)) {
+        rawValues.push(raw);
+        if (!headingPlot) rawBspSum += input;
+      }
       const time = p.t + (i - p.i) * 1000;
       if (mode === 'model' && Math.floor(time / interval) !== Math.floor(p.t / interval)) continue;
       const flow = mode === 'logged' ? loggedVector(D, i) : current;
       const corrected = residual(sog, cog, instrument, flow, headingPlot);
       if (fin(corrected)) {
         correctedValues.push(corrected);
+        if (!headingPlot) correctedBspSum += input;
         east += flow.east;
         north += flow.north;
       }
     }
     const count = p.i1 - p.i;
+    const raw = meanResidual(rawValues,count,headingPlot);
     const corrected = meanResidual(correctedValues,count,headingPlot);
     const flow = fin(corrected) ? {east:east / correctedValues.length, north:north / correctedValues.length} : null;
-    return {raw:meanResidual(rawValues,count,headingPlot), corrected, flow};
+    return {raw, corrected, flow,
+      rawBsp:!headingPlot && fin(raw) ? rawBspSum / rawValues.length : NaN,
+      correctedBsp:!headingPlot && fin(corrected) ? correctedBspSum / correctedValues.length : NaN};
+  }
+
+  // Each reference window has one vote. Its BSP and delta use the same paired seconds.
+  function bspResidualMean(rows, seriesKey) {
+    const bspKey = seriesKey + 'Bsp';
+    let count = 0, deltaSum = 0, bspSum = 0;
+    for (const row of rows) {
+      const delta = row[seriesKey], bsp = row[bspKey];
+      if (!fin(delta) || !fin(bsp) || bsp < 0) continue;
+      count++;
+      deltaSum += delta;
+      bspSum += bsp;
+    }
+    return {count, delta:count ? deltaSum / count : NaN, pct:bspSum > 0 ? 100 * deltaSum / bspSum : NaN};
   }
 
   function calibrationResiduals(D, phases, bspModel, kind, options = {}) {
@@ -110,12 +133,12 @@
       const {BSP:bsp, Heel:heel, HDG:hdg} = p.v;
       const heading = fin(hdg) ? w360(hdg + variation) : NaN;
       const current = mode === 'model' ? fit.get(phaseKey(p)) : manual;
-      const {raw, corrected, flow} = phaseResidual(D,p,mode,current,variation,headingPlot);
+      const {raw, corrected, flow, rawBsp, correctedBsp} = phaseResidual(D,p,mode,current,variation,headingPlot);
       const currentDrift = flow ? Math.hypot(flow.east, flow.north) : NaN;
       const currentSet = currentDrift > 1e-9 ? w360(Math.atan2(flow.east, flow.north) * R2D) : NaN;
       if (fin(raw) || fin(corrected)) rows.push({
         t:p.t, i:p.i, i1:p.i1, raw, corrected, side:p.tack, source:fin(corrected) ? mode : null,
-        heading, bsp, heel, currentDrift, currentSet
+        heading, bsp, heel, currentDrift, currentSet, ...(!headingPlot && {rawBsp, correctedBsp})
       });
     }
     rows.sort((a, b) => a.t - b.t);
@@ -139,4 +162,5 @@
     return {kind, rows, issue, reference:notes.join(' ')};
   }
   SL.calibrationResiduals = calibrationResiduals;
+  SL.bspResidualMean = bspResidualMean;
 })();

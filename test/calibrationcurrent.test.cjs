@@ -19,6 +19,7 @@ test('subtracting eastward current recovers speed and course through the water a
   const p=phase(),manual={mode:'manual',set:90,drift:1};
   const [speed]=SL.calibrationResiduals(data,[p],null,'speed',manual).rows;
   compare(speed.raw,p.v.SOG-5.75);compare(speed.corrected,.25);
+  assert.equal(speed.rawBsp,5.75);assert.equal(speed.correctedBsp,5.75);
   const [heading]=SL.calibrationResiduals(data,[p],null,'heading',manual).rows;
   compare(heading.raw,1-p.v.COG);compare(heading.corrected,1);
   assert.equal(heading.heading,1);assert.equal(heading.heel,-14);assert.equal(heading.source,'manual');
@@ -88,4 +89,31 @@ test('individual phase averages cannot hide disjoint instrument coverage',()=>{
   assert.ok(Number.isFinite(speed.rows[0].raw));assert.ok(Number.isNaN(speed.rows[0].corrected));
   ch.HDG[2]=NaN;
   assert.equal(SL.calibrationResiduals(D,[p],null,'heading',{mode:'manual',set:90,drift:1}).rows.length,0);
+});
+
+test('speed percentages use synchronized BSP from the seconds contributing to each residual',()=>{
+  const n=40, fill=value=>Array(n).fill(value);
+  const p={...phase({BSP:99}),i1:n};
+  const D={ch:{SOG:fill(6),BSP:fill(5)},raw:{ch:{Set:fill(0),Drift:fill(0)}}};
+  D.ch.BSP[0]=2;D.ch.SOG[0]=NaN;
+  D.ch.BSP[1]=12;D.raw.ch.Drift[1]=NaN;
+  const run=()=>SL.calibrationResiduals(D,[p],null,'speed',{mode:'logged'}).rows;
+  const [row]=run();
+  compare(row.rawBsp,(38*5+12)/39);compare(row.correctedBsp,5);
+  compare(SL.bspResidualMean([row],'raw').pct,100*(38-6)/(38*5+12));
+  compare(SL.bspResidualMean([row],'corrected').pct,20);
+  D.raw.ch.Drift[2]=NaN; // drops the corrected series below 95% coverage
+  assert.ok(Number.isNaN(run()[0].correctedBsp));
+  assert.equal(SL.bspResidualMean(run(),'corrected').count,0);
+});
+
+test('signed means give each window one vote and handle zero BSP and empty selections',()=>{
+  const rows=[{raw:1,rawBsp:4,i:0,i1:20},{raw:-2,rawBsp:8,i:20,i1:80},
+    {raw:0,rawBsp:0,i:80,i1:100},{raw:NaN,rawBsp:9},{raw:4,rawBsp:NaN}];
+  const mean=SL.bspResidualMean(rows,'raw');
+  assert.equal(mean.count,3);compare(mean.delta,-1/3);compare(mean.pct,-100/12);
+  const stopped=SL.bspResidualMean([{raw:.4, rawBsp:0}],'raw');
+  assert.equal(stopped.count,1);assert.equal(stopped.delta,.4);assert.ok(Number.isNaN(stopped.pct));
+  const empty=SL.bspResidualMean([],'raw');
+  assert.equal(empty.count,0);assert.ok(Number.isNaN(empty.delta));assert.ok(Number.isNaN(empty.pct));
 });

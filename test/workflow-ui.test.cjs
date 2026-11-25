@@ -372,6 +372,50 @@ test('per-sensor proposal and boat layout survive step navigation and explicit a
  }finally{a.close();}
 });
 
+test('BSP means use the selected tack, physical sensor, current and draft',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  // The active sensor is deliberately opposite the tack. GPS has a fixed offset per tack.
+  a.run(`const ch=A.raw.ch;
+    ch['BSP active']=Float64Array.from(ch.TWA,v=>v<0?2:1);
+    ch.BSP=Float64Array.from(ch.TWA,v=>v<0?5:10);
+    ch.SOG=Float64Array.from(ch.TWA,v=>v<0?5.5:9.5);
+    ch.COG.fill(90);
+    ch['BSP Bsp']=ch.BSP.slice();ch['BSP Sb']=ch.BSP.slice();
+    WF.recompute();STUDIO.generate({...SL.phaseDefaults(A.cfg),polMin:0,polMax:300});show('review');`);
+  await a.click('Getoonde selectie goedkeuren');
+  a.run("show('cal')");
+  a.fill('#cal-current-source','manual');a.fill('#cal-current-set','90');a.fill('#cal-current-drift','0.5');
+  const box='#cal-delta-speed', summary='#cal-bsp-means';
+  const row=group=>summary+' [data-group="'+group+'"]';
+  const cell=(group,series,metric)=>a.$(row(group)+' [data-series="'+series+'"][data-metric="'+metric+'"]');
+  const value=(group,series,metric)=>parseFloat(cell(group,series,metric).textContent.replace(',','.'));
+  const select=(label,v)=>a.fill(box+' select[aria-label="'+label+'"]',v);
+  const seriesToggle=series=>a.$(box+' input[data-series="'+series+'"]');
+  for(const [group,raw,rawPct,corrected,correctedPct] of [['BB',.5,10,0,0],['SB',-.5,-5,-1,-10]]){
+    assert.ok(value(group,'raw','count')>0);
+    assert.equal(value(group,'corrected','count'),value(group,'raw','count'));
+    assert.equal(value(group,'raw','delta'),raw);assert.equal(value(group,'raw','pct'),rawPct);
+    assert.equal(value(group,'corrected','delta'),corrected);assert.equal(value(group,'corrected','pct'),correctedPct);
+  }
+  assert.equal(value('difference','raw','delta'),1);
+  assert.equal(value('difference','raw','pct'),15);assert.match(cell('difference','raw','pct').textContent,/pp/);
+  select('Boeg','BB');
+  assert.equal(value('BB','raw','pct'),10);assert.equal(a.$(row('difference')),null);
+  select('Boeg','');
+  select('Groeperen op','sensor');
+  assert.equal(value('BB','raw','pct'),-5);assert.equal(value('SB','raw','pct'),10);
+  select('BSP-sensor','Bakboord');assert.equal(a.$(row('difference')),null);
+  seriesToggle('corrected').click();assert.equal(cell('BB','corrected','delta'),null);
+  assert.equal(value('BB','raw','pct'),-5);
+  seriesToggle('corrected').click();
+  a.fill('#draft-bspK','1.10');await pause(300);
+  assert.equal(value('BB','raw','delta'),-1.5);assert.equal(value('BB','raw','pct'),-13.64);
+  assert.equal(value('BB','corrected','delta'),-2);assert.equal(a.run('A.calib.bspK'),1);
+  assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
+ }finally{a.close();}
+});
+
 test('current diagnostics share the session current, sensor mapping and a reversible draft plot',async()=>{
  const a=await app();try{
   await a.click('Bekijk voorbeeld');
