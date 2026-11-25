@@ -98,3 +98,43 @@ test('a gap in logged TWS can be recomputed even when the original wind speed wa
   assert.ok(Math.abs(D.ch.TWS[0]-.6)<1e-9);
   assert.equal(D.ch.TWS[1],1.2);
 });
+
+test('unsigned mapped and saved wind angles keep port and starboard corrections symmetric',()=>{
+  const values=Float64Array.from([315,45,315,45,180,-180,360,999,-999]), n=values.length;
+  const filled=v=>new Float64Array(n).fill(v);
+  const raw={n,t0:0,ch:{vane:values,HDG:filled(50),TWD:Float64Array.from([7,100,NaN,NaN,90,90,90,90,90]),TWS:filled(12),BSP:filled(6)}};
+  const mapped=SL.mappedRaw(raw,[{source:'vane',target:'TWA',factor:1,offset:0}]);
+  const saved={...raw,ch:{...raw.ch,TWA:values}};
+  const expected=[-45,45,-45,45,-180,-180,0,NaN,NaN];
+  for (const source of [mapped,saved]) {
+    const settings={cfg:{},skipPhases:true};
+    const active=SL.analyse(source,settings);
+    assert.deepEqual([...active.ch.TWA],expected);
+    assert.deepEqual([...active.ch.TWD],[7,100,5,95,90,90,90,90,90]);
+    const calib={...SL.CAL0,twa:[{tws:12,up:2,dn:-2}]};
+    const proposed=SL.analyse(source,{...settings,calib});
+    assert.deepEqual([...proposed.ch.TWA],[-47,47,-47,47,-178,-178,2,NaN,NaN]);
+    assert.deepEqual([...proposed.ch.TWD],[5,102,3,97,92,92,92,90,90]);
+    const plot=SL.windPlotPreview(active,[{i:0,i1:n}],calib);
+    assert.deepEqual([...plot.ch.TWA],[...proposed.ch.TWA]);assert.deepEqual([...plot.ch.TWD],[...proposed.ch.TWD]);
+    assert.deepEqual([...source.ch.TWA],[315,45,315,45,180,-180,360,999,-999]);
+  }
+});
+
+test('manual wind angle entries and imported invalid codes follow the same angle convention',()=>{
+  const t0=Date.UTC(2026,10,8,9), n=30, filled=v=>new Float64Array(n).fill(v);
+  const raw={n,t0,ch:{BSP:filled(6),TWA:filled(40),TWS:filled(12),HDG:filled(51),TWD:filled(9)}};
+  const events={events:[{tl:t0,type:'ManualEntry',attr:'TWA=315;AWA=330;MWA=329'}]};
+  const calib={...SL.CAL0,twa:[{tws:12,up:2,dn:2}]};
+  const active=SL.analyse(raw,{cfg:{},events}), proposed=SL.analyse(raw,{cfg:{},events,calib});
+  assert.deepEqual([active.ch.TWA[0],active.ch.AWA[0],active.ch.MWA[0]],[-45,-30,-31]);
+  assert.equal(active.phases[0].tack,'Port');assert.equal(proposed.phases[0].tack,'Port');
+  assert.equal(proposed.ch.TWD[0],7);assert.equal(active.L.manual.TWA[0],315);
+  assert.equal(raw.ch.TWA[0],40);
+  const preview=SL.windPlotPreview(active,[{i:0,i1:n}],calib);
+  assert.deepEqual([...preview.ch.TWD],[...proposed.ch.TWD]);
+  const parsed=SL.parseLog('time,TWA,AWA,MWA\n2026-11-08T09:00:00Z,999,-999,999\n2026-11-08T09:00:01Z,315,330,329');
+  assert.equal(parsed.diagnostics.invalidValues,3);
+  assert.ok(Number.isNaN(parsed.ch.TWA[0]));
+  assert.deepEqual([parsed.ch.TWA[1],parsed.ch.AWA[1],parsed.ch.MWA[1]],[-45,-30,-31]);
+});

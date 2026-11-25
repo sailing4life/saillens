@@ -2,25 +2,25 @@
 /* Stable preparation boundaries and independently reviewed calibration windows. */
 (() => {
   const finite = Number.isFinite, copy = SL.copy;
-  const phaseKeys = ['phaseLen','phaseGap','minBsp','sdTwa','sdBsp','sdTws','sdHdg','manBefore','manAfter','polMin','polMax'];
+  const phaseKeys = ['phaseLen','phaseGap','minBsp','sdTwa','sdBsp','sdTws','sdHdg','upMargin','manBefore','manAfter','polMin','polMax'];
   function phaseDefaults(cfg) { return { ...Object.fromEntries(phaseKeys.map(k => [k, cfg[k] ?? (k === 'sdHdg' ? 10 : SL.DEF[k])])), scope:'all', race:'', sail:'', mode:'', tack:'', range:null }; }
   const eventKey = s => JSON.stringify({sources:s.sources.map(x=>x.hash), raw:s.raw && [s.raw.t0,s.raw.n], events:(s.events?.events||[]).filter(e=>e.type!=='MiscEvent').map(({type,tl,attr})=>[type,tl,attr]), turns:s.turnEdits?.length?s.turnEdits:undefined, clocks:[s.cfg.logOff,s.cfg.evOff,s.cfg.evShiftSec,s.cfg.tStart,s.cfg.tEnd,s.cfg.maxHold,s.cfg.useEvents], channels:s.profile.channels});
   const preparationKey = s => JSON.stringify({source:eventKey(s), annotations:(s.events?.events||[]).map(e=>[e.type,e.tl,e.comments]),cfg:s.cfg, profile:s.profile, polar:s.polar, chart:s.chart, calib:s.calib, baseline:s.baseline, changed:s.calibrationChanged, reviews:s.reviews, phases:s.phaseBuild, pairs:s.manoeuvrePairs});
   function sampleMatches(D,i,f={}) { const t=D.raw.t0+i*1000; return i>=D.i0&&i<D.i1 && (!f.range || (t>=f.range.start&&t<f.range.end)) && (!f.race || String(D.L.race[i])===String(f.race)) && (!f.sail || D.L.sailNames[D.L.sail[i]]===f.sail||D.L.sailSlots?.[D.L.sailState?.[i]]?.includes(f.sail)) && (!f.mode || SL.MODES[D.mode[i]]===f.mode) && (!f.tack || (D.tack[i]>0?'Stbd':'Port')===f.tack) && (f.scope!=='racing'||D.L.race[i]>0) && (f.scope!=='training'||D.L.testing[i]>0) && !D.L.motor?.[i]; }
   const angle = (D,k) => SL.ANG.test(k) || ['TWA','AWA'].includes(k) || D.formulaAngles?.includes(k);
-  function windowPhase(D,r) {
+  function windowPhase(D,r,minSeconds=5) {
     if (!r || !finite(r.start)||!finite(r.end)||r.end<=r.start) return null;
     const i=Math.round((r.start-D.raw.t0)/1000), i1=Math.round((r.end-D.raw.t0)/1000);
-    if(i<D.i0||i1>D.i1||i1-i<5)return null;
+    if(i<D.i0||i1>D.i1||i1-i<minSeconds)return null;
     const v={},spread={},coverage={};
     for(const [k,a] of Object.entries(D.ch)) { const vals=Array.from(a.subarray(i,i1)).filter(finite); coverage[k]=vals.length/(i1-i); v[k]=(angle(D,k)?SL.cmean:SL.mean)(vals); if(['TWA','AWA'].includes(k))v[k]=SL.w180(v[k]); spread[k]=angle(D,k)?SL.sd(vals.map(x=>SL.w180(x-v[k]))):SL.sd(vals); }
     const rc=D.L.race[i],lg=D.L.leg[i];
-    return {i,i1,t:r.start,mode:SL.MODES[D.mode[i]],tack:v.TWA>=0?'Stbd':'Port',sails:D.L.sailNames[D.L.sail[i]]||'-',race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:D.L.testing[i],v,spread,coverage};
+    return {i,i1,t:r.start,mode:SL.phaseMode(D.mode,i,i1),tack:v.TWA>=0?'Stbd':'Port',sails:D.L.sailNames[D.L.sail[i]]||'-',race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:D.L.testing[i],v,spread,coverage};
   }
   function phaseBuild(D,build) {
     if(!build)return D; // Existing sessions retain their phases until explicitly regenerated.
     if(!build.generated) D.phases=[];
-    else if(Array.isArray(build.ranges)) D.phases=build.ranges.map(r=>windowPhase(D,r)).filter(p=>p && ['BSP','TWA','TWS'].every(k=>p.coverage[k]>=.95) && !Array.from(D.invalid.subarray(p.i,p.i1)).some(Boolean));
+    else if(Array.isArray(build.ranges)) D.phases=build.ranges.map(r=>windowPhase(D,r,2)).filter(p=>p && ['BSP','TWA','TWS'].every(k=>p.coverage[k]>=.95) && !Array.from(D.invalid.subarray(p.i,p.i1)).some(Boolean));
     return D;
   }
   const pairKey = (D,m) => m.type+':'+(D.raw.t0+m.i*1000);

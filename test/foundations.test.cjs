@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '..');
 const context = vm.createContext({ console });
-for (const name of ['core.js', 'core2.js', 'core3.js', 'storage.js']) vm.runInContext(fs.readFileSync(path.join(root, 'src', name), 'utf8'), context, { filename: name });
+for (const name of ['core.js', 'core2.js', 'core3.js', 'storage.js', 'sessionflow.js']) vm.runInContext(fs.readFileSync(path.join(root, 'src', name), 'utf8'), context, { filename: name });
 const SL = vm.runInContext('SL', context);
 const base = Date.UTC(2026, 10, 15, 10);
 const iso = (second = 0) => new Date(base + second * 1000).toISOString();
@@ -110,6 +110,60 @@ test('phase boundaries never cross race marks or testing state changes', () => {
   const events = { events: [{ tl: base, type: 'RaceStartGun', attr: '1' }, { tl: base + 15000, type: 'RaceMark', attr: '1' }, { tl: base + 65000, type: 'StartTesting', attr: '' }, { tl: base + 85000, type: 'StopTesting', attr: '' }] };
   const result = analysis(raw, { phaseLen: 30, phaseGap: 0 }, { events });
   for (const p of result.phases) for (const boundary of [15, 65, 85]) assert.ok(p.i >= boundary || p.i1 <= boundary);
+});
+
+test('a stable phase can straddle a polar band edge, and its mode survives a session reload',()=>{
+  const raw=SL.parseLog(log(600,(r,i)=>{r[2]=i%3===0?55.1:54.9;}));
+  const rules={...SL.phaseDefaults(SL.DEF),mode:'Upwind'};
+  const options={phaseRules:rules,phaseBuild:{generated:true}};
+  const result=analysis(raw,{},options);
+  assert.equal(result.phases.length,15);assert.equal(result.phaseDiagnostics.byMode.Upwind,15);
+  assert.ok(result.phases.every(p=>p.mode==='Upwind' && p.i1-p.i===30));
+  const ranges=result.phases.map(p=>({start:p.t,end:base+p.i1*1000}));
+  const restored=analysis(raw,{}, {...options,skipPhases:true,phaseBuild:{generated:true,ranges}});
+  assert.deepEqual(plain(restored.phases.map(p=>p.mode)),plain(result.phases.map(p=>p.mode)));
+  const other=analysis(raw,{}, {...options,phaseRules:{...rules,mode:'Reaching'}});
+  assert.equal(other.phases.length,0);assert.ok(other.phaseDiagnostics.reasons.scope>0);
+});
+
+test('lasting mode changes, race and leg edges split phases without losing the first valid second',()=>{
+  const raw=SL.parseLog(log(90,(r,i)=>{r[2]=i<30?52:58;})); // shift stays within sdTwa
+  const ev={events:[{tl:base,type:'RaceStartGun',attr:'1'},{tl:base+60000,type:'RaceMark',attr:'1'}]};
+  const result=analysis(raw,{phaseLen:30,phaseGap:0},{events:ev});
+  assert.deepEqual(plain(result.phases.map(p=>[p.i,p.i1,p.leg,p.mode])),[[0,30,1,'Upwind'],[30,60,1,'Reaching'],[60,90,2,'Reaching']]);
+  const crossing=analysis(raw,{phaseLen:45,phaseGap:0},{events:ev});
+  assert.equal(crossing.phases.length,0);assert.equal(crossing.phaseDiagnostics.reasons.boundary,46);
+});
+
+test('all start seconds are eligible after failed candidate windows and explicit scope wins',()=>{
+  const raw=SL.parseLog(log(31,(r,i)=>{r[1]=i===0?1:7;}));
+  const rules=SL.phaseDefaults(SL.DEF),config={phaseLen:30,phaseGap:0,racingOnly:true};
+  const result=analysis(raw,config,{phaseRules:rules});
+  assert.deepEqual(plain(result.phases.map(p=>p.i)),[1]);
+  assert.equal(result.phaseDiagnostics.reasons.speed,1);assert.equal(result.phaseDiagnostics.checkedWindowStarts,2);
+  assert.equal(result.phaseDiagnostics.upwindSailingSeconds,30);assert.equal(result.phaseDiagnostics.upwindReasons.speed,0);
+  assert.equal(analysis(raw,config).phases.length,0);
+  const turn=SL.parseLog(log(31,(r,i)=>{r[2]=i===0?70:45;}));
+  const stable=analysis(turn,{phaseLen:30,sdTwa:.5,phaseGap:0});
+  assert.deepEqual(plain(stable.phases.map(p=>p.i)),[1]);assert.equal(stable.phaseDiagnostics.reasons.stabilityTwa,1);
+  const short=analysis(raw,{phaseLen:4,phaseGap:0});
+  const ranges=short.phases.map(p=>({start:p.t,end:base+p.i1*1000}));
+  assert.ok(ranges.length>0);
+  assert.equal(analysis(raw,{}, {skipPhases:true,phaseBuild:{generated:true,ranges}}).phases.length,ranges.length);
+  assert.equal(SL.windowPhase(short,ranges[0]),null); // manoeuvre review still requires five seconds
+});
+
+test('upwind rejection counts exclude time outside the selected sailing conditions',()=>{
+  const raw=SL.parseLog(log(300,(r,i)=>{r[1]=i<150?0:7;r[2]=i>260?100:45;r[4]=i%2?20:0;}));
+  const events={events:[{tl:base+100000,type:'RaceStartGun',attr:'1'},{tl:base+220000,type:'RaceFinish',attr:'1'}]};
+  const rules={...SL.phaseDefaults(SL.DEF),scope:'racing'};
+  const {phaseDiagnostics:d}=analysis(raw,{sdHdg:1},{phaseRules:rules,events});
+  assert.equal(d.upwindSailingSeconds,70);
+  assert.equal(d.upwindReasons.stabilityHdg,41);
+  assert.equal(d.upwindReasons.scope,29);
+  assert.equal(d.upwindReasons.speed,0);
+  assert.ok(d.reasons.scope>d.upwindReasons.scope);
+  assert.equal(Object.values(d.reasons).reduce((a,b)=>a+b,0)+d.accepted,d.checkedWindowStarts);
 });
 
 test('events wholly before the log fail; open testing intervals extend to the end', () => {

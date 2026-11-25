@@ -10,6 +10,12 @@ function cmean(a) { let s = 0, c = 0, n = 0; for (const v of a) if (fin(v)) { s 
 function quant(a, q) { const b = Array.from(a).filter(fin).sort((x, y) => x - y); if (!b.length) return NaN; const p = (b.length - 1) * q, i = Math.floor(p); return b[i] + (b[Math.min(i + 1, b.length - 1)] - b[i]) * (p - i); }
 const median = a => quant(a, 0.5);
 const ANG = /^(HDG|COG|TWD|Course|Set|TWDTwisted|TWDmin|TWDmax|TWDG|TWD_calc|CUR_DIR)$/;
+const relativeWind = /^(TWA|AWA|MWA)$/;
+function signedWindSample(value) {
+  // Logs use either ±180° or 0–360°. Match the CSV convention at dead downwind.
+  if (!fin(value) || value < -180 || value > 360) return NaN;
+  return value >= 180 ? value - 360 : value;
+}
 
 /* ---------- log parsing ---------- */
 const ALIAS = { BSP: ['bsp', 'boatspeed', 'boat speed', 'stw'], AWA: ['awa'], AWS: ['aws'], TWA: ['twa'], TWS: ['tws'], TWD: ['twd'],
@@ -103,8 +109,10 @@ function parseLog(text, nativeWindow) {
   const cols = new Map();
   const put = (i, k, value) => {
     if (!k || !String(value ?? '').trim()) return;
-    const v = csvNumber(value); if (!fin(v)) { diagnostics.invalidValues++; return; }
-    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA|MWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    const number = csvNumber(value), windAngle = relativeWind.test(k);
+    const v = windAngle ? signedWindSample(number) : number;
+    if (!fin(v)) { diagnostics.invalidValues++; return; }
+    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || windAngle ? new Float64Array(n) : null }; cols.set(k, c); }
     if (c.discrete) {
       if (c.count[i] && c.sum[i] !== v) c.sum[i] = NaN;
       else if (!c.count[i]) c.sum[i] = v;
@@ -336,6 +344,10 @@ function process(raw, opt) {
   const L = applyEvents(raw, opt.events, cfg);
   for (const k in L.manual) ch[k] = L.manual[k];
   if (invalid.some(Boolean)) for (const k of Object.keys(ch)) { ch[k] = Float64Array.from(ch[k]); for (let i = 0; i < n; i++) if (invalid[i]) ch[k][i] = NaN; }
+  // Mapped channels, manual entries and saved sessions can bypass the CSV angle conversion.
+  for (const key of ['TWA','AWA','MWA']) {
+    if (ch[key]?.some(value=>value>=180 || value< -180)) ch[key]=Float64Array.from(ch[key],signedWindSample);
+  }
   const loggedBsp = ch.BSP;
   if (opt.calib?.speedos?.enabled && (!loggedBsp || !loggedBsp.every(fin))) {
     const d = opt.calib.speedos;
@@ -375,12 +387,20 @@ function process(raw, opt) {
 
   // polar source
   let P = opt.polar || null, src = P ? P.src : 'none';
-  const logT = !P && ch.PolBsp && (ch['Targ Twa'] || ch.TargTwa) && (ch['Targ Bsp'] || ch.TargBsp);
-  if (logT) src = 'log';
-  const lTwa = ch['Targ Twa'] || ch.TargTwa, lBsp = ch['Targ Bsp'] || ch.TargBsp;
+  // Capture source arrays before derived Target_TWA/Target_BSP/Polar_BSP replace any namesakes.
+  const channelNames = Object.keys(ch);
+  const loggedChannel = pattern => {
+    const name = channelNames.find(k => pattern.test(k.replace(/[\s_-]/g, '')));
+    return name === undefined ? undefined : ch[name];
+  };
+  const lTwa = ch['Targ Twa'] || ch.TargTwa || loggedChannel(/^(?:targ(?:et)?twa|twatrg)$/i);
+  const lBsp = ch['Targ Bsp'] || ch.TargBsp || loggedChannel(/^(?:targ(?:et)?bsp|bsptrg)$/i);
+  const lPol = ch.PolBsp || loggedChannel(/^(?:pol(?:ar)?bsp|bsppol)$/i);
+  if (!P && (lTwa || lBsp || lPol)) src = 'log';
   const aT = need('absTWA'), pol = need('Polar_BSP'), tT = need('Target_TWA'), tB = need('Target_BSP'), vmg = need('VMG'), bp = need('BSPpol%'), bt = need('BSP_trg%'), vp = need('VMG%'),
     dB = need('ΔBSP'), dT = need('ΔTWA'), dV = need('ΔVMG'), dVp = need('ΔVMG%');
   const tack = new Int8Array(n), mode = new Int8Array(n).fill(-1);
+  const confidentMode = opt.skipPhases ? null : new Int8Array(n).fill(-1);
   if (ch.Heel) { const a = need('abs_heel'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Heel[i]); }
   if (ch.Rudder) { const a = need('abs_rudder'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Rudder[i]); }
   for (const k of ['Heel', 'Rudder', 'Leeway']) if (ch[k]) { const a = need(k + '_norm'); for (let i = 0; i < n; i++) a[i] = TWA[i] < 0 ? -ch[k][i] : ch[k][i]; }
@@ -396,9 +416,21 @@ function process(raw, opt) {
     let ut, dt_, tt, tb, pb = NaN;
     /* targets follow a 3 s mean of TWS, which matches RaceReplay's percentages; polar speed uses the sample itself */
     if (P) { const w3 = fin(TWS[i - 1]) && fin(TWS[i + 1]) ? (TWS[i - 1] + w + TWS[i + 1]) / 3 : w, u = P.up(w3), d = P.dn(w3); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
-    else if (logT) { pb = ch.PolBsp[i]; tt = lTwa[i]; tb = lBsp[i]; if (fin(tt) && (tt < 90) !== (a < 90)) { tt = NaN; tb = NaN; } ut = a < 90 && fin(tt) ? tt : 45; dt_ = a >= 90 && fin(tt) ? tt : 142; }
-    else { ut = 45; dt_ = 142; }
-    const m = a < ut + cfg.upMargin ? 0 : a > dt_ - cfg.dnMargin ? 3 : a < 100 ? 1 : 2; mode[i] = m;
+    else {
+      const angle = lTwa?.[i];
+      // VMG targets use angle magnitude; loggers can encode port as -42 or 318.
+      tt = fin(angle) && angle >= -180 && angle <= 360 ? Math.abs(w180(angle)) : NaN;
+      tb = lBsp?.[i];
+      if (!fin(tb) || tb <= 0) tb = NaN;
+      if (fin(angle) && (!(tt > 0) || (tt < 90) !== (a < 90))) { tt = NaN; tb = NaN; }
+      pb = lPol?.[i];
+      if (!fin(pb) || pb <= 0) pb = NaN;
+      ut = a < 90 && fin(tt) ? tt : 45;
+      dt_ = a >= 90 && fin(tt) ? tt : 142;
+    }
+    const upwindLimit = Math.min(90, ut + cfg.upMargin), downwindLimit = Math.max(90, dt_ - cfg.dnMargin);
+    const m = a < upwindLimit ? 0 : a > downwindLimit ? 3 : a < 100 ? 1 : 2; mode[i] = m;
+    if (confidentMode && Math.min(Math.abs(a-upwindLimit), Math.abs(a-downwindLimit), Math.abs(a-100)) >= 2) confidentMode[i] = m;
     pol[i] = pb; bp[i] = pb > 0.5 ? b / pb * 100 : NaN;
     tT[i] = tt; tB[i] = tb; const tv = tb * Math.abs(Math.cos(tt * D2R));
     bt[i] = tb > 0.5 ? b / tb * 100 : NaN; dB[i] = b - tb; dT[i] = a - tt; dV[i] = vmg[i] - tv;
@@ -447,37 +479,106 @@ function process(raw, opt) {
   }
   mans.sort((a,b)=>a.i-b.i);
   for (const m of mans) if (mans.some(o => o !== m && o.i > m.i - 50 && o.i < m.i + 46)) { m.crowded = true; delete m.loss; delete m.lossGps; }
-  // validity mask + phases
-  const bad = new Uint8Array(n + 1);
-  for (let i = i0; i < i1; i++) if (!(BSP[i] >= cfg.minBsp) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i] < 0 || (cfg.racingOnly && !L.race[i])) bad[i] = 1;
-  for (const m of mans) for (let k = Math.max(i0, m.i - cfg.manBefore); k < Math.min(i1, m.i + cfg.manAfter); k++) bad[k] = 1;
-  for (let i = i0 + 1; i < i1; i++) if (L.sailState?.[i] !== L.sailState?.[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
-  for (let i = i0 + 1; i < i1; i++) if (L.race[i] !== L.race[i - 1] || L.leg[i] !== L.leg[i - 1] || L.testing[i] !== L.testing[i - 1] || mode[i] !== mode[i - 1] || tack[i] !== tack[i - 1]) bad[i] = 1;
-  const cs = new Int32Array(n + 1);
   const formulaDiagnostics = opt.formulas?.length ? SL.evaluateFormulas(ch, opt.originalChannels || raw.ch, opt.formulas, n) : [];
   for (const q of formulaDiagnostics) if (q.missing.length) warn.push(q.name + ': ontbrekende kanalen ' + q.missing.join(', '));
   const formulaAngles = new Set((opt.formulas || []).filter(d => d.type === 'angle').map(d => d.name));
-  const names = Object.keys(ch), phases = [], PL = cfg.phaseLen;
-  const phaseDiagnostics={masked:0,stability:0,target:0,accepted:0};
-  if(opt.phaseRules)for(let i=i0;i<i1;i++)if(!SL.sampleMatches({raw,i0,i1,L,mode,tack},i,opt.phaseRules))bad[i]=1;
-  for(let i=0;i<n;i++)cs[i+1]=cs[i]+bad[i];
-  for (let i = i0; !opt.skipPhases && i + PL <= i1;) {
-    if (cs[i + PL] - cs[i] > 0) { phaseDiagnostics.masked++; i += 3; continue; }
-    const tw = TWA.subarray(i, i + PL);
-    const headings=fin(cfg.sdHdg)&&ch.HDG?ch.HDG.subarray(i,i+PL):null;
-    const headingMean=headings?cmean(headings):NaN;
-    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1] || (headings && sd(Array.from(headings,x=>w180(x-headingMean)))>cfg.sdHdg)) { phaseDiagnostics.stability++; i += 5; continue; }
-    const v = {}; for (const k of names) v[k] = (ANG.test(k) || formulaAngles.has(k) ? cmean : mean)(ch[k].subarray(i, i + PL));
-    if ((fin(v['BSPpol%']) && (v['BSPpol%'] < cfg.polMin || v['BSPpol%'] > cfg.polMax)) || v.absTWA < 28) { phaseDiagnostics.target++; i += 5; continue; }
-    if (fin(v.Cur_E) && fin(v.Cur_N)) { v.CUR_RATE = Math.hypot(v.Cur_E, v.Cur_N); v.CUR_DIR = w360(Math.atan2(v.Cur_E, v.Cur_N) * R2D); }
-    const md = mode[i + (PL >> 1)], rc = L.race[i], lg = L.leg[i];
-    phases.push({ i, i1: i + PL, t: raw.t0 + i * 1000, tack: v.TWA >= 0 ? 'Stbd' : 'Port', mode: MODES[md], sails: L.sail[i] >= 0 ? L.sailNames[L.sail[i]] : '-', race: rc, leg: lg, raceLeg: rc ? 'R' + rc + 'L' + lg : '-', testing: L.testing[i], v });
-    phaseDiagnostics.accepted++; i += PL + cfg.phaseGap;
-  }
-  const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases, magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics, phaseDiagnostics, formulaAngles: [...formulaAngles] };
+  const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases:[], magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics, formulaAngles: [...formulaAngles] };
+  D.phaseDiagnostics = generatePhases(D,opt,confidentMode);
   if(opt.phaseBuild)SL.phaseBuild(D,opt.phaseBuild);
   D.legs = buildLegs(D); D.sum = summary(D);
   return D;
+}
+// A window near a polar target can contain two adjacent sample-level modes.
+// Give it the most frequent one, resolving equal counts in favour of the closer-wind mode.
+function phaseMode(mode, start, end) {
+  const counts = [0,0,0,0];
+  for (let i=start; i<end; i++) if (mode[i]>=0) counts[mode[i]]++;
+  const highest = Math.max(...counts);
+  return highest ? MODES[counts.indexOf(highest)] : undefined;
+}
+
+function generatePhases(D, opt, confidentMode) {
+  const {cfg,ch,L,i0,i1,n,mode,tack,raw} = D, length = cfg.phaseLen;
+  const reasons = {scope:0,missing:0,speed:0,manoeuvre:0,sail:0,boundary:0,stabilityBsp:0,stabilityTwa:0,stabilityTws:0,stabilityHdg:0,polar:0,angle:0};
+  const byMode = Object.fromEntries(MODES.map(name=>[name,0]));
+  const upwindReasons = {...reasons};
+  const stats = {masked:0,stability:0,target:0,accepted:0,checkedWindowStarts:0,reasons,byMode,upwindReasons,upwindSailingSeconds:0};
+  if (opt.skipPhases || i0+length>i1) return stats;
+  const {BSP,TWA,TWS,HDG} = ch;
+  const names = Object.keys(ch), angleNames = new Set(D.formulaAngles);
+  const rules = opt.phaseRules, sampleRules = rules ? {...rules,mode:''} : null;
+  const mask = new Uint8Array(n), boundary = new Uint8Array(n), upwindStart = new Uint8Array(n);
+  const maskNames = ['','scope','missing','speed','manoeuvre','sail'];
+  for (const m of D.mans) mask.fill(4,Math.max(i0,m.i-cfg.manBefore),Math.min(i1,m.i+cfg.manAfter));
+  for (let i=i0+1; i<i1; i++) {
+    if (L.sailState && L.sailState[i] !== L.sailState[i-1]) mask.fill(5,Math.max(i0,i-20),Math.min(i1,i+30));
+    if (L.race[i]!==L.race[i-1] || L.leg[i]!==L.leg[i-1] || L.testing[i]!==L.testing[i-1] || tack[i]!==tack[i-1])
+      boundary[i] = 1; // half-open windows may start or end exactly here
+  }
+  let established = -1, streak = 0;
+  for (let i=i0; i<i1; i++) {
+    if ((sampleRules && !SL.sampleMatches(D,i,sampleRules)) || (!rules?.scope && cfg.racingOnly && !L.race[i])) mask[i]=1;
+    else if (D.invalid[i] || !fin(BSP[i]) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i]<0) mask[i]=2;
+    else if (BSP[i]<cfg.minBsp) mask[i]=3;
+    if (mode[i]===0 && mask[i]!==1 && mask[i]!==2 && mask[i]!==3 && !L.motor?.[i]) {
+      upwindStart[i]=1; stats.upwindSailingSeconds++;
+    }
+    if (mask[i] || boundary[i]) { established=-1; streak=0; }
+    // Confirm a change of sailing mode on five consecutive seconds at least 2° inside the new band.
+    // Small TWA or target fluctuations at the threshold are handled by the window's own stability test.
+    const candidate = confidentMode[i];
+    if (mask[i] || candidate<0) { streak=0; continue; }
+    streak = streak && candidate===confidentMode[i-1] ? streak+1 : 1;
+    if (streak===5) {
+      if (established>=0 && candidate!==established) boundary[i-4]=1;
+      established=candidate;
+    }
+  }
+  function reject(category, reason, start, count=1) {
+    stats[category]+=count; reasons[reason]+=count; stats.checkedWindowStarts+=count;
+    for (let j=start; j<start+count; j++) upwindReasons[reason]+=upwindStart[j];
+  }
+  let nextBad=i0, nextBoundary=i0+1;
+  for (let i=i0; i+length<=i1;) {
+    const end=i+length, lastStart=i1-length;
+    nextBad=Math.max(nextBad,i);
+    while (nextBad<i1 && !mask[nextBad]) nextBad++;
+    nextBoundary=Math.max(nextBoundary,i+1);
+    while (nextBoundary<i1 && !boundary[nextBoundary]) nextBoundary++;
+    if (nextBad<end && nextBad<=nextBoundary) {
+      const count=Math.min(nextBad,lastStart)-i+1;
+      reject('masked',maskNames[mask[nextBad]],i,count); i+=count; continue;
+    }
+    if (nextBoundary<end) {
+      const count=Math.min(nextBoundary,lastStart+1)-i;
+      reject('masked','boundary',i,count); i+=count; continue;
+    }
+    const windowMode = phaseMode(mode,i,end);
+    if (rules?.mode && rules.mode!==windowMode) { reject('masked','scope',i); i++; continue; }
+    let reason;
+    if (sd(TWA.subarray(i,end))>cfg.sdTwa) reason='stabilityTwa';
+    else if (sd(BSP.subarray(i,end))>cfg.sdBsp) reason='stabilityBsp';
+    else if (sd(TWS.subarray(i,end))>cfg.sdTws) reason='stabilityTws';
+    else if (HDG && fin(cfg.sdHdg)) {
+      const headings=HDG.subarray(i,end), center=cmean(headings);
+      if (sd(Array.from(headings,x=>w180(x-center)))>cfg.sdHdg) reason='stabilityHdg';
+    }
+    if (reason) { reject('stability',reason,i); i++; continue; }
+    const polarPct=mean(ch['BSPpol%'].subarray(i,end));
+    if (fin(polarPct) && (polarPct<cfg.polMin || polarPct>cfg.polMax)) { reject('target','polar',i); i++; continue; }
+    if (mean(ch.absTWA.subarray(i,end))<28) { reject('target','angle',i); i++; continue; }
+    const v={};
+    for (const k of names) v[k]=(ANG.test(k) || angleNames.has(k) ? cmean : mean)(ch[k].subarray(i,end));
+    if (fin(v.Cur_E) && fin(v.Cur_N)) {
+      v.CUR_RATE=Math.hypot(v.Cur_E,v.Cur_N);
+      v.CUR_DIR=w360(Math.atan2(v.Cur_E,v.Cur_N)*R2D);
+    }
+    const rc=L.race[i], lg=L.leg[i];
+    D.phases.push({i,i1:end,t:raw.t0+i*1000,tack:v.TWA>=0?'Stbd':'Port',mode:windowMode,sails:L.sail[i]>=0?L.sailNames[L.sail[i]]:'-',race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:L.testing[i],v});
+    byMode[windowMode]++; stats.accepted++; stats.checkedWindowStarts++;
+    i=end+cfg.phaseGap;
+  }
+  return stats;
 }
 function analyse(raw, opt) {
   let D = process(raw, opt);
@@ -658,6 +759,6 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { phaseMode, speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;

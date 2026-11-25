@@ -246,6 +246,12 @@ function cmean(a) { let s = 0, c = 0, n = 0; for (const v of a) if (fin(v)) { s 
 function quant(a, q) { const b = Array.from(a).filter(fin).sort((x, y) => x - y); if (!b.length) return NaN; const p = (b.length - 1) * q, i = Math.floor(p); return b[i] + (b[Math.min(i + 1, b.length - 1)] - b[i]) * (p - i); }
 const median = a => quant(a, 0.5);
 const ANG = /^(HDG|COG|TWD|Course|Set|TWDTwisted|TWDmin|TWDmax|TWDG|TWD_calc|CUR_DIR)$/;
+const relativeWind = /^(TWA|AWA|MWA)$/;
+function signedWindSample(value) {
+  // Logs use either ±180° or 0–360°. Match the CSV convention at dead downwind.
+  if (!fin(value) || value < -180 || value > 360) return NaN;
+  return value >= 180 ? value - 360 : value;
+}
 
 /* ---------- log parsing ---------- */
 const ALIAS = { BSP: ['bsp', 'boatspeed', 'boat speed', 'stw'], AWA: ['awa'], AWS: ['aws'], TWA: ['twa'], TWS: ['tws'], TWD: ['twd'],
@@ -339,8 +345,10 @@ function parseLog(text, nativeWindow) {
   const cols = new Map();
   const put = (i, k, value) => {
     if (!k || !String(value ?? '').trim()) return;
-    const v = csvNumber(value); if (!fin(v)) { diagnostics.invalidValues++; return; }
-    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || /^(TWA|AWA|MWA)$/.test(k) ? new Float64Array(n) : null }; cols.set(k, c); }
+    const number = csvNumber(value), windAngle = relativeWind.test(k);
+    const v = windAngle ? signedWindSample(number) : number;
+    if (!fin(v)) { diagnostics.invalidValues++; return; }
+    let c = cols.get(k); if (!c) { c = { discrete: /^bsp[ _-]?active$/i.test(k), sum: new Float64Array(n), count: new Uint32Array(n), cos: ANG.test(k) || windAngle ? new Float64Array(n) : null }; cols.set(k, c); }
     if (c.discrete) {
       if (c.count[i] && c.sum[i] !== v) c.sum[i] = NaN;
       else if (!c.count[i]) c.sum[i] = v;
@@ -572,6 +580,10 @@ function process(raw, opt) {
   const L = applyEvents(raw, opt.events, cfg);
   for (const k in L.manual) ch[k] = L.manual[k];
   if (invalid.some(Boolean)) for (const k of Object.keys(ch)) { ch[k] = Float64Array.from(ch[k]); for (let i = 0; i < n; i++) if (invalid[i]) ch[k][i] = NaN; }
+  // Mapped channels, manual entries and saved sessions can bypass the CSV angle conversion.
+  for (const key of ['TWA','AWA','MWA']) {
+    if (ch[key]?.some(value=>value>=180 || value< -180)) ch[key]=Float64Array.from(ch[key],signedWindSample);
+  }
   const loggedBsp = ch.BSP;
   if (opt.calib?.speedos?.enabled && (!loggedBsp || !loggedBsp.every(fin))) {
     const d = opt.calib.speedos;
@@ -611,12 +623,20 @@ function process(raw, opt) {
 
   // polar source
   let P = opt.polar || null, src = P ? P.src : 'none';
-  const logT = !P && ch.PolBsp && (ch['Targ Twa'] || ch.TargTwa) && (ch['Targ Bsp'] || ch.TargBsp);
-  if (logT) src = 'log';
-  const lTwa = ch['Targ Twa'] || ch.TargTwa, lBsp = ch['Targ Bsp'] || ch.TargBsp;
+  // Capture source arrays before derived Target_TWA/Target_BSP/Polar_BSP replace any namesakes.
+  const channelNames = Object.keys(ch);
+  const loggedChannel = pattern => {
+    const name = channelNames.find(k => pattern.test(k.replace(/[\s_-]/g, '')));
+    return name === undefined ? undefined : ch[name];
+  };
+  const lTwa = ch['Targ Twa'] || ch.TargTwa || loggedChannel(/^(?:targ(?:et)?twa|twatrg)$/i);
+  const lBsp = ch['Targ Bsp'] || ch.TargBsp || loggedChannel(/^(?:targ(?:et)?bsp|bsptrg)$/i);
+  const lPol = ch.PolBsp || loggedChannel(/^(?:pol(?:ar)?bsp|bsppol)$/i);
+  if (!P && (lTwa || lBsp || lPol)) src = 'log';
   const aT = need('absTWA'), pol = need('Polar_BSP'), tT = need('Target_TWA'), tB = need('Target_BSP'), vmg = need('VMG'), bp = need('BSPpol%'), bt = need('BSP_trg%'), vp = need('VMG%'),
     dB = need('ΔBSP'), dT = need('ΔTWA'), dV = need('ΔVMG'), dVp = need('ΔVMG%');
   const tack = new Int8Array(n), mode = new Int8Array(n).fill(-1);
+  const confidentMode = opt.skipPhases ? null : new Int8Array(n).fill(-1);
   if (ch.Heel) { const a = need('abs_heel'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Heel[i]); }
   if (ch.Rudder) { const a = need('abs_rudder'); for (let i = 0; i < n; i++) a[i] = Math.abs(ch.Rudder[i]); }
   for (const k of ['Heel', 'Rudder', 'Leeway']) if (ch[k]) { const a = need(k + '_norm'); for (let i = 0; i < n; i++) a[i] = TWA[i] < 0 ? -ch[k][i] : ch[k][i]; }
@@ -632,9 +652,21 @@ function process(raw, opt) {
     let ut, dt_, tt, tb, pb = NaN;
     /* targets follow a 3 s mean of TWS, which matches RaceReplay's percentages; polar speed uses the sample itself */
     if (P) { const w3 = fin(TWS[i - 1]) && fin(TWS[i + 1]) ? (TWS[i - 1] + w + TWS[i + 1]) / 3 : w, u = P.up(w3), d = P.dn(w3); ut = u.twa; dt_ = d.twa; pb = P.bsp(w, a); if (a < 90) { tt = u.twa; tb = u.bsp; } else { tt = d.twa; tb = d.bsp; } }
-    else if (logT) { pb = ch.PolBsp[i]; tt = lTwa[i]; tb = lBsp[i]; if (fin(tt) && (tt < 90) !== (a < 90)) { tt = NaN; tb = NaN; } ut = a < 90 && fin(tt) ? tt : 45; dt_ = a >= 90 && fin(tt) ? tt : 142; }
-    else { ut = 45; dt_ = 142; }
-    const m = a < ut + cfg.upMargin ? 0 : a > dt_ - cfg.dnMargin ? 3 : a < 100 ? 1 : 2; mode[i] = m;
+    else {
+      const angle = lTwa?.[i];
+      // VMG targets use angle magnitude; loggers can encode port as -42 or 318.
+      tt = fin(angle) && angle >= -180 && angle <= 360 ? Math.abs(w180(angle)) : NaN;
+      tb = lBsp?.[i];
+      if (!fin(tb) || tb <= 0) tb = NaN;
+      if (fin(angle) && (!(tt > 0) || (tt < 90) !== (a < 90))) { tt = NaN; tb = NaN; }
+      pb = lPol?.[i];
+      if (!fin(pb) || pb <= 0) pb = NaN;
+      ut = a < 90 && fin(tt) ? tt : 45;
+      dt_ = a >= 90 && fin(tt) ? tt : 142;
+    }
+    const upwindLimit = Math.min(90, ut + cfg.upMargin), downwindLimit = Math.max(90, dt_ - cfg.dnMargin);
+    const m = a < upwindLimit ? 0 : a > downwindLimit ? 3 : a < 100 ? 1 : 2; mode[i] = m;
+    if (confidentMode && Math.min(Math.abs(a-upwindLimit), Math.abs(a-downwindLimit), Math.abs(a-100)) >= 2) confidentMode[i] = m;
     pol[i] = pb; bp[i] = pb > 0.5 ? b / pb * 100 : NaN;
     tT[i] = tt; tB[i] = tb; const tv = tb * Math.abs(Math.cos(tt * D2R));
     bt[i] = tb > 0.5 ? b / tb * 100 : NaN; dB[i] = b - tb; dT[i] = a - tt; dV[i] = vmg[i] - tv;
@@ -683,37 +715,106 @@ function process(raw, opt) {
   }
   mans.sort((a,b)=>a.i-b.i);
   for (const m of mans) if (mans.some(o => o !== m && o.i > m.i - 50 && o.i < m.i + 46)) { m.crowded = true; delete m.loss; delete m.lossGps; }
-  // validity mask + phases
-  const bad = new Uint8Array(n + 1);
-  for (let i = i0; i < i1; i++) if (!(BSP[i] >= cfg.minBsp) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i] < 0 || (cfg.racingOnly && !L.race[i])) bad[i] = 1;
-  for (const m of mans) for (let k = Math.max(i0, m.i - cfg.manBefore); k < Math.min(i1, m.i + cfg.manAfter); k++) bad[k] = 1;
-  for (let i = i0 + 1; i < i1; i++) if (L.sailState?.[i] !== L.sailState?.[i - 1]) for (let k = Math.max(i0, i - 20); k < Math.min(i1, i + 30); k++) bad[k] = 1;
-  for (let i = i0 + 1; i < i1; i++) if (L.race[i] !== L.race[i - 1] || L.leg[i] !== L.leg[i - 1] || L.testing[i] !== L.testing[i - 1] || mode[i] !== mode[i - 1] || tack[i] !== tack[i - 1]) bad[i] = 1;
-  const cs = new Int32Array(n + 1);
   const formulaDiagnostics = opt.formulas?.length ? SL.evaluateFormulas(ch, opt.originalChannels || raw.ch, opt.formulas, n) : [];
   for (const q of formulaDiagnostics) if (q.missing.length) warn.push(q.name + ': ontbrekende kanalen ' + q.missing.join(', '));
   const formulaAngles = new Set((opt.formulas || []).filter(d => d.type === 'angle').map(d => d.name));
-  const names = Object.keys(ch), phases = [], PL = cfg.phaseLen;
-  const phaseDiagnostics={masked:0,stability:0,target:0,accepted:0};
-  if(opt.phaseRules)for(let i=i0;i<i1;i++)if(!SL.sampleMatches({raw,i0,i1,L,mode,tack},i,opt.phaseRules))bad[i]=1;
-  for(let i=0;i<n;i++)cs[i+1]=cs[i]+bad[i];
-  for (let i = i0; !opt.skipPhases && i + PL <= i1;) {
-    if (cs[i + PL] - cs[i] > 0) { phaseDiagnostics.masked++; i += 3; continue; }
-    const tw = TWA.subarray(i, i + PL);
-    const headings=fin(cfg.sdHdg)&&ch.HDG?ch.HDG.subarray(i,i+PL):null;
-    const headingMean=headings?cmean(headings):NaN;
-    if (sd(tw) > cfg.sdTwa || sd(BSP.subarray(i, i + PL)) > cfg.sdBsp || sd(TWS.subarray(i, i + PL)) > cfg.sdTws || mode[i] !== mode[i + PL - 1] || (headings && sd(Array.from(headings,x=>w180(x-headingMean)))>cfg.sdHdg)) { phaseDiagnostics.stability++; i += 5; continue; }
-    const v = {}; for (const k of names) v[k] = (ANG.test(k) || formulaAngles.has(k) ? cmean : mean)(ch[k].subarray(i, i + PL));
-    if ((fin(v['BSPpol%']) && (v['BSPpol%'] < cfg.polMin || v['BSPpol%'] > cfg.polMax)) || v.absTWA < 28) { phaseDiagnostics.target++; i += 5; continue; }
-    if (fin(v.Cur_E) && fin(v.Cur_N)) { v.CUR_RATE = Math.hypot(v.Cur_E, v.Cur_N); v.CUR_DIR = w360(Math.atan2(v.Cur_E, v.Cur_N) * R2D); }
-    const md = mode[i + (PL >> 1)], rc = L.race[i], lg = L.leg[i];
-    phases.push({ i, i1: i + PL, t: raw.t0 + i * 1000, tack: v.TWA >= 0 ? 'Stbd' : 'Port', mode: MODES[md], sails: L.sail[i] >= 0 ? L.sailNames[L.sail[i]] : '-', race: rc, leg: lg, raceLeg: rc ? 'R' + rc + 'L' + lg : '-', testing: L.testing[i], v });
-    phaseDiagnostics.accepted++; i += PL + cfg.phaseGap;
-  }
-  const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases, magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics, phaseDiagnostics, formulaAngles: [...formulaAngles] };
+  const D = { cfg, raw, ch, n, i0, i1, tack, mode, L, mans, phases:[], magVar, logMagVar, P, polarSrc: src, warn, calibrated, invalid, formulaDiagnostics, formulaAngles: [...formulaAngles] };
+  D.phaseDiagnostics = generatePhases(D,opt,confidentMode);
   if(opt.phaseBuild)SL.phaseBuild(D,opt.phaseBuild);
   D.legs = buildLegs(D); D.sum = summary(D);
   return D;
+}
+// A window near a polar target can contain two adjacent sample-level modes.
+// Give it the most frequent one, resolving equal counts in favour of the closer-wind mode.
+function phaseMode(mode, start, end) {
+  const counts = [0,0,0,0];
+  for (let i=start; i<end; i++) if (mode[i]>=0) counts[mode[i]]++;
+  const highest = Math.max(...counts);
+  return highest ? MODES[counts.indexOf(highest)] : undefined;
+}
+
+function generatePhases(D, opt, confidentMode) {
+  const {cfg,ch,L,i0,i1,n,mode,tack,raw} = D, length = cfg.phaseLen;
+  const reasons = {scope:0,missing:0,speed:0,manoeuvre:0,sail:0,boundary:0,stabilityBsp:0,stabilityTwa:0,stabilityTws:0,stabilityHdg:0,polar:0,angle:0};
+  const byMode = Object.fromEntries(MODES.map(name=>[name,0]));
+  const upwindReasons = {...reasons};
+  const stats = {masked:0,stability:0,target:0,accepted:0,checkedWindowStarts:0,reasons,byMode,upwindReasons,upwindSailingSeconds:0};
+  if (opt.skipPhases || i0+length>i1) return stats;
+  const {BSP,TWA,TWS,HDG} = ch;
+  const names = Object.keys(ch), angleNames = new Set(D.formulaAngles);
+  const rules = opt.phaseRules, sampleRules = rules ? {...rules,mode:''} : null;
+  const mask = new Uint8Array(n), boundary = new Uint8Array(n), upwindStart = new Uint8Array(n);
+  const maskNames = ['','scope','missing','speed','manoeuvre','sail'];
+  for (const m of D.mans) mask.fill(4,Math.max(i0,m.i-cfg.manBefore),Math.min(i1,m.i+cfg.manAfter));
+  for (let i=i0+1; i<i1; i++) {
+    if (L.sailState && L.sailState[i] !== L.sailState[i-1]) mask.fill(5,Math.max(i0,i-20),Math.min(i1,i+30));
+    if (L.race[i]!==L.race[i-1] || L.leg[i]!==L.leg[i-1] || L.testing[i]!==L.testing[i-1] || tack[i]!==tack[i-1])
+      boundary[i] = 1; // half-open windows may start or end exactly here
+  }
+  let established = -1, streak = 0;
+  for (let i=i0; i<i1; i++) {
+    if ((sampleRules && !SL.sampleMatches(D,i,sampleRules)) || (!rules?.scope && cfg.racingOnly && !L.race[i])) mask[i]=1;
+    else if (D.invalid[i] || !fin(BSP[i]) || !fin(TWA[i]) || !fin(TWS[i]) || mode[i]<0) mask[i]=2;
+    else if (BSP[i]<cfg.minBsp) mask[i]=3;
+    if (mode[i]===0 && mask[i]!==1 && mask[i]!==2 && mask[i]!==3 && !L.motor?.[i]) {
+      upwindStart[i]=1; stats.upwindSailingSeconds++;
+    }
+    if (mask[i] || boundary[i]) { established=-1; streak=0; }
+    // Confirm a change of sailing mode on five consecutive seconds at least 2° inside the new band.
+    // Small TWA or target fluctuations at the threshold are handled by the window's own stability test.
+    const candidate = confidentMode[i];
+    if (mask[i] || candidate<0) { streak=0; continue; }
+    streak = streak && candidate===confidentMode[i-1] ? streak+1 : 1;
+    if (streak===5) {
+      if (established>=0 && candidate!==established) boundary[i-4]=1;
+      established=candidate;
+    }
+  }
+  function reject(category, reason, start, count=1) {
+    stats[category]+=count; reasons[reason]+=count; stats.checkedWindowStarts+=count;
+    for (let j=start; j<start+count; j++) upwindReasons[reason]+=upwindStart[j];
+  }
+  let nextBad=i0, nextBoundary=i0+1;
+  for (let i=i0; i+length<=i1;) {
+    const end=i+length, lastStart=i1-length;
+    nextBad=Math.max(nextBad,i);
+    while (nextBad<i1 && !mask[nextBad]) nextBad++;
+    nextBoundary=Math.max(nextBoundary,i+1);
+    while (nextBoundary<i1 && !boundary[nextBoundary]) nextBoundary++;
+    if (nextBad<end && nextBad<=nextBoundary) {
+      const count=Math.min(nextBad,lastStart)-i+1;
+      reject('masked',maskNames[mask[nextBad]],i,count); i+=count; continue;
+    }
+    if (nextBoundary<end) {
+      const count=Math.min(nextBoundary,lastStart+1)-i;
+      reject('masked','boundary',i,count); i+=count; continue;
+    }
+    const windowMode = phaseMode(mode,i,end);
+    if (rules?.mode && rules.mode!==windowMode) { reject('masked','scope',i); i++; continue; }
+    let reason;
+    if (sd(TWA.subarray(i,end))>cfg.sdTwa) reason='stabilityTwa';
+    else if (sd(BSP.subarray(i,end))>cfg.sdBsp) reason='stabilityBsp';
+    else if (sd(TWS.subarray(i,end))>cfg.sdTws) reason='stabilityTws';
+    else if (HDG && fin(cfg.sdHdg)) {
+      const headings=HDG.subarray(i,end), center=cmean(headings);
+      if (sd(Array.from(headings,x=>w180(x-center)))>cfg.sdHdg) reason='stabilityHdg';
+    }
+    if (reason) { reject('stability',reason,i); i++; continue; }
+    const polarPct=mean(ch['BSPpol%'].subarray(i,end));
+    if (fin(polarPct) && (polarPct<cfg.polMin || polarPct>cfg.polMax)) { reject('target','polar',i); i++; continue; }
+    if (mean(ch.absTWA.subarray(i,end))<28) { reject('target','angle',i); i++; continue; }
+    const v={};
+    for (const k of names) v[k]=(ANG.test(k) || angleNames.has(k) ? cmean : mean)(ch[k].subarray(i,end));
+    if (fin(v.Cur_E) && fin(v.Cur_N)) {
+      v.CUR_RATE=Math.hypot(v.Cur_E,v.Cur_N);
+      v.CUR_DIR=w360(Math.atan2(v.Cur_E,v.Cur_N)*R2D);
+    }
+    const rc=L.race[i], lg=L.leg[i];
+    D.phases.push({i,i1:end,t:raw.t0+i*1000,tack:v.TWA>=0?'Stbd':'Port',mode:windowMode,sails:L.sail[i]>=0?L.sailNames[L.sail[i]]:'-',race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:L.testing[i],v});
+    byMode[windowMode]++; stats.accepted++; stats.checkedWindowStarts++;
+    i=end+cfg.phaseGap;
+  }
+  return stats;
 }
 function analyse(raw, opt) {
   let D = process(raw, opt);
@@ -894,7 +995,7 @@ function demo() {
   return { raw: { t0, n, ch, format: 'Demo' }, polar: P, events: { meta: { boat: 'Demo boat', date: '2026-06-13', location: 'IJmuiden', daytype: 'Racing; WinLee', goals: 'Example data - load your own files on the Setup tab' }, evOff: 2, logOff: 0, events: ev.sort((a, b) => a.tl - b.tl) } };
 }
 
-return { speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
+return { phaseMode, speedoConfig, checkSpeedos, selectedSpeed, attrs, summary, buildLegs, TRENDS, fitTrend, trendBand, lineAt, residual, spearman, CAL0, calibActive, parseTime, csvRows, csvNumber, logOffset, D2R, R2D, fin, w180, w360, mean, sd, cmean, quant, median, ANG, MODES, DEF, parseLog, parseEvents, parsePolar, makePolar, polarText, analyse, avgPh, mostCommon, calTable, awaTable, twdPairs, solveAwaOffset, learnPolar, learnTargets, driverModel, modeClusters, windShifts, glitches, loess, corr, demo, sailLabel, trueWind };
 })();
 if (typeof module !== 'undefined') module.exports = SL;
 
@@ -1520,25 +1621,25 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
 /* Stable preparation boundaries and independently reviewed calibration windows. */
 (() => {
   const finite = Number.isFinite, copy = SL.copy;
-  const phaseKeys = ['phaseLen','phaseGap','minBsp','sdTwa','sdBsp','sdTws','sdHdg','manBefore','manAfter','polMin','polMax'];
+  const phaseKeys = ['phaseLen','phaseGap','minBsp','sdTwa','sdBsp','sdTws','sdHdg','upMargin','manBefore','manAfter','polMin','polMax'];
   function phaseDefaults(cfg) { return { ...Object.fromEntries(phaseKeys.map(k => [k, cfg[k] ?? (k === 'sdHdg' ? 10 : SL.DEF[k])])), scope:'all', race:'', sail:'', mode:'', tack:'', range:null }; }
   const eventKey = s => JSON.stringify({sources:s.sources.map(x=>x.hash), raw:s.raw && [s.raw.t0,s.raw.n], events:(s.events?.events||[]).filter(e=>e.type!=='MiscEvent').map(({type,tl,attr})=>[type,tl,attr]), turns:s.turnEdits?.length?s.turnEdits:undefined, clocks:[s.cfg.logOff,s.cfg.evOff,s.cfg.evShiftSec,s.cfg.tStart,s.cfg.tEnd,s.cfg.maxHold,s.cfg.useEvents], channels:s.profile.channels});
   const preparationKey = s => JSON.stringify({source:eventKey(s), annotations:(s.events?.events||[]).map(e=>[e.type,e.tl,e.comments]),cfg:s.cfg, profile:s.profile, polar:s.polar, chart:s.chart, calib:s.calib, baseline:s.baseline, changed:s.calibrationChanged, reviews:s.reviews, phases:s.phaseBuild, pairs:s.manoeuvrePairs});
   function sampleMatches(D,i,f={}) { const t=D.raw.t0+i*1000; return i>=D.i0&&i<D.i1 && (!f.range || (t>=f.range.start&&t<f.range.end)) && (!f.race || String(D.L.race[i])===String(f.race)) && (!f.sail || D.L.sailNames[D.L.sail[i]]===f.sail||D.L.sailSlots?.[D.L.sailState?.[i]]?.includes(f.sail)) && (!f.mode || SL.MODES[D.mode[i]]===f.mode) && (!f.tack || (D.tack[i]>0?'Stbd':'Port')===f.tack) && (f.scope!=='racing'||D.L.race[i]>0) && (f.scope!=='training'||D.L.testing[i]>0) && !D.L.motor?.[i]; }
   const angle = (D,k) => SL.ANG.test(k) || ['TWA','AWA'].includes(k) || D.formulaAngles?.includes(k);
-  function windowPhase(D,r) {
+  function windowPhase(D,r,minSeconds=5) {
     if (!r || !finite(r.start)||!finite(r.end)||r.end<=r.start) return null;
     const i=Math.round((r.start-D.raw.t0)/1000), i1=Math.round((r.end-D.raw.t0)/1000);
-    if(i<D.i0||i1>D.i1||i1-i<5)return null;
+    if(i<D.i0||i1>D.i1||i1-i<minSeconds)return null;
     const v={},spread={},coverage={};
     for(const [k,a] of Object.entries(D.ch)) { const vals=Array.from(a.subarray(i,i1)).filter(finite); coverage[k]=vals.length/(i1-i); v[k]=(angle(D,k)?SL.cmean:SL.mean)(vals); if(['TWA','AWA'].includes(k))v[k]=SL.w180(v[k]); spread[k]=angle(D,k)?SL.sd(vals.map(x=>SL.w180(x-v[k]))):SL.sd(vals); }
     const rc=D.L.race[i],lg=D.L.leg[i];
-    return {i,i1,t:r.start,mode:SL.MODES[D.mode[i]],tack:v.TWA>=0?'Stbd':'Port',sails:D.L.sailNames[D.L.sail[i]]||'-',race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:D.L.testing[i],v,spread,coverage};
+    return {i,i1,t:r.start,mode:SL.phaseMode(D.mode,i,i1),tack:v.TWA>=0?'Stbd':'Port',sails:D.L.sailNames[D.L.sail[i]]||'-',race:rc,leg:lg,raceLeg:rc?'R'+rc+'L'+lg:'-',testing:D.L.testing[i],v,spread,coverage};
   }
   function phaseBuild(D,build) {
     if(!build)return D; // Existing sessions retain their phases until explicitly regenerated.
     if(!build.generated) D.phases=[];
-    else if(Array.isArray(build.ranges)) D.phases=build.ranges.map(r=>windowPhase(D,r)).filter(p=>p && ['BSP','TWA','TWS'].every(k=>p.coverage[k]>=.95) && !Array.from(D.invalid.subarray(p.i,p.i1)).some(Boolean));
+    else if(Array.isArray(build.ranges)) D.phases=build.ranges.map(r=>windowPhase(D,r,2)).filter(p=>p && ['BSP','TWA','TWS'].every(k=>p.coverage[k]>=.95) && !Array.from(D.invalid.subarray(p.i,p.i1)).some(Boolean));
     return D;
   }
   const pairKey = (D,m) => m.type+':'+(D.raw.t0+m.i*1000);
@@ -1874,11 +1975,12 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
         const v=a[i];
         if(D.invalid?.[i]||!fin(speed?.[i])||speed[i]<0||!fin(v)||Math.abs(v)>360)continue;
         sin+=Math.sin(v*D2R);cos+=Math.cos(v*D2R);joint++;
-        if(key==='AWA' && (w.tack==='Port'?w180(v)<0:w180(v)>0) && Math.abs(w180(v))<180)onSide++;
+        if((key==='AWA' || key==='TWA') && (w.tack==='Port'?w180(v)<0:w180(v)>0) && Math.abs(w180(v))<180)onSide++;
       }
       const angle=joint>=.95*count && Math.hypot(sin,cos)>1e-8*joint ? Math.atan2(sin,cos)*R2D : NaN;
       out[key]=key==='TWD' ? w360(angle) : Math.abs(w180(angle));
       if(key==='AWA')out.awaOnSide=fin(angle) && onSide===joint;
+      if(key==='TWA')out.twaOnSide=fin(angle) && onSide===joint;
     }
     return out;
   }
@@ -1943,7 +2045,8 @@ Object.assign(SL, { legSpans, timeLost, starts, manTraces, windStats });
       const down=pair.type==='Gybe' && a.active.TWA>90 && b.active.TWA>90;
       if(!up && !down)continue;
       const [port,stbd]=a.side==='Port'?[a,b]:[b,a];
-      const pure=up ? Math.max(a.active.TWA,b.active.TWA)<=60 : Math.min(a.active.TWA,b.active.TWA)>=120;
+      const winds=[a.active,b.active,a.proposed,b.proposed];
+      const pure=winds.every(w=>w.twaOnSide && (up ? w.TWA<=60 : w.TWA>=120));
       const tableEligible=pure && !pair.validation;
       const alignment=up && tableEligible && pair.vmgToVmg!==false;
       pairs.push({key:pair.key,t:pair.anchor,type:pair.type,mode:up?'up':'dn',sail:a.sail,
@@ -3301,13 +3404,24 @@ R.sails = () => {
 /* ---------------- Calibration file ---------------- */
 const BAND_TWS = [6, 8, 10, 12.5, 16, 20];
 function calibEnsure() { if (!A.calib) A.calib = { app: 'SailLens', type: 'calibration', name: '', ...SL.CAL0, twa: BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })) }; if (!A.calib.twa || !A.calib.twa.length) A.calib.twa = BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })); return A.calib; }
-function calibSuggest(r, cb=calibEnsure()) { // add what the models found on top of what is already applied
+function calibSuggest(r, cb=calibEnsure(), active) {
   const done = [], r1 = v => Math.round(v * 10) / 10;
-  if (!r.bsp.err) { if ((r.bsp.kLo > 1 || r.bsp.kHi < 1) && Math.abs(r.bsp.k - 1) > 0.007) { cb.bspK = Math.round(cb.bspK * r.bsp.k * 1000) / 1000; done.push('BSP factor ' + cb.bspK); } if ((r.bsp.dLo > 0 || r.bsp.dHi < 0) && Math.abs(r.bsp.delta) > 1) { cb.hdgOff = r1(cb.hdgOff + r.bsp.delta); done.push('heading ' + cb.hdgOff + '°'); } }
-  if (r.cur && !r.cur.err && r.cur.hasLee && (r.cur.lLo > 1 || r.cur.lHi < 1) && Math.abs(r.cur.lam - 1) > 0.15) { cb.leewayGain = Math.round((cb.leewayGain ?? 1) * r.cur.lam * 100) / 100; done.push('leeway ×' + cb.leewayGain); }
-  if (!r.awa.err && Math.abs(r.awa.read) > 0.5 && Math.abs(r.awa.read) > 2 * r.awa.se) { cb.awaOff = r1(cb.awaOff - r.awa.read); done.push('AWA ' + cb.awaOff + '°'); }
-  if (!r.wind.err) { for (const b of r.wind.bins) if (Math.abs(b.e) > 1 && Math.abs(b.e) > 2 * b.se) { const bi = SL.BANDS.findIndex(x => x[2] === b.band), t = BAND_TWS[bi]; let row = cb.twa.find(x => x.tws === t); if (!row) { row = { tws: t, up: 0, dn: 0 }; cb.twa.push(row); cb.twa.sort((a, b2) => a.tws - b2.tws); } const key = b.mode === 'Upwind' ? 'up' : 'dn'; row[key] = r1((row[key] || 0) + b.e); done.push(`TWA ${b.mode.toLowerCase()} at ${t} kn ${row[key]}°`); }
-    if (r.wind.twsDn && Math.abs(r.wind.twsDn.pct) > 3 && Math.abs(r.wind.twsDn.pct) > 2 * r.wind.twsDn.se) { cb.twsDnPct = r1(cb.twsDnPct - r.wind.twsDn.pct); done.push('TWS downwind ' + cb.twsDnPct + '%'); } }
+  const available = key => !active || cb[key] === active[key];
+  if (!r.bsp.err) {
+    if (available('bspK') && (r.bsp.kLo > 1 || r.bsp.kHi < 1) && Math.abs(r.bsp.k - 1) > 0.007) {
+      cb.bspK = Math.round(cb.bspK * r.bsp.k * 1000) / 1000; done.push('BSP factor ' + cb.bspK);
+    }
+    if (available('hdgOff') && (r.bsp.dLo > 0 || r.bsp.dHi < 0) && Math.abs(r.bsp.delta) > 1) {
+      cb.hdgOff = r1(cb.hdgOff + r.bsp.delta); done.push('heading ' + cb.hdgOff + '°');
+    }
+  }
+  if (available('leewayGain') && r.cur && !r.cur.err && r.cur.hasLee && (r.cur.lLo > 1 || r.cur.lHi < 1) && Math.abs(r.cur.lam - 1) > 0.15) { cb.leewayGain = Math.round((cb.leewayGain ?? 1) * r.cur.lam * 100) / 100; done.push('leeway ×' + cb.leewayGain); }
+  if (available('awaOff') && !r.awa.err && Math.abs(r.awa.read) > 0.5 && Math.abs(r.awa.read) > 2 * r.awa.se) { cb.awaOff = r1(cb.awaOff - r.awa.read); done.push('AWA ' + cb.awaOff + '°'); }
+  // A session-wide wind fit may confound sailing on one tack with a change in the wind.
+  // The TWA table is proposed from reviewed local pairs after these upstream corrections.
+  if (available('twsDnPct') && !r.wind.err && r.wind.twsDn && Math.abs(r.wind.twsDn.pct) > 3 && Math.abs(r.wind.twsDn.pct) > 2 * r.wind.twsDn.se) {
+    cb.twsDnPct = r1(100 * ((1 + cb.twsDnPct / 100) / (1 + r.wind.twsDn.pct / 100) - 1)); done.push('TWS downwind ' + cb.twsDnPct + '%');
+  }
   return done;
 }
 function logCsv() { const D = A.D, keys = Object.keys(A.raw.ch), rows = [['Utc'].concat(keys).join(',')]; for (let i = D.i0; i < D.i1; i++) rows.push(new Date(iT(i)).toISOString().slice(0, 19).replace('T', ' ') + ',' + keys.map(k => { const v = D.ch[k][i]; return fin(v) ? (k === 'Lat' || k === 'Lon' ? v.toFixed(6) : String(Math.round(v * 1000) / 1000)) : ''; }).join(',')); return rows.join('\r\n'); }
@@ -3481,7 +3595,8 @@ const WF = (() => {
   function process(s, calib = s.calib, raw = s.raw, cfg = s.cfg) {
     if (!raw) return null;
     const mapped = SL.mappedRaw(raw, s.profile.channels || []);
-    cfg = {...cfg, ...(s.phaseBuild?.rules ? Object.fromEntries(SL.phaseKeys.map(k=>[k,s.phaseBuild.rules[k]])) : {})};
+    const rules=s.phaseBuild?.rules;
+    if(rules)cfg={...cfg,...Object.fromEntries(SL.phaseKeys.filter(k=>rules[k]!==undefined).map(k=>[k,rules[k]]))};
     return SL.analyse(mapped, { cfg, skipPhases: s.phaseBuild && (!s.phaseBuild.generated || Array.isArray(s.phaseBuild.ranges)), turnEdits:s.turnEdits, phaseBuild:s.phaseBuild, phaseRules:s.phaseBuild?.rules, events: s.events, polar: s.polar ? SL.makePolar(s.polar.rows, s.polar.src || 'file') : null, calib,
       formulas: s.profile.formulas || [], originalChannels: raw.ch, invalidRanges: Object.values(s.reviews).filter(r => r.invalid) });
   }
@@ -3555,8 +3670,8 @@ const WF = (() => {
   function filteredPhases(ps, purpose = 'performance') {
     if (!session || season()) return ps;
     if (purpose === 'calibration') return SL.calibrationReferences(A.D,session).phases;
-    const r = session.selections.analysis;
-    return ps.filter(p => SL.sampleMatches(A.D,p.i,session.analysisFilter||{}) && SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
+    const r = session.selections.analysis, {mode,...filters}=session.analysisFilter||{};
+    return ps.filter(p => (!mode||p.mode===mode) && SL.sampleMatches(A.D,p.i,filters) && SL.performanceAllowed({ start: p.t, end: iT(p.i1) }, session.reviews) && (!r || (p.t >= r.start && iT(p.i1) <= r.end)));
   }
   function objects(D = A.D) {
     if (!D) return [];
@@ -3756,12 +3871,13 @@ const WF = (() => {
     }
     const visible = list;
     const page = Math.min(session.reviewPage || 0, Math.max(0, Math.ceil(visible.length / 40) - 1)), shown = visible.slice(page * 40, (page + 1) * 40);
-    const approved = all.filter(x => SL.allowed(session.reviews[x.key], 'calibration')).length;
-    side.append(card('Fasetabel', bar(h('span', { class: 'chip' }, approved + ' goedgekeurde referenties'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
+    const approved = SL.calibrationPhases(A.D,session.reviews).length;
+    const rangeLabel = shown.length ? (page*40+1)+'–'+(page*40+shown.length)+' van '+visible.length : '0 fases';
+    side.append(card('Fasetabel', bar(h('strong', {id:'phase-page-count'}, rangeLabel), h('span', { class: 'chip' }, approved+' fases goedgekeurd voor kalibratie'), field('Extra variabele', sel('review-variable', varList(), reviewVar, v => { session.reviewVariable = v; show('review'); })), btn('Fases CSV', () => dl('SailLens-fases.csv', phasesCsv(filteredPhases(A.D.phases)))),
       btn('Getoonde selectie goedkeuren', () => { for (const x of shown) { const r = session.reviews[x.key]; if (!r?.invalid) session.reviews[x.key] = { ...x.range, ...r, calibration: true, performance: r?.performance !== false, reason: r?.reason || 'Handmatig goedgekeurd', updated: Date.now() }; } touch(); show('review'); })),
-      table(['Fase · tijd', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return ['F'+(A.D.phases.indexOf(x.obj)+1)+' · '+tstr(x.range.anchor || x.range.start), x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
+      table(['Fase · tijd', 'Vaarmodus', 'Boeg', 'BSP', reviewVar, 'Status', ''], shown.map(x => { const r = session.reviews[x.key]; return ['F'+(A.D.phases.indexOf(x.obj)+1)+' · '+tstr(x.range.anchor || x.range.start), x.obj.mode, x.obj.tack, f1(x.obj.v?.BSP, 2), f1(x.obj.v?.[reviewVar], 2), r?.invalid ? 'Ongeldig' : r?.calibration ? 'Goedgekeurd' : r?.reason ? 'Uitgesloten' : 'Te beoordelen', btn('Bekijk', () => { focusPhase(x);show('review'); })]; })),
       !visible.length ? help('Geen objecten in deze selectie. Bekijk de hele sessie of pas de detectie-instellingen aan.') : null,
-      bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, `${Math.min(page * 40 + 1, visible.length)}–${Math.min((page + 1) * 40, visible.length)} van ${visible.length}`), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
+      bar(btn('Vorige', () => { session.reviewPage = Math.max(0, page - 1); show('review'); }, false, { disabled: page === 0 }), h('span', {}, rangeLabel), btn('Volgende', () => { session.reviewPage = page + 1; show('review'); }, false, { disabled: (page + 1) * 40 >= visible.length }))));
     const exclusions = Object.entries(session.reviews).filter(([k, r]) => r.invalid || r.performance === false || (!r.calibration && r.reason));
     if (exclusions.length) side.append(card('Bewaarde uitsluitingen', table(['Tijdvak', 'Reden', 'Gebruik', ''], exclusions.map(([key, r]) => [tstr(r.start) + '–' + tstr(r.end), r.reason, r.invalid ? 'Meting ongeldig' : r.performance === false ? 'Buiten performance' : 'Buiten kalibratie', btn('Uitsluiting herstellen', () => { delete session.reviews[key]; recompute(); show('review'); })]))));
 
@@ -3786,6 +3902,26 @@ const WF = (() => {
     signal.addEventListener('abort',()=>clearTimeout(timer),{once:true});
   }
 
+  function windTableGroups(pairs){
+    const groups=new Map();
+    for(const pair of pairs){
+      if(!pair.tableEligible||!fin(pair.proposed.TWD)||!fin(pair.active.TWD))continue;
+      const band=SL.BANDS.findIndex(([lo,hi])=>pair.tws>=lo&&pair.tws<hi);
+      if(band<0)continue;
+      const key=band+pair.mode;
+      if(!groups.has(key))groups.set(key,{band,mode:pair.mode,old:[],next:[],speed:[]});
+      const g=groups.get(key);
+      g.old.push(pair.active.TWD);g.next.push(pair.proposed.TWD);g.speed.push(pair.proposed.TWS);
+    }
+    return [...groups.values()].sort((a,b)=>a.band-b.band||a.mode.localeCompare(b.mode)).map(g=>{
+      const extra=SL.median(g.next)/2;
+      return {...g,extra,tws:BAND_TWS[g.band],usable:g.next.length>=3&&Math.abs(extra)>=.05};
+    });
+  }
+  function addWindGroup(draft,g){
+    const knots=draft.twa.length?draft.twa:BAND_TWS.map(tws=>({tws,up:0,dn:0}));
+    draft.twa=SL.addTableResidual(knots,g.tws,g.mode,g.extra);
+  }
   function windAngleReview(host,c,refs,draft,kind,getProposal){
     const plots=h('div'),evidence=h('section',{class:'card'}),message=h('p',{role:'status',class:'muted'});
     const view=(session.windPlotViews||={})[kind]||={};
@@ -3814,21 +3950,9 @@ const WF = (() => {
           btn('MHU-restfout naar voorstel',applyChange(next=>{next.awaOff=Math.round(10*(next.awaOff+delta))/10;}),false,{disabled:residuals.length<3||!fin(delta)||Math.abs(delta)<.05}),
           help('De extra offset is de mediaan van de halve AWA-verschillen uit vergelijkbare tackparen. Overnemen kan vanaf drie paren.'));
       }else{
-        const groups=new Map();
-        for(const pair of pairs){
-          if(!pair.tableEligible||!fin(pair.proposed.TWD)||!fin(pair.active.TWD))continue;
-          const band=SL.BANDS.findIndex(([lo,hi])=>pair.tws>=lo&&pair.tws<hi);if(band<0)continue;
-          const key=band+pair.mode;
-          if(!groups.has(key))groups.set(key,{band,mode:pair.mode,old:[],next:[],speed:[]});
-          const g=groups.get(key);g.old.push(pair.active.TWD);g.next.push(pair.proposed.TWD);g.speed.push(pair.proposed.TWS);
-        }
-        const rows=[...groups.values()].sort((a,b)=>a.band-b.band||a.mode.localeCompare(b.mode)).map(g=>{
-          const delta=SL.median(g.next),extra=delta/2,tws=BAND_TWS[g.band];
-          return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.next.length,deg(SL.median(g.old)),deg(delta),deg(SL.quant(g.next,.25))+' / '+deg(SL.quant(g.next,.75)),f1(SL.median(g.speed),2),deg(extra),
-            btn('Naar tabel bij '+tws+' kn',applyChange(next=>{
-              const knots=next.twa.length?next.twa:BAND_TWS.map(tws=>({tws,up:0,dn:0}));
-              next.twa=SL.addTableResidual(knots,tws,g.mode,extra);
-            }),false,{disabled:g.next.length<3||Math.abs(extra)<.05})];
+        const rows=windTableGroups(pairs).map(g=>{
+          return [SL.BANDS[g.band][2]+' kn · '+(g.mode==='up'?'aandewinds':'voor de wind'),g.next.length,deg(SL.median(g.old)),deg(SL.median(g.next)),deg(SL.quant(g.next,.25))+' / '+deg(SL.quant(g.next,.75)),f1(SL.median(g.speed),2),deg(g.extra),
+            btn('Naar tabel bij '+g.tws+' kn',applyChange(next=>addWindGroup(next,g)),false,{disabled:!g.usable})];
         });
         evidence.append(h('h4',{},'TWA-tabel uit de TWD-sprong'),rows.length?
           table(['TWS · koers','Paren','Δ TWD actief','Δ TWD voorstel','P25 / P75','Δ TWS (kn)','Extra TWA',''],rows):
@@ -3854,7 +3978,7 @@ const WF = (() => {
     c.append(result,message);
     function refresh(){
       try{
-        const D=getProposal(),values=refs.phases.map(p=>D===A.D?p:SL.windowPhase(D,{start:p.t,end:iT(p.i1)}));
+        const D=getProposal(),values=refs.phases.map(p=>D===A.D?p:SL.windowPhase(D,{start:p.t,end:iT(p.i1)},2));
         const extremes=values.filter(p=>p&&(p.mode==='Upwind'&&Math.abs(p.v.TWA)<=60||p.mode==='Downwind'&&Math.abs(p.v.TWA)>=120));
         const fit=SL.calWind(extremes).twsDn;
         result.replaceChildren(h('h3',{},'TWS aandewinds en voor de wind'));
@@ -3973,7 +4097,7 @@ const WF = (() => {
         const quick=kind==='speed'&&SL.speedPlotPreview(A.D,phases,cfg);
         const next=quick?quick.data:getProposal();
         const fixed=quick?quick.windows:phases.map(p=>{
-          const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)});
+          const w=SL.windowPhase(next,{start:iT(p.i),end:iT(p.i1)},2);
           return w && {...p,v:w.v,coverage:w.coverage};
         }).filter(Boolean);
         data=next;windows=fixed;displayedCal=SL.copy(draft);signature=JSON.stringify(draft);render();
@@ -4024,7 +4148,9 @@ const WF = (() => {
     const refs=SL.calibrationReferences(A.D,session), ps = refs.phases, draft = session.draft ||= SL.copy(A.calib || SL.CAL0);
     const approvedMans = A.D.mans.filter(m => SL.allowed(SL.reviewed(A.D, m, 'manoeuvre', session.reviews), 'calibration'));
     const pairAllowed = (a, b) => approvedMans.some(m => iT(m.i) > a.t && iT(m.i) < b.t);
-    const model = { bsp: SL.calBsp(A.D, ps), wind: SL.calWind(ps), awa: SL.calAwa(ps), cur: SL.calCurrent(ps, A.D.magVar, pairAllowed, refs.pairs) }; model.score = SL.calScore(model.bsp, model.wind, model.awa);
+    const fitModels=(D,phases,pairs)=>({bsp:SL.calBsp(D,phases),wind:SL.calWind(phases),awa:SL.calAwa(phases),
+      cur:SL.calCurrent(phases,D.magVar,pairAllowed,pairs)});
+    const model=fitModels(A.D,ps,refs.pairs);model.score=SL.calScore(model.bsp,model.wind,model.awa);
     c.append(h('div', { class: 'wf-pagehead' }, h('div', {}, h('h1', {}, 'Controleer. Vergelijk. Pas toe.'), help(`${ps.length} goedgekeurde fases · ${refs.pairs.length} goedgekeurde vensterparen. Alle correcties zijn ten opzichte van het oorspronkelijke log.`)), btn('Sessie opslaan & analyseren', safe(()=>STUDIO.publish()), true)));
     if (!ps.length) c.append(notice('Keur eerst stabiele fases goed bij Beoordelen. Je kunt al een handmatig voorstel bekijken; de modellen wachten op referenties.'), btn('Referenties beoordelen', () => show('review')));
     if (session.calibrationChanged) c.append(notice('De instrumentkalibratie is tijdens deze sessie gewijzigd. Eén correctie voor de hele sessie is dan niet betrouwbaar. Maak aparte sessies met een constant instrumentprofiel; toepassen is hier geblokkeerd.'));
@@ -4058,8 +4184,8 @@ const WF = (() => {
     if(index===4)editor.append(help('Controleer de AWS-schaal met een onafhankelijke referentie en vergelijk TWS aandewinds en voor de wind.'));
     if(index===3){
       const cell=(r,key)=>h('input',{type:'number',step:.1,value:r[key],'aria-label':'TWA '+key+' bij '+r.tws,oninput:e=>{r[key]=e.target.value===''?null:e.target.valueAsNumber;session.preview=false;touch();}});
-      editor.append(help('Correcties in graden op de absolute TWA, geïnterpoleerd over TWS. TWD volgt de hoekcorrectie.'),
-        table(['TWS kn','Upwind °','Downwind °',''],draft.twa.map((r,i)=>[cell(r,'tws'),cell(r,'up'),cell(r,'dn'),btn('Verwijder',()=>{draft.twa.splice(i,1);session.preview=false;show('cal');})])),
+      editor.append(help('Vul de extra correctie op de gelogde windhoek in. Bij +2° gaat |TWA| van 43° naar 45°. TWD draait dan 2° terug op BB en 2° vooruit op SB. Tussen de opgegeven windsnelheden interpoleert SailLens de correctie.'),
+        table(['TWS (kn)','Correctie upwind (°)','Correctie downwind (°)',''],draft.twa.map((r,i)=>[cell(r,'tws'),cell(r,'up'),cell(r,'dn'),btn('Verwijder',()=>{draft.twa.splice(i,1);session.preview=false;show('cal');})])),
         btn('TWA-rij toevoegen',()=>{draft.twa.push({tws:(draft.twa.at(-1)?.tws||4)+2,up:0,dn:0});session.preview=false;show('cal');}));
     }
     if(index===2||index===3){
@@ -4075,13 +4201,34 @@ const WF = (() => {
       editor.append(table(['Sensor','Actief','Voorstel'],[['port','Bakboord'],['starboard','Stuurboord']].map(([side,label])=>[label,status(A.calib,side),status(draft,side)])));
     }
     c.append(bar(index>0?btn('Vorige',()=>go(index-1)):null,index<5?btn('Volgende',()=>go(index+1),true):null,
-        btn('Modelsuggesties naar voorstel', () => {
-          const proposed=SL.copy(draft);
-          if(!proposed.twa?.length)proposed.twa=BAND_TWS.map(tws=>({tws,up:0,dn:0}));
-          const found=calibSuggest(model,proposed);
+        btn('Modelsuggesties naar voorstel', safe(() => {
+          const proposed=validateCalib(SL.copy(draft)),D=getProposal();
+          let fit=model;
+          if(D!==A.D){
+            const fixed=p=>SL.windowPhase(D,{start:p.t,end:iT(p.i1)},2);
+            const pairs=refs.pairs.map(p=>({...p,before:fixed(p.before),after:fixed(p.after)})).filter(p=>p.before&&p.after);
+            fit=fitModels(D,ps.map(fixed).filter(Boolean),pairs);
+          }
+          const found=calibSuggest(fit,proposed,A.calib);
+          const editedTable=JSON.stringify(proposed.twa)!==JSON.stringify(A.calib.twa);
+          if(!editedTable && refs.pairs.length>=3){
+            const windows=refs.pairs.flatMap(p=>[p.before,p.after]);
+            const corrected=found.length ? SL.windPlotPreview(A.D,windows,proposed)||process(snapshot(false),proposed) : D;
+            const data=SL.windPlotData(A.D,{pairs:refs.pairs},corrected);
+            const groups=windTableGroups(data.pairs).filter(g=>g.usable);
+            // Insert missing knots on the original curve before changing adjacent bands.
+            for(const g of groups)if(proposed.twa.length && !proposed.twa.some(r=>r.tws===g.tws)){
+              proposed.twa=SL.addTableResidual(proposed.twa,g.tws,g.mode,0);
+            }
+            for(const g of groups){
+              addWindGroup(proposed,g);found.push('TWA '+(g.mode==='up'?'aandewinds':'voor de wind')+' bij '+g.tws+' kn');
+            }
+          }
+          validateCalib(proposed);
           if(found.length){session.draft=proposed;session.preview=false;touch();show('cal');}
-          banner(found.length?found.join(' · '):'Geen voldoende onderbouwde correctie gevonden.');
-        }),
+          const note=editedTable?' Bekijk de restfout van je bewerkte tabel bij TWA / TWD.':'';
+          banner((found.length?found.join(' · '):'Geen nieuwe onderbouwde correctie voor de ongewijzigde velden.')+note);
+        }),false,{title:'Vult ongewijzigde velden aan. TWA gebruikt minimaal drie goedgekeurde manoeuvreparen per windband en koers.'}),
         btn('Voorstel vergelijken', safe(() => { validateCalib(draft); session.preview = true; show('cal'); }), true),
         btn('Voorstel toepassen', safe(() => applyCalibration(draft)), false, { disabled: session.calibrationChanged }),
         btn('Voorstel wissen', () => { session.draft = SL.copy(SL.CAL0); session.preview = false; show('cal'); })));
@@ -4219,18 +4366,119 @@ const STUDIO=(()=>{
   if(pushed)versions.push({number:(latest()?.number||0)+1,at:Date.now(),signature,input:SL.versionInput(s)});
   S().stage='analysis';WF.touch();try{await WF.persist();}catch(e){if(pushed)versions.pop();S().stage=oldStage;throw e;}show('analysis');
  }
- function generate(rules,preview=false){const cfg={...A.cfg,...Object.fromEntries(SL.phaseKeys.map(k=>[k,+rules[k]]))};if(!fin(cfg.sdHdg)||cfg.sdHdg<0)throw new Error('Heading-stabiliteit moet een positief getal zijn.');const r={...rules,...Object.fromEntries(SL.phaseKeys.map(k=>[k,cfg[k]]))};if(r.scope==='selection'){if(!S().selections.analysis)throw new Error('Selecteer eerst een tijdvak op de kaart/tijdlijn.');r.range=SL.copy(S().selections.analysis);}else r.range=null;
-  const staged=WF.snapshot();staged.cfg=cfg;staged.phaseBuild={generated:true,rules:r};const D=WF.process(staged);if(preview)return D.phases.length;const build={...staged.phaseBuild,ranges:D.phases.map(p=>({start:p.t,end:iT(p.i1)})),diagnostics:D.phaseDiagnostics,at:Date.now()};A.cfg=cfg;S().phaseBuild=build;build.sourceKey=SL.eventKey(WF.snapshot());S().phaseDraft=SL.copy(r);S().selections.analysis=null;S().reviewPage=0;WF.recompute();show('review');banner(D.phases.length+' fases gemaakt. Controleer de lijst en ga daarna naar de manoeuvreparen.');}
- function phaseControls(){const s=S(),c=$('#t-review');if(!A.D)return;const rules=s.phaseDraft||(s.phaseDraft=SL.copy(s.phaseBuild?.rules||SL.phaseDefaults(A.cfg))),num=(k,label,step=1)=>field(label,h('input',{id:'phase-'+k,type:'number',step,value:rules[k],oninput:e=>{rules[k]=+e.target.value;WF.touch();}}));
-  const scope=sel('phase-scope',['all','racing','training','selection'],rules.scope,v=>{rules.scope=v;WF.touch();});[...scope.options].forEach((o,i)=>o.textContent=['Hele sessie','Alleen races','Alleen training','Geselecteerd tijdvak'][i]);
-  const feedback=h('p',{role:'status'});
+ function phaseChoices(D){
+  return {
+   race:[...new Set(D.L.race)].filter(Boolean).sort((a,b)=>a-b).map(String),
+   sail:[...new Set([...D.L.sailNames,...(D.L.sailSlots||[]).flat()])].filter(Boolean),
+   mode:SL.MODES, tack:['Port','Stbd']
+  };
+ }
+ const phaseFilterLabels={race:'Race',sail:'Zeil',mode:'Vaarmodus',tack:'Boeg'};
+ function phaseSettings(rules){
+  const defaults=SL.phaseDefaults(A.cfg);
+  const settings={};
+  for(const k of SL.phaseKeys){
+   const value=Object.hasOwn(rules,k)?rules[k]:defaults[k];
+   if(value==null||value===''||!fin(+value))throw new Error('Vul voor elk detectiecriterium een getal in.');
+   settings[k]=+value;
+  }
+  if(settings.sdHdg<0)throw new Error('De maximale spreiding van de heading moet nul of hoger zijn.');
+   if(settings.upMargin<0||settings.upMargin>90)throw new Error('De upwindmarge moet tussen 0° en 90° liggen.');
+  return settings;
+ }
+ function phaseResult(rules){
+  const settings=phaseSettings(rules),cfg={...A.cfg,...settings};
+  const r={...rules,...settings,range:null};
+  const choices=phaseChoices(A.D);
+  for(const [key,options] of Object.entries(choices)){
+   if(r[key]&&!options.includes(String(r[key])))throw new Error(phaseFilterLabels[key]+' “'+r[key]+'” komt niet meer voor. Kies een andere waarde of Alle.');
+  }
+  if(r.scope==='selection'){
+   const range=S().selections.analysis||rules.range;
+   if(!range||!fin(range.start)||!fin(range.end)||range.end<=range.start||range.start>=iT(A.D.i1)||range.end<=iT(A.D.i0))throw new Error('Selecteer eerst een tijdvak binnen de sessie op de kaart of tijdlijn.');
+   r.range=SL.copy(range);
+  }
+  const staged=WF.snapshot();staged.cfg=cfg;staged.phaseBuild={generated:true,rules:r};
+  return {D:WF.process(staged),cfg,rules:r};
+ }
+ function generate(rules,preview=false){
+  const result=phaseResult(rules),{D,cfg}=result;
+  if(preview)return D.phases.length;
+  const build={generated:true,rules:result.rules,ranges:D.phases.map(p=>({start:p.t,end:iT(p.i1)})),diagnostics:D.phaseDiagnostics,at:Date.now()};
+  A.cfg=cfg;S().phaseBuild=build;build.sourceKey=SL.eventKey(WF.snapshot());S().phaseDraft=SL.copy(build.rules);S().selections.analysis=null;S().reviewPage=0;
+  WF.recompute();show('review');banner(A.D.phases.length+' fases gemaakt. Controleer de fasetabel en ga daarna naar de manoeuvreparen.');
+ }
+ const reasonLabels={
+  scope:'Selectie of motorgebruik',missing:'Ontbrekende metingen',speed:'BSP onder minimum',manoeuvre:'Tijd rond manoeuvre',
+  sail:'Zeilwissel',boundary:'Grens van boeg, race, rak, vaarmodus of training',stabilityBsp:'Spreiding BSP',stabilityTwa:'Spreiding TWA',stabilityTws:'Spreiding TWS',
+  stabilityHdg:'Spreiding heading',polar:'Buiten polargrenzen',angle:'Onder minimale windhoek'
+ };
+ const rankedReasons=counts=>Object.entries(counts).filter(([,n])=>n>0).sort((a,b)=>b[1]-a[1])
+  .map(([key,n])=>[reasonLabels[key]||({masked:'Selectie, ontbrekende data, manoeuvre of wissel',stability:'Spreiding',target:'Polar- of hoekgrens'})[key]||key,n]);
+ function phaseReport(D,diagnostics){
+  const phases=D.phases;
+  const seconds=phases.reduce((sum,p)=>sum+p.i1-p.i,0);
+  const report=h('div',{class:'phase-report'},h('p',{},h('strong',{},phases.length+' fases'),' · '+dur(seconds)+' in fases'));
+  const byMode=SL.MODES.map(mode=>{
+   const group=phases.filter(p=>p.mode===mode);
+   return [mode,group.filter(p=>p.tack==='Port').length,group.filter(p=>p.tack==='Stbd').length,group.length];
+  });
+  const [,bb,sb,upwind]=byMode[0];
+  const upDetails=h('details',{},h('summary',{},'Upwind · '+upwind+' fases ('+bb+' BB, '+sb+' SB)'),table(['Vaarmodus','BB','SB','Totaal'],byMode));
+  report.append(upDetails);
+  if(!diagnostics)return report;
+  if(fin(diagnostics.upwindSailingSeconds)){
+   const starts=rankedReasons(diagnostics.upwindReasons||{});
+   upDetails.append(help(dur(diagnostics.upwindSailingSeconds)+' vaartijd met geldige upwindmetingen binnen de selectie, boven de ingestelde minimumsnelheid. Een fase vereist een volledig stabiel venster.'));
+   if(starts.length)upDetails.append(table(['Afwijsreden bij upwindstart','Kandidaatstarts'],starts),
+    help('Een upwindstart kan later in het venster afvallen, bijvoorbeeld door een manoeuvre. Kandidaatvensters kunnen elkaar overlappen.'));
+  }
+  const counts=diagnostics.reasons||{masked:diagnostics.masked,stability:diagnostics.stability,target:diagnostics.target};
+  const ranked=rankedReasons(counts);
+  if(ranked.length)report.append(h('details',{},h('summary',{},'Meeste afwijzingen · '+ranked[0][0]+' ('+ranked[0][1]+')'),
+   table(['Afwijsreden','Kandidaatstarts'],ranked),help('Per kandidaatstart telt de eerste afwijsreden. De vensters overlappen.')));
+  return report;
+ }
+ function phaseControls(){
+  const s=S(),c=$('#t-review');if(!A.D)return;
+  const rules=s.phaseDraft={...SL.phaseDefaults(A.cfg),scope:A.cfg.racingOnly?'racing':'all',...SL.copy(s.phaseDraft||s.phaseBuild?.rules||{})};
+  const choices=phaseChoices(A.D),feedback=h('div',{role:'status','aria-live':'polite',id:'phase-preview'});
+  const selectedRange=h('span',{class:'muted'}),limits=help('');
+  function updateHints(){
+   const range=s.selections.analysis||rules.range;
+   selectedRange.hidden=rules.scope!=='selection';
+   selectedRange.textContent=range?dstr(range.start)+' – '+dstr(range.end):'Trek een tijdvak in de tijdgrafiek.';
+   const margin=rules.upMargin;
+   limits.textContent='De aandewindse doelhoek komt uit de polar of het log. Bij een ontbrekende doelhoek gebruikt SailLens 45°.'+
+    (fin(margin)&&margin>=0&&margin<=90?' Met deze marge ligt de grens dan bij '+Math.min(90,45+margin).toLocaleString('nl-NL')+'° absolute TWA.':'')+
+    ' Een seconde onder de doelhoek plus marge telt als Upwind. Korte schommelingen rond de grens mogen binnen een stabiele fase vallen. De fase krijgt de meest voorkomende vaarmodus. Onder gemiddeld 28° absolute TWA vervalt de fase.';
+  }
+  function update(key,value){rules[key]=value;feedback.replaceChildren();updateHints();WF.touch();}
+  const num=(k,label,step=1)=>field(label,h('input',{id:'phase-'+k,type:'number',min:k==='phaseLen'?2:0,step,value:rules[k],oninput:e=>update(k,e.target.value===''?null:e.target.valueAsNumber)}));
+  function filter(key){
+   const value=String(rules[key]||''),options=choices[key],missing=value&&!options.includes(value);
+   const select=sel('phase-'+key,['',...options,...(missing?[value]:[])],value,v=>update(key,v));
+   select.options[0].textContent='Alle';
+   if(missing)select.selectedOptions[0].textContent=value+' (niet meer beschikbaar)';
+   return field(phaseFilterLabels[key],select);
+  }
+  const scope=sel('phase-scope',['all','racing','training','selection'],rules.scope,v=>update('scope',v));
+  [...scope.options].forEach((o,i)=>o.textContent=['Hele sessie','Alleen races','Alleen training','Geselecteerd tijdvak'][i]);
+  updateHints();
   const attempt=fn=>()=>{try{fn();}catch(e){feedback.textContent=e.message;}};
-  const body=card(null,help('Kies eerst je events en zeilen. De criteria worden pas toegepast wanneer je op Maak fases klikt. Een nieuwe generatie vervangt de faselijst; afwijkende grenzen vragen opnieuw beoordeling.'),bar(field('Tijdvakken',scope),field('Race',sel('phase-race',['',...[...new Set(Array.from(A.D.L.race).filter(Boolean))].map(String)],rules.race,v=>rules.race=v)),field('Zeil',sel('phase-sail',['',...new Set([...A.D.L.sailNames,...(A.D.L.sailSlots||[]).flat()])],rules.sail,v=>rules.sail=v)),field('Vaarmodus',sel('phase-mode',['',...SL.MODES],rules.mode,v=>rules.mode=v)),field('Boeg',sel('phase-tack',['','Port','Stbd'],rules.tack,v=>rules.tack=v))),
-   h('div',{class:'form'},num('phaseLen','Faseduur (s)'),num('phaseGap','Tussenruimte (s)'),num('sdBsp','Max. spreiding BSP (kn)',.1),num('sdTwa','Max. spreiding TWA (°)',.5),num('sdTws','Max. spreiding TWS (kn)',.1),num('sdHdg','Max. spreiding heading (°)',.5),num('minBsp','Minimum BSP (kn)',.1),num('manBefore','Vrij vóór manoeuvre (s)'),num('manAfter','Vrij ná manoeuvre (s)'),num('polMin','Minimum polar %'),num('polMax','Maximum polar %')),
-   feedback,bar(button('Bekijk aantal',attempt(()=>{feedback.textContent=generate(rules,true)+' fases voldoen aan deze criteria.';})),button('Maak fases',attempt(()=>generate(rules)),true),button('Criteria bewaren bij boot',()=>{const b=WF.library.boats.find(x=>x.id===s.boatId);b.cfg={...b.cfg,...Object.fromEntries(SL.phaseKeys.map(k=>[k,rules[k]]))};b.revision++;WF.touch();banner('Detectiecriteria opgeslagen als bootstandaard.');})),
-   s.phaseBuild?.generated?help(`${A.D.phases.length} fases · generatie ${new Date(s.phaseBuild.at||s.created).toLocaleString('nl-NL')}. Kalibratie rekent deze vaste tijdvakken opnieuw door.`):help('Nog geen fases gegenereerd.'),
-   s.phaseBuild?.generated&&s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot())?h('p',{class:'wf-notice'},'Events of broninstellingen gewijzigd — maak fases opnieuw voordat je de sessie afrondt.'):null);
-  if(s.phaseBuild?.diagnostics){const d=s.phaseBuild.diagnostics;body.append(help(`Overgeslagen kandidaatvensters: ${d.masked} door selectie, ontbrekende data, manoeuvres of wissels; ${d.stability} door stabiliteit; ${d.target} door polar-/hoekgrenzen. Kandidaten overlappen; dit zijn geen percentages van de vaartijd.`));}const toolbar=c.querySelector('.desk-side > .bar');toolbar.append(button('Fases maken',()=>PrepDesk.dialog('Fases maken',body),true));if(s.phaseBuild?.generated&&s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot()))toolbar.after(help('Events gewijzigd. Maak de fases opnieuw.'));
+  const body=card(null,help('Maak fases met de gekozen criteria. Bij nieuwe fasegrenzen worden de bijbehorende beoordelingen opnieuw gevraagd.'),
+   bar(field('Tijdvakken',scope),selectedRange,...Object.keys(phaseFilterLabels).map(filter)),
+   h('div',{class:'form'},num('phaseLen','Faseduur (s)'),num('phaseGap','Tussenruimte (s)'),num('sdBsp','Max. spreiding BSP (kn)',.1),num('sdTwa','Max. spreiding TWA (°)',.5),num('sdTws','Max. spreiding TWS (kn)',.1),num('sdHdg','Max. spreiding heading (°)',.5),num('minBsp','Minimum BSP (kn)',.1),num('upMargin','Upwindmarge boven target-TWA (°)',.5),num('manBefore','Vrij vóór manoeuvre (s)'),num('manAfter','Vrij ná manoeuvre (s)'),num('polMin','Minimum polar %'),num('polMax','Maximum polar %')),
+   h('details',{},h('summary',{},'Upwindgrens en stabiliteit'),limits,help('Spreiding is de standaardafwijking binnen één fase.')),
+   bar(button('Bekijk aantal',attempt(()=>{const {D}=phaseResult(rules);feedback.replaceChildren(phaseReport(D,D.phaseDiagnostics));})),
+    button('Maak fases',attempt(()=>generate(rules)),true),
+    button('Criteria bewaren bij boot',attempt(()=>{const b=WF.library.boats.find(x=>x.id===s.boatId);b.cfg={...b.cfg,...phaseSettings(rules)};b.revision++;WF.touch();banner('Detectiecriteria opgeslagen als bootstandaard.');}))),feedback);
+  const toolbar=c.querySelector('.desk-side > .bar');
+  toolbar.append(button('Fases maken',()=>PrepDesk.dialog('Fases maken',body),true));
+  if(s.phaseBuild?.generated){
+   toolbar.after(phaseReport(A.D,s.phaseBuild.diagnostics));
+   if(s.phaseBuild.sourceKey!==SL.eventKey(WF.snapshot()))toolbar.after(help('Events of broninstellingen gewijzigd. Maak de fases opnieuw.'));
+  }
  }
  function pairs(){const c=pane('pairreview'),s=S(),D=A.D;if(!D)return;const type=s.pairType||'Alle';
   const list=D.mans.filter(m=>(type==='Alle'||m.type===type)&&(!s.pairRaceOnly||D.L.race[m.i]>0));

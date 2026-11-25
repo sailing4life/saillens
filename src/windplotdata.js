@@ -18,11 +18,12 @@
         const v=a[i];
         if(D.invalid?.[i]||!fin(speed?.[i])||speed[i]<0||!fin(v)||Math.abs(v)>360)continue;
         sin+=Math.sin(v*D2R);cos+=Math.cos(v*D2R);joint++;
-        if(key==='AWA' && (w.tack==='Port'?w180(v)<0:w180(v)>0) && Math.abs(w180(v))<180)onSide++;
+        if((key==='AWA' || key==='TWA') && (w.tack==='Port'?w180(v)<0:w180(v)>0) && Math.abs(w180(v))<180)onSide++;
       }
       const angle=joint>=.95*count && Math.hypot(sin,cos)>1e-8*joint ? Math.atan2(sin,cos)*R2D : NaN;
       out[key]=key==='TWD' ? w360(angle) : Math.abs(w180(angle));
       if(key==='AWA')out.awaOnSide=fin(angle) && onSide===joint;
+      if(key==='TWA')out.twaOnSide=fin(angle) && onSide===joint;
     }
     return out;
   }
@@ -87,7 +88,8 @@
       const down=pair.type==='Gybe' && a.active.TWA>90 && b.active.TWA>90;
       if(!up && !down)continue;
       const [port,stbd]=a.side==='Port'?[a,b]:[b,a];
-      const pure=up ? Math.max(a.active.TWA,b.active.TWA)<=60 : Math.min(a.active.TWA,b.active.TWA)>=120;
+      const winds=[a.active,b.active,a.proposed,b.proposed];
+      const pure=winds.every(w=>w.twaOnSide && (up ? w.TWA<=60 : w.TWA>=120));
       const tableEligible=pure && !pair.validation;
       const alignment=up && tableEligible && pair.vmgToVmg!==false;
       pairs.push({key:pair.key,t:pair.anchor,type:pair.type,mode:up?'up':'dn',sail:a.sail,

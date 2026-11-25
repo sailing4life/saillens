@@ -96,3 +96,11 @@ test('subsecond measured wind angles crossing the stern are binned around 180 de
   const raw=SL.parseLog(['time,MWA',t.toISOString()+',179',later.toISOString()+',-179'].join('\n'));
   near(Math.abs(raw.ch.MWA[0]),180);
 });
+
+test('a proposal crossing the tack line or leaving the pure wind-angle range cannot drive another table correction',()=>{
+  const d=data(),q=data(),p=window(d,0,-43,4),s=window(d,40,43,356);
+  const run=()=>SL.windPlotData(d,{pairs:[pair(p,s)]},q).pairs[0];
+  window(q,0,-43,4);window(q,40,43,356);assert.equal(run().tableEligible,true);
+  q.ch.TWA.fill(42,0,20);assert.equal(run().tableEligible,false);
+  q.ch.TWA.fill(-61,0,20);assert.equal(run().tableEligible,false);
+});

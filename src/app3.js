@@ -75,13 +75,24 @@ R.sails = () => {
 /* ---------------- Calibration file ---------------- */
 const BAND_TWS = [6, 8, 10, 12.5, 16, 20];
 function calibEnsure() { if (!A.calib) A.calib = { app: 'SailLens', type: 'calibration', name: '', ...SL.CAL0, twa: BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })) }; if (!A.calib.twa || !A.calib.twa.length) A.calib.twa = BAND_TWS.map(t => ({ tws: t, up: 0, dn: 0 })); return A.calib; }
-function calibSuggest(r, cb=calibEnsure()) { // add what the models found on top of what is already applied
+function calibSuggest(r, cb=calibEnsure(), active) {
   const done = [], r1 = v => Math.round(v * 10) / 10;
-  if (!r.bsp.err) { if ((r.bsp.kLo > 1 || r.bsp.kHi < 1) && Math.abs(r.bsp.k - 1) > 0.007) { cb.bspK = Math.round(cb.bspK * r.bsp.k * 1000) / 1000; done.push('BSP factor ' + cb.bspK); } if ((r.bsp.dLo > 0 || r.bsp.dHi < 0) && Math.abs(r.bsp.delta) > 1) { cb.hdgOff = r1(cb.hdgOff + r.bsp.delta); done.push('heading ' + cb.hdgOff + '°'); } }
-  if (r.cur && !r.cur.err && r.cur.hasLee && (r.cur.lLo > 1 || r.cur.lHi < 1) && Math.abs(r.cur.lam - 1) > 0.15) { cb.leewayGain = Math.round((cb.leewayGain ?? 1) * r.cur.lam * 100) / 100; done.push('leeway ×' + cb.leewayGain); }
-  if (!r.awa.err && Math.abs(r.awa.read) > 0.5 && Math.abs(r.awa.read) > 2 * r.awa.se) { cb.awaOff = r1(cb.awaOff - r.awa.read); done.push('AWA ' + cb.awaOff + '°'); }
-  if (!r.wind.err) { for (const b of r.wind.bins) if (Math.abs(b.e) > 1 && Math.abs(b.e) > 2 * b.se) { const bi = SL.BANDS.findIndex(x => x[2] === b.band), t = BAND_TWS[bi]; let row = cb.twa.find(x => x.tws === t); if (!row) { row = { tws: t, up: 0, dn: 0 }; cb.twa.push(row); cb.twa.sort((a, b2) => a.tws - b2.tws); } const key = b.mode === 'Upwind' ? 'up' : 'dn'; row[key] = r1((row[key] || 0) + b.e); done.push(`TWA ${b.mode.toLowerCase()} at ${t} kn ${row[key]}°`); }
-    if (r.wind.twsDn && Math.abs(r.wind.twsDn.pct) > 3 && Math.abs(r.wind.twsDn.pct) > 2 * r.wind.twsDn.se) { cb.twsDnPct = r1(cb.twsDnPct - r.wind.twsDn.pct); done.push('TWS downwind ' + cb.twsDnPct + '%'); } }
+  const available = key => !active || cb[key] === active[key];
+  if (!r.bsp.err) {
+    if (available('bspK') && (r.bsp.kLo > 1 || r.bsp.kHi < 1) && Math.abs(r.bsp.k - 1) > 0.007) {
+      cb.bspK = Math.round(cb.bspK * r.bsp.k * 1000) / 1000; done.push('BSP factor ' + cb.bspK);
+    }
+    if (available('hdgOff') && (r.bsp.dLo > 0 || r.bsp.dHi < 0) && Math.abs(r.bsp.delta) > 1) {
+      cb.hdgOff = r1(cb.hdgOff + r.bsp.delta); done.push('heading ' + cb.hdgOff + '°');
+    }
+  }
+  if (available('leewayGain') && r.cur && !r.cur.err && r.cur.hasLee && (r.cur.lLo > 1 || r.cur.lHi < 1) && Math.abs(r.cur.lam - 1) > 0.15) { cb.leewayGain = Math.round((cb.leewayGain ?? 1) * r.cur.lam * 100) / 100; done.push('leeway ×' + cb.leewayGain); }
+  if (available('awaOff') && !r.awa.err && Math.abs(r.awa.read) > 0.5 && Math.abs(r.awa.read) > 2 * r.awa.se) { cb.awaOff = r1(cb.awaOff - r.awa.read); done.push('AWA ' + cb.awaOff + '°'); }
+  // A session-wide wind fit may confound sailing on one tack with a change in the wind.
+  // The TWA table is proposed from reviewed local pairs after these upstream corrections.
+  if (available('twsDnPct') && !r.wind.err && r.wind.twsDn && Math.abs(r.wind.twsDn.pct) > 3 && Math.abs(r.wind.twsDn.pct) > 2 * r.wind.twsDn.se) {
+    cb.twsDnPct = r1(100 * ((1 + cb.twsDnPct / 100) / (1 + r.wind.twsDn.pct / 100) - 1)); done.push('TWS downwind ' + cb.twsDnPct + '%');
+  }
   return done;
 }
 function logCsv() { const D = A.D, keys = Object.keys(A.raw.ch), rows = [['Utc'].concat(keys).join(',')]; for (let i = D.i0; i < D.i1; i++) rows.push(new Date(iT(i)).toISOString().slice(0, 19).replace('T', ' ') + ',' + keys.map(k => { const v = D.ch[k][i]; return fin(v) ? (k === 'Lat' || k === 'Lon' ? v.toFixed(6) : String(Math.round(v * 1000) / 1000)) : ''; }).join(',')); return rows.join('\r\n'); }

@@ -56,6 +56,65 @@ test('all specialist views remain reachable and missing wind does not break navi
   assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
  }finally{a.close();}
 });
+test('phase preview, saved counts and upwind breakdown match across pages and scope changes',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');a.run("show('review')");await a.click('Fases maken');
+  const preview=async()=>{await a.click('Bekijk aantal');return Number(a.$('#phase-preview strong')?.textContent.split(' ')[0]);};
+  const total=await preview();assert.ok(total>80);
+  const snapshotRows=()=>Array.from(a.$('#phase-preview table').tBodies[0].rows,r=>Array.from(r.cells,c=>c.textContent));
+  const rows=snapshotRows();assert.equal(rows.length,4);assert.ok(Number(rows[0][3])>0);
+  assert.match(a.$('#phase-preview').textContent,/vaartijd met geldige upwindmetingen/);
+  assert.match(a.$('#phase-preview').textContent,/Afwijsreden bij upwindstart/);
+  assert.equal(rows.reduce((sum,r)=>sum+Number(r[3]),0),total);
+  await a.click('Maak fases');assert.equal(a.run('A.D.phases.length'),total);
+  assert.equal(a.$('#phase-page-count').textContent,'1–40 van '+total);
+  const list=[...a.w.document.querySelectorAll('#t-review .card')].find(e=>e.querySelector('h3')?.textContent==='Fasetabel');
+  assert.match(list.textContent,/Vaarmodus/);assert.equal(list.querySelectorAll('tbody tr').length,40);
+  assert.equal(list.querySelector('tbody tr').cells[1].textContent,a.run('A.D.phases[0].mode'));
+  await a.click('Getoonde selectie goedkeuren');assert.match(a.$('#t-review').textContent,/40 fases goedgekeurd/);
+  [...list.querySelectorAll('button')].find(b=>b.textContent==='Volgende').click();
+  assert.equal(a.$('#phase-page-count').textContent,'41–80 van '+total);
+  const applied=JSON.parse(a.run("JSON.stringify(SL.MODES.map(m=>{const p=A.D.phases.filter(w=>w.mode===m);return [m,p.filter(w=>w.tack==='Port').length,p.filter(w=>w.tack==='Stbd').length,p.length].map(String)}))"));
+  assert.deepEqual(rows,applied);
+  // A first sample near a mode boundary can differ from the mode of its whole phase.
+  assert.equal(a.run(`(()=>{const p=A.D.phases[0],old=WF.session.analysisFilter;WF.session.analysisFilter={mode:p.mode};const first=A.D.mode[p.i];A.D.mode[p.i]=(SL.MODES.indexOf(p.mode)+1)%SL.MODES.length;try{return WF.filteredPhases([p]).length}finally{A.D.mode[p.i]=first;WF.session.analysisFilter=old}})()`),1);
+  a.run("A.cfg.racingOnly=true;WF.session.phaseDraft={...WF.session.phaseDraft,scope:'all',sail:'sail removed from events'};show('review')");
+  await a.click('Fases maken');assert.match(a.$('#phase-sail').selectedOptions[0].textContent,/niet meer beschikbaar/);
+  await a.click('Bekijk aantal');assert.match(a.$('#phase-preview').textContent,/komt niet meer voor/);
+  a.fill('#phase-sail','');assert.equal(await preview(),total);
+  a.fill('#phase-scope','selection');a.run('WF.session.selections.analysis={start:A.raw.t0,end:A.raw.t0+900000}');
+  a.fill('#phase-phaseLen','4');const short=await preview();assert.ok(short>0);
+  await a.click('Maak fases');assert.equal(a.run('A.D.phases.length'),short);
+  await a.click('Fases maken');assert.equal(await preview(),short);
+  assert.ok(a.$('#phase-preview').textContent.includes('Kandidaatstarts'));
+  assert.equal(a.errors.length,0,a.errors.map(e=>e.message).join('\n'));
+ }finally{a.close();}
+});
+test('editable upwind margin classifies both tacks and old phase builds retain their saved session margin',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  a.run(`const n=480,series=fn=>Float64Array.from({length:n},(_,i)=>fn(i));
+    A.raw={n,t0:A.raw.t0,ch:{BSP:series(()=>6),TWS:series(()=>12),'Targ Twa':series(()=>45),
+      TWA:series(i=>[-58,58,-50,50][Math.floor(i/120)])}};
+    A.events=null;A.polar=null;WF.recompute();show('review');`);
+  await a.click('Fases maken');
+  const modeCounts=async()=>{
+    await a.click('Bekijk aantal');
+    return Array.from(a.$('#phase-preview table').tBodies[0].rows,r=>Array.from(r.cells).slice(1).map(c=>Number(c.textContent)));
+  };
+  assert.equal(a.$('#phase-upMargin').value,'10');
+  const narrow=await modeCounts();assert.ok(narrow[0][0]&&narrow[0][1]&&narrow[1][0]&&narrow[1][1]);
+  a.fill('#phase-upMargin','15');const wide=await modeCounts();
+  assert.ok(wide[0][0]>narrow[0][0]&&wide[0][1]>narrow[0][1]);assert.equal(wide[1][2],0);
+  assert.match(a.$('dialog').textContent,/60° absolute TWA/);
+  await a.click('Criteria bewaren bij boot');assert.equal(a.run('WF.library.boats[0].cfg.upMargin'),15);
+  await a.click('Maak fases');assert.equal(a.run('WF.session.phaseBuild.rules.upMargin'),15);
+  assert.equal(a.run("A.D.phases.every(p=>p.mode==='Upwind')"),true);
+  assert.equal(a.run(`(()=>{const old=WF.snapshot();delete old.phaseBuild.rules.upMargin;old.cfg.upMargin=10;
+    const D=WF.process(old);return D.cfg.upMargin===10&&D.phases.some(p=>p.mode==='Reaching')})()`),true);
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});
 test('multi-file imports, duplicate detection, failed import rollback and project restore',async()=>{
  const a=await app();try{
   a.fill('#new-boat-name','Import boat');await a.click('Boot toevoegen');
@@ -448,6 +507,35 @@ test('current diagnostics share the session current, sensor mapping and a revers
   assert.equal(a.$('#cal-current-source').value,'manual');assert.equal(a.$('#cal-current-set').value,'90');
   assert.equal(a.$('#cal-current-drift').value,'0.7');
   a.fill('#cal-current-drift','');assert.equal(a.$('#cal-delta-heading input[data-series="corrected"]').disabled,true);
+  assert.deepEqual(a.errors,[]);
+ }finally{a.close();}
+});
+
+test('bulk TWA suggestions require reviewed local pairs and cannot stack on a draft',async()=>{
+ const a=await app();try{
+  await a.click('Bekijk voorbeeld');
+  a.run(`const n=1600,side=i=>Math.floor(i/200)%2?1:-1,seq=fn=>Float64Array.from({length:n},(_,i)=>fn(i));
+    const twd=i=>side(i)<0?4:356;
+    A.raw={n,t0:A.raw.t0,ch:{BSP:seq(()=>6),TWS:seq(()=>12.5),TWA:seq(i=>43*side(i)),
+      TWD:seq(twd),HDG:seq(i=>SL.w360(twd(i)-43*side(i)))}};
+    A.events=null;A.polar=null;WF.recompute();
+    WF.applyCalibration({...SL.CAL0,twa:[{tws:10,up:1,dn:7},{tws:15,up:1,dn:5}]});
+    STUDIO.generate(SL.phaseDefaults(A.cfg));show('review');`);
+  await a.click('Getoonde selectie goedkeuren');
+  a.run("show('cal')");
+  const read=()=>JSON.parse(a.run('JSON.stringify(WF.session.draft.twa)'));
+  const original=read();
+  await a.click('Modelsuggesties naar voorstel');assert.deepEqual(read(),original);
+  a.run(`for(const m of A.D.mans.filter(m=>m.type==='Tack')){
+    const p=SL.defaultPair(A.D,m);WF.session.manoeuvrePairs[p.key]={...p,approved:true};
+   }show('cal');`);
+  assert.ok(a.run('SL.calibrationReferences(A.D,WF.session).pairs.length>=3'));
+  await a.click('Modelsuggesties naar voorstel');
+  const proposed=read();assert.deepEqual(proposed,[original[0],{tws:12.5,up:4,dn:6},original[1]]);
+  await a.click('Modelsuggesties naar voorstel');assert.deepEqual(read(),proposed);
+  await a.click('Voorstel toepassen');
+  const angles=JSON.parse(a.run('JSON.stringify([A.D.ch.TWA[100],A.D.ch.TWA[300],A.D.ch.TWD[100],A.D.ch.TWD[300]])'));
+  assert.deepEqual(angles,[-47,47,0,0]);
   assert.deepEqual(a.errors,[]);
  }finally{a.close();}
 });
