@@ -4,7 +4,7 @@ import sys
 root = pathlib.Path(__file__).parent
 s = root / 'src'
 t = (s / 'index.html').read_text(encoding='utf-8')
-for marker, files in (('/*WINDPLOTS_CSS*/', ['windplots.css']), ('/*CORE*/', ['core.js']), ('/*CORE2*/', ['core2.js', 'core3.js', 'storage.js', 'formulas.js', 'workspace.js', 'sessionflow.js', 'calibrationcurrent.js', 'calibrationpreview.js', 'windplotdata.js', 'tackangles.js']), ('/*UI*/', ['trackmap.js','ui.js','calibrationplots.js','windplots.js','tackangleview.js']), ('/*APP*/', ['app1.js', 'app2.js', 'app3.js', 'app4.js', 'workflow.js', 'studio.js', 'racetools.js', 'prepdesk.js', 'eventdesk.js'])):
+for marker, files in (('/*WINDPLOTS_CSS*/', ['windplots.css']), ('/*CORE*/', ['core.js']), ('/*CORE2*/', ['core2.js', 'core3.js', 'storage.js', 'cloudtransfer.js', 'cloudsessions.js', 'formulas.js', 'workspace.js', 'sessionflow.js', 'calibrationcurrent.js', 'calibrationpreview.js', 'windplotdata.js', 'tackangles.js']), ('/*UI*/', ['trackmap.js','ui.js','calibrationplots.js','windplots.js','tackangleview.js']), ('/*APP*/', ['app1.js', 'app2.js', 'app3.js', 'app4.js', 'workflow.js', 'studio.js', 'racetools.js', 'prepdesk.js', 'eventdesk.js'])):
     if t.count(marker) != 1:
         raise SystemExit(f'Expected exactly one {marker} build marker')
     t = t.replace(marker, '\n'.join((s / f).read_text(encoding='utf-8') for f in files))

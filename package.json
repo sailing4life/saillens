@@ -2,7 +2,7 @@
   "name": "saillens",
   "private": true,
   "scripts": {
-    "test": "node --test && node tests/smoke.js"
+    "test": "node --test && node tests/smoke.js && python3 -m unittest discover -s tests -p test_server.py"
   },
   "engines": {
     "node": ">=20"

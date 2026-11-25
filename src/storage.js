@@ -16,6 +16,16 @@
         tx.onabort = tx.onerror = () => reject(tx.error || request.error || new Error('Browser storage read failed.'));
       }); },
       async set(key, value) { return this.setMany([[key, value]]); },
+      async getOrSet(key, initial) { const db = await open(); return new Promise((resolve, reject) => {
+        const tx = db.transaction('kv','readwrite'), store = tx.objectStore('kv'), read = store.get(key);
+        let result;
+        read.onsuccess = () => {
+          result = read.result;
+          if (result === undefined) { result = initial; store.put(initial,key); }
+        };
+        tx.oncomplete = () => resolve(result);
+        tx.onabort = tx.onerror = () => reject(tx.error || new Error('Browser storage write failed.'));
+      }); },
       async setMany(entries) { const db = await open(); return new Promise((resolve, reject) => {
         const tx = db.transaction('kv', 'readwrite');
         tx.oncomplete = () => resolve(true);

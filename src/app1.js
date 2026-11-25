@@ -53,7 +53,7 @@ R.setup = () => {
   const dt = (k, lab, def) => field(lab, h('input', { type: 'datetime-local', id: 'cfg-' + k, step: 1, value: loc(cf[k] ?? def), onchange: e => { cf[k] = unl(e.target.value); } }));
   c.append(h('div', { class: 'cols' },
     card('Files',
-      h('p', { class: 'muted' }, 'Choose files or drop them anywhere on this page. Everything is processed in your browser; nothing is uploaded.'),
+      h('p', { class: 'muted' }, 'Choose files or drop them anywhere on this page. Online sessions also synchronize their source files.'),
       fileRow('Log file', 'log', 'Expedition log (.csv) or a CSV table with a time column', '.csv,.txt,.log'),
       fileRow('Event file', 'ev', 'RaceReplay / OnboardAssistant event file (.ev.xml), or build one on the Events tab', '.xml,.csv'),
       fileRow('Polar file', 'polar', 'Expedition polar (.txt). Without one, the targets logged by Expedition are used', '.txt,.pol,.csv'),
